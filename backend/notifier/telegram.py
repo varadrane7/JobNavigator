@@ -257,7 +257,7 @@ async def send_digest():
         strong = db.query(Job).filter(
             Job.discovered_at >= yesterday_start,
         ).filter(sa_text(
-            "(SELECT COALESCE(MAX(v::numeric), 0) FROM jsonb_each_text(CASE WHEN jsonb_typeof(COALESCE(cv_scores, '{}'::jsonb)) = 'object' THEN cv_scores ELSE '{}'::jsonb END) AS t(k, v) WHERE v ~ '^[0-9]+(\\.[0-9]+)?$') >= :threshold"
+            "(SELECT COALESCE(MAX(v::numeric), 0) FROM jsonb_each_text(CASE WHEN jsonb_typeof(COALESCE(cv_scores::jsonb, '{}'::jsonb)) = 'object' THEN cv_scores::jsonb ELSE '{}'::jsonb END) AS t(k, v) WHERE v ~ '^[0-9]+(\\.[0-9]+)?$') >= :threshold"
         ).bindparams(threshold=threshold)).count()
 
         active_statuses = ["applied", "interview"]

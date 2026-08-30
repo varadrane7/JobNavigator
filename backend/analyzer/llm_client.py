@@ -313,10 +313,10 @@ async def _call_openai(prompt: str, system: str, model: str, api_key: str, max_t
                        base_url: str | None = None) -> dict:
     """Call the OpenAI API, or any OpenAI-compatible endpoint via base_url."""
     from openai import AsyncOpenAI
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url)  # base_url=None → OpenAI default
+    client = AsyncOpenAI(base_url="http://192.168.1.250:1234/v1", api_key=api_key)
     response = await client.chat.completions.create(
         model=model,
-        max_tokens=max_tokens,
+        # max_tokens=max_tokens,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
@@ -339,7 +339,7 @@ async def _call_ollama(prompt: str, system: str, model: str, max_tokens: int) ->
     import httpx
     async with httpx.AsyncClient(timeout=120) as client:
         response = await client.post(
-            "http://localhost:11434/api/generate",
+            "http://192.168.1.250:11434/api/generate",
             json={
                 "model": model,
                 "prompt": prompt,
