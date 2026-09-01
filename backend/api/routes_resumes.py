@@ -250,7 +250,50 @@ def _load_template_fonts(fonts_dir_str: str) -> dict:
     return fonts
 
 
-def _render_html(json_data: dict, template_name: str, page_format: str) -> str:
+# Reorderable/renamable body sections, in their historical default order. The
+# header is not included here because it is fixed at the top of every template.
+DEFAULT_SECTION_ORDER = [
+    {"key": "summary", "title": "Summary"},
+    {"key": "experience", "title": "Experience"},
+    {"key": "skills", "title": "Skills"},
+    {"key": "education", "title": "Education"},
+    {"key": "projects", "title": "Projects"},
+    {"key": "publications", "title": "Publications"},
+]
+
+
+def _get_section_order(db: Session | None) -> list[dict]:
+    """Resolve configured section order and titles, filling missing sections."""
+    if db is None:
+        return list(DEFAULT_SECTION_ORDER)
+    row = db.query(Setting).filter(Setting.key == "resume_section_order").first()
+    if not row or not row.value:
+        return list(DEFAULT_SECTION_ORDER)
+    try:
+        configured = json.loads(row.value)
+    except (json.JSONDecodeError, TypeError):
+        return list(DEFAULT_SECTION_ORDER)
+    if not isinstance(configured, list):
+        return list(DEFAULT_SECTION_ORDER)
+
+    default_titles = {section["key"]: section["title"] for section in DEFAULT_SECTION_ORDER}
+    resolved = []
+    seen = set()
+    for entry in configured:
+        if not isinstance(entry, dict):
+            continue
+        key = entry.get("key")
+        if key not in default_titles or key in seen:
+            continue
+        seen.add(key)
+        title = (entry.get("title") or "").strip() or default_titles[key]
+        resolved.append({"key": key, "title": title})
+    resolved.extend(section for section in DEFAULT_SECTION_ORDER if section["key"] not in seen)
+    return resolved
+
+
+def _render_html(json_data: dict, template_name: str, page_format: str,
+                 db: Session | None = None) -> str:
     """Render a resume to HTML using its Jinja2 template."""
     from jinja2 import Environment, FileSystemLoader
 
@@ -273,6 +316,7 @@ def _render_html(json_data: dict, template_name: str, page_format: str) -> str:
         page_format=page_format,
         fonts_base="",
         fonts=fonts,
+        section_order=_get_section_order(db),
     )
     return html
 
@@ -1072,7 +1116,7 @@ def preview_resume(resume_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Resume not found")
 
     json_data = _rewrite_urls_with_tracers(resume.json_data or {}, str(resume.id), db)
-    html = _render_html(json_data, resume.template, resume.page_format)
+    html = _render_html(json_data, resume.template, resume.page_format, db)
     return HTMLResponse(content=html)
 
 
@@ -1087,7 +1131,7 @@ async def export_pdf(resume_id: str, template: Optional[str] = None, format: Opt
     fmt = (format or resume.page_format or "letter")
     json_data = resume.json_data or {}
     pdf_data = _rewrite_urls_with_tracers(json_data, str(resume.id), db)
-    html = _render_html(pdf_data, tpl, fmt)
+    html = _render_html(pdf_data, tpl, fmt, db)
 
     paper_format = "A4" if fmt.lower() == "a4" else "Letter"
 

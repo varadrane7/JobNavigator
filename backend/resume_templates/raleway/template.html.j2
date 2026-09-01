@@ -225,18 +225,15 @@ ul.bullets li {
   </div>
   {% endif %}
 
-  <!-- Summary -->
-  {% if summary %}
+  {% for sec in section_order %}
+  {% if sec.key == 'summary' and summary %}
   <div class="section">
-    <div class="section-title">Summary</div>
+    <div class="section-title">{{ sec.title }}</div>
     <div class="summary-text">{{ summary }}</div>
   </div>
-  {% endif %}
-
-  <!-- Experience -->
-  {% if experience %}
+  {% elif sec.key == 'experience' and experience %}
   <div class="section">
-    <div class="section-title">Experience</div>
+    <div class="section-title">{{ sec.title }}</div>
     {% for job in experience %}
     <div class="entry">
       <div class="entry-row">
@@ -260,22 +257,16 @@ ul.bullets li {
     </div>
     {% endfor %}
   </div>
-  {% endif %}
-
-  <!-- Skills -->
-  {% if skills %}
+  {% elif sec.key == 'skills' and skills %}
   <div class="section">
-    <div class="section-title">Skills</div>
+    <div class="section-title">{{ sec.title }}</div>
     {% for label, value in skills.items() %}
     <div class="skill-line"><span class="skill-label">{{ label }}:</span> {{ value }}</div>
     {% endfor %}
   </div>
-  {% endif %}
-
-  <!-- Education -->
-  {% if education %}
+  {% elif sec.key == 'education' and education %}
   <div class="section">
-    <div class="section-title">Education</div>
+    <div class="section-title">{{ sec.title }}</div>
     {% for edu in education %}
     <div class="edu-entry">
       <div class="edu-row">
@@ -288,12 +279,9 @@ ul.bullets li {
     </div>
     {% endfor %}
   </div>
-  {% endif %}
-
-  <!-- Projects -->
-  {% if projects %}
+  {% elif sec.key == 'projects' and projects %}
   <div class="section">
-    <div class="section-title">Projects</div>
+    <div class="section-title">{{ sec.title }}</div>
     {% for project in projects %}
     <div class="entry">
       <div class="entry-name">{{ project.name or project.title }}</div>
@@ -313,12 +301,9 @@ ul.bullets li {
     </div>
     {% endfor %}
   </div>
-  {% endif %}
-
-  <!-- Publications -->
-  {% if publications %}
+  {% elif sec.key == 'publications' and publications %}
   <div class="section">
-    <div class="section-title">Publications</div>
+    <div class="section-title">{{ sec.title }}</div>
     {% for pub in publications %}
     <div class="entry">
       <div class="entry-name">{{ pub.name or pub.title }}</div>
@@ -336,6 +321,7 @@ ul.bullets li {
     {% endfor %}
   </div>
   {% endif %}
+  {% endfor %}
 
 </div>
 </body>

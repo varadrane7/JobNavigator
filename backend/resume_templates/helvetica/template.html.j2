@@ -217,20 +217,20 @@ ul.bullets li::before {
   </div>
   {% endif %}
 
-  {% if summary %}
-  <div class="section" style="margin-top: 2pt">
+  {% for sec in section_order %}
+  {% if sec.key == 'summary' and summary %}
+  <div class="section">
+    <div class="section-title">{{ sec.title }}</div>
     <div class="summary-text">{{ summary }}</div>
   </div>
-  {% endif %}
-
-  {% if experience %}
+  {% elif sec.key == 'experience' and experience %}
   <div class="section">
-    <div class="section-title">Experience</div>
+    <div class="section-title">{{ sec.title }}</div>
     {% for job in experience %}
     <div class="entry">
       <div class="entry-row">
         <span class="entry-primary">{{ job.title }}{% if job.company %} <span style="font-weight:400;color:#888">at</span> {{ job.company }}{% endif %}</span>
-        <span class="entry-date">{{ job.dates }}</span>
+        <span class="entry-date">{{ job.date }}</span>
       </div>
       {% if job.location %}
       <div style="font-size: 8.5pt; color: #888;">{{ job.location }}</div>
@@ -248,11 +248,9 @@ ul.bullets li::before {
     </div>
     {% endfor %}
   </div>
-  {% endif %}
-
-  {% if skills %}
+  {% elif sec.key == 'skills' and skills %}
   <div class="section">
-    <div class="section-title">Skills</div>
+    <div class="section-title">{{ sec.title }}</div>
     <div class="skills-grid">
       {% if skills is mapping %}
         {% for label, value in skills.items() %}
@@ -267,11 +265,9 @@ ul.bullets li::before {
       {% endif %}
     </div>
   </div>
-  {% endif %}
-
-  {% if education %}
+  {% elif sec.key == 'education' and education %}
   <div class="section">
-    <div class="section-title">Education</div>
+    <div class="section-title">{{ sec.title }}</div>
     {% for edu in education %}
     <div class="edu-entry">
       <div class="edu-row">
@@ -284,11 +280,9 @@ ul.bullets li::before {
     </div>
     {% endfor %}
   </div>
-  {% endif %}
-
-  {% if projects %}
+  {% elif sec.key == 'projects' and projects %}
   <div class="section">
-    <div class="section-title">Projects</div>
+    <div class="section-title">{{ sec.title }}</div>
     {% for project in projects %}
     <div class="entry">
       <div class="entry-primary">{{ project.name or project.title }}</div>
@@ -302,11 +296,9 @@ ul.bullets li::before {
     </div>
     {% endfor %}
   </div>
-  {% endif %}
-
-  {% if publications %}
+  {% elif sec.key == 'publications' and publications %}
   <div class="section">
-    <div class="section-title">Publications</div>
+    <div class="section-title">{{ sec.title }}</div>
     {% for pub in publications %}
     <div class="entry">
       <div class="entry-primary">{{ pub.name or pub.title }}</div>
@@ -320,6 +312,7 @@ ul.bullets li::before {
     {% endfor %}
   </div>
   {% endif %}
+  {% endfor %}
 
 </div>
 </body>

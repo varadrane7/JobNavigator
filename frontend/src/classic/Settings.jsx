@@ -1,10 +1,24 @@
 import React, { useState, useEffect } from 'react'
+import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
 import api from '../api'
 import ModelCombobox from './ModelCombobox'
-import { RefreshCw, Send, Play, Info, Eye, EyeOff } from 'lucide-react'
+import { RefreshCw, Send, Play, Info, Eye, EyeOff, GripVertical } from 'lucide-react'
+
+// Reorderable/renamable resume body sections — mirrors DEFAULT_SECTION_ORDER in
+// backend/api/routes_resumes.py. The header (name/contact) is never included
+// here; it's always fixed at the top of every resume template.
+const DEFAULT_SECTION_ORDER = [
+  { key: 'summary', title: 'Summary' },
+  { key: 'experience', title: 'Experience' },
+  { key: 'skills', title: 'Skills' },
+  { key: 'education', title: 'Education' },
+  { key: 'projects', title: 'Projects' },
+  { key: 'publications', title: 'Publications' },
+]
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState({})
+  const [sectionOrder, setSectionOrder] = useState(DEFAULT_SECTION_ORDER)
   const [resumes, setResumes] = useState([])
   const [personaPopulated, setPersonaPopulated] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -45,6 +59,25 @@ export default function SettingsPage() {
   }
 
   useEffect(() => { fetchAll() }, [])
+
+  useEffect(() => {
+    if (Array.isArray(settings.resume_section_order) && settings.resume_section_order.length) {
+      setSectionOrder(settings.resume_section_order)
+    }
+  }, [settings.resume_section_order])
+
+  const onSectionDragEnd = (result) => {
+    if (!result.destination) return
+    const items = Array.from(sectionOrder)
+    const [moved] = items.splice(result.source.index, 1)
+    items.splice(result.destination.index, 0, moved)
+    setSectionOrder(items)
+    saveSetting('resume_section_order', items)
+  }
+
+  const renameSection = (key, title) => {
+    setSectionOrder(prev => prev.map(s => s.key === key ? { ...s, title } : s))
+  }
 
   useEffect(() => {
     api.get('/resumes?is_base=true')
@@ -145,6 +178,51 @@ export default function SettingsPage() {
           ))}
           {personaPopulated && <option value="persona">Persona</option>}
         </select>
+      </section>
+
+      {/* Resume Section Order — global layout applied to every resume template */}
+      <section className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg p-4 mb-6">
+        <h2 className="font-semibold text-lg dark:text-gray-100 mb-3">Resume Section Order</h2>
+        <p className="text-xs text-gray-400 dark:text-gray-500 mb-3">
+          Drag to reorder, or rename a section's heading. Applies to every resume
+          template unanimously (the header — name &amp; contact — always stays on top).
+        </p>
+        <DragDropContext onDragEnd={onSectionDragEnd}>
+          <Droppable droppableId="resume-sections">
+            {(provided) => (
+              <div ref={provided.innerRef} {...provided.droppableProps} className="space-y-1.5">
+                {sectionOrder.map((sec, index) => (
+                  <Draggable key={sec.key} draggableId={sec.key} index={index}>
+                    {(provided, snapshot) => (
+                      <div
+                        ref={provided.innerRef}
+                        {...provided.draggableProps}
+                        className={`flex items-center gap-2 border rounded px-2 py-1.5 dark:border-gray-600 ${
+                          snapshot.isDragging ? 'bg-blue-50 dark:bg-gray-600' : 'bg-gray-50 dark:bg-gray-700'
+                        }`}
+                      >
+                        <span {...provided.dragHandleProps} className="cursor-grab text-gray-400 dark:text-gray-500">
+                          <GripVertical size={16} />
+                        </span>
+                        <span className="text-[10px] font-mono uppercase tracking-wide text-gray-400 dark:text-gray-500 w-24 flex-shrink-0">
+                          {sec.key}
+                        </span>
+                        <input
+                          type="text"
+                          value={sec.title}
+                          onChange={e => renameSection(sec.key, e.target.value)}
+                          onBlur={() => saveSetting('resume_section_order', sectionOrder)}
+                          className="border rounded px-2 py-1 text-sm flex-1 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-600"
+                        />
+                      </div>
+                    )}
+                  </Draggable>
+                ))}
+                {provided.placeholder}
+              </div>
+            )}
+          </Droppable>
+        </DragDropContext>
       </section>
 
       {/* Scheduler Settings */}
