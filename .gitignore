@@ -152,6 +152,9 @@ docs/*
 !docs/slate.png
 !docs/board.png
 docker-compose.test.yml
+.agents
+agent
+skills-lock.json
 
 # git worktrees (isolated feature branches)
 .worktrees/
