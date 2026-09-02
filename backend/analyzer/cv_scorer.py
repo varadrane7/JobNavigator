@@ -424,7 +424,7 @@ async def analyze_unscored_jobs(status: str = "saved"):
 
         while True:
             q = db.query(Job).filter(
-                (Job.cv_scores == None) | (Job.cv_scores == text("'{}'::jsonb")),
+                (Job.cv_scores == None) | (Job.cv_scores == text("'{}'::json")),
             )
             if status == "saved":
                 q = q.filter(Job.saved == True)
