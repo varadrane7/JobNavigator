@@ -22,6 +22,9 @@ html, body {
   background: #fff;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  font-variant-ligatures: none;
+  -webkit-font-feature-settings: "liga" 0, "clig" 0, "dlig" 0;
+  font-feature-settings: "liga" 0, "clig" 0, "dlig" 0;
 }
 
 .page {
@@ -117,6 +120,7 @@ ul.entry-list > li.edu-entry {
 }
 
 .entry-primary a { color: inherit; text-decoration: none; }
+.entry-desc-inline { font-weight: 400; font-size: 9.5pt; color: #222; }
 
 /* Level-2 hollow-circle bullets for accomplishment lines, like \labelitemii */
 ul.bullets {
@@ -237,12 +241,9 @@ ul.bullets li {
     {% for edu in education %}
     <li class="edu-entry">
       <div class="edu-row">
-        <span class="edu-school">{{ edu.school }}</span>
+        <span class="edu-school">{{ edu.school }}{% if edu.degree %} <span class="edu-degree">— {{ edu.degree }}</span>{% endif %}</span>
         <span class="edu-location">{{ edu.location }}</span>
       </div>
-      {% if edu.degree %}
-      <div class="edu-degree">{{ edu.degree }}</div>
-      {% endif %}
     </li>
     {% endfor %}
     </ul>
@@ -253,8 +254,7 @@ ul.bullets li {
     <ul class="entry-list">
     {% for project in projects %}
     <li class="entry">
-      <div class="entry-primary">{% if project.url %}<a href="{{ project.url }}">{{ project.name or project.title }}</a>{% else %}{{ project.name or project.title }}{% endif %}</div>
-      {% if project.description %}<div class="entry-description">{{ project.description }}</div>{% endif %}
+      <div class="entry-primary">{% if project.url %}<a href="{{ project.url }}">{{ project.name or project.title }}</a>{% else %}{{ project.name or project.title }}{% endif %}{% if project.description %} <span class="entry-desc-inline">— {{ project.description }}</span>{% endif %}</div>
       {% if project.bullets %}
       <ul class="bullets">
         {% for bullet in project.bullets %}<li>{{ bullet | bold }}</li>{% endfor %}
