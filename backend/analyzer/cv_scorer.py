@@ -387,7 +387,7 @@ async def analyze_unscored_jobs(status: str = "saved"):
             logger.warning("No CVs uploaded yet, skipping analysis pipeline")
             return
 
-        from sqlalchemy import or_, text, func
+        from sqlalchemy import or_, func, cast, Text
         from backend.models.db import Search, Company as CompanyModel
         total_scored = 0
         batch_size = 20
@@ -424,7 +424,7 @@ async def analyze_unscored_jobs(status: str = "saved"):
 
         while True:
             q = db.query(Job).filter(
-                (Job.cv_scores == None) | (Job.cv_scores == text("'{}'::json")),
+                (Job.cv_scores == None) | (cast(Job.cv_scores, Text) == '{}'),
             )
             if status == "saved":
                 q = q.filter(Job.saved == True)
