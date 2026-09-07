@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -77,3 +78,74 @@ html, body {
 </div>
 </body>
 </html>
+=======
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ header.name }} — Cover Letter</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap');
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+@page { size: {{ 'letter' if page_format == 'letter' else 'A4' }}; margin: 0; }
+html, body {
+  font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 10.5pt; line-height: 1.55; color: #333; background: #fff; font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+}
+.page { width: {{ '8.5in' if page_format == 'letter' else '210mm' }}; padding: 0.8in 0.9in; margin: 0 auto; }
+.header { text-align: center; margin-bottom: 24pt; }
+.header h1 { font-size: 21pt; font-weight: 300; letter-spacing: 4px; text-transform: uppercase; margin-bottom: 6pt; }
+.header .rule { height: 1px; background: #ccc; width: 60pt; margin: 6pt auto; }
+.header .contact { font-size: 9pt; color: #777; letter-spacing: 0.5px; }
+.header .contact a { color: #777; text-decoration: none; }
+.header .contact .sep { margin: 0 6pt; color: #ccc; }
+.meta { margin-bottom: 16pt; color: #555; }
+.meta .date { margin-bottom: 12pt; }
+.meta .recipient { line-height: 1.4; }
+.greeting { margin-bottom: 12pt; }
+.body p { margin-bottom: 11pt; }
+.closing { margin-top: 16pt; }
+.signature { margin-top: 4pt; font-weight: 700; letter-spacing: 0.5px; }
+</style>
+</head>
+<body>
+<div class="page">
+  {% if header %}
+  <div class="header">
+    <h1>{{ header.name }}</h1>
+    <div class="rule"></div>
+    <div class="contact">
+      {% set parts = [] %}
+      {% for item in (header.contact_items or []) %}
+        {% if item.url %}
+          {% set href = item.url if (item.url.startswith('http') or item.url.startswith('mailto')) else 'https://' ~ item.url %}
+          {% set _ = parts.append('<a href="' ~ href ~ '">' ~ item.text ~ '</a>') %}
+        {% else %}
+          {% set _ = parts.append(item.text) %}
+        {% endif %}
+      {% endfor %}
+      {{ parts | join('<span class="sep">·</span>') }}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="meta">
+    {% if date %}<div class="date">{{ date }}</div>{% endif %}
+    {% if recipient and (recipient.manager or recipient.company or recipient.address) %}
+    <div class="recipient">
+      {% if recipient.manager %}{{ recipient.manager }}<br>{% endif %}
+      {% if recipient.company %}{{ recipient.company }}<br>{% endif %}
+      {% if recipient.address %}{{ recipient.address }}{% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  {% if greeting %}<div class="greeting">{{ greeting }}</div>{% endif %}
+  <div class="body">{% for para in (body_paragraphs or []) %}<p>{{ para | bold }}</p>{% endfor %}</div>
+  {% if closing %}<div class="closing">{{ closing }}</div>{% endif %}
+  {% if signature %}<div class="signature">{{ signature }}</div>{% endif %}
+</div>
+</body>
+</html>
+>>>>>>> 0967077 (base)
