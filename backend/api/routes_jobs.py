@@ -21,6 +21,16 @@ logger = logging.getLogger("jobnavigator.jobs")
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
+def _score_resume_names(db, job) -> list[str]:
+    """Résumé names an auto-score launch will cover; never fatal to the save itself."""
+    try:
+        from backend.analyzer.cv_scorer import resolve_score_resume_names
+        return resolve_score_resume_names(db, job=job)
+    except Exception as e:
+        logger.warning(f"Could not resolve resume names for job {getattr(job, 'id', '?')}: {e}")
+        return []
+
+
 @router.post("/linkedin-import")
 async def linkedin_import(request: Request, db: Session = Depends(get_db)):
     """Accept LinkedIn job IDs from the Chrome Extension, scrape via Voyager API in background."""
@@ -101,6 +111,9 @@ def list_jobs(
     # which is a DataError the id handler then reports as a 500 (R4-T1-07).
     limit: Annotated[int, Query(ge=0, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    # brief=1 drops the long text fields (description, scoring report, H-1B snippet) for
+    # pickers that only need title/company/scores; 200 full rows are several MB.
+    brief: bool = False,
     db: Session = Depends(get_db),
 ):
     search_id = uuid_filter(search_id, "search_id")
@@ -164,22 +177,33 @@ def list_jobs(
     # Batch per-job in-flight op lookup (O(N running jobs) once, O(1) per row)
     import backend.job_monitor as _mon
     in_flight_map: dict[str, list[str]] = {}
+    in_flight_detail_map: dict[str, list[dict]] = {}
     for r in _mon._running.values():
         if r.target_job_id is None:
             continue
-        in_flight_map.setdefault(str(r.target_job_id), []).append(r.job_type)
+        key = str(r.target_job_id)
+        in_flight_map.setdefault(key, []).append(r.job_type)
+        in_flight_detail_map.setdefault(key, []).append(
+            {"job_type": r.job_type, "meta": r.meta})
 
-    return {
-        "total": total,
-        "jobs": [
-            _job_to_dict(
-                j,
-                tailored_resume_id=tailored_map.get(j.id),
-                in_flight=in_flight_map.get(str(j.id), []),
-            )
-            for j in jobs
-        ],
-    }
+    rows = [
+        _job_to_dict(
+            j,
+            tailored_resume_id=tailored_map.get(j.id),
+            in_flight=in_flight_map.get(str(j.id), []),
+            in_flight_detail=in_flight_detail_map.get(str(j.id), []),
+        )
+        for j in jobs
+    ]
+    if brief:
+        for r in rows:
+            for k in _BRIEF_DROPPED:
+                r.pop(k, None)
+    return {"total": total, "jobs": rows}
+
+
+# The long text fields a `brief=1` listing leaves out.
+_BRIEF_DROPPED = ("description", "scoring_report", "h1b_jd_snippet")
 
 
 def _expand_company_filter(db, company):
@@ -362,6 +386,111 @@ def list_job_verdicts(
     return [r[0] for r in rows]
 
 
+# The Score menu's preset thresholds; `score_bands` answers "how many would each
+# of these leave?" over everything the other filters already narrowed to.
+_SCORE_BANDS = (70, 80, 90)
+# The fixed order the feed's H-1B menu lists verdicts in.
+_VERDICT_ORDER = {"likely": 0, "possible": 1, "unlikely": 2, "unknown": 3}
+
+
+@router.get("/facets")
+def job_facets(
+    status: Optional[str] = None,
+    company: Optional[str] = None,
+    source: Optional[str] = None,
+    h1b_verdict: Optional[str] = None,
+    min_score: Optional[int] = None,
+    saved: Optional[bool] = None,
+    title_search: Optional[str] = None,
+    remote: Optional[bool] = None,
+    min_salary: Optional[int] = None,
+    max_salary: Optional[int] = None,
+    search_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Every filter menu's options and counts in one answer, so the feed's menus
+    narrow each other instead of each showing global totals.
+
+    Takes the same query params as GET /jobs and runs them through the same filter
+    builder (`_apply_common_filters`). Each dimension is counted over the jobs
+    matching all the OTHER active filters but NOT its own — with Company = Acme
+    selected, `companies` still lists every other company that survives the rest of
+    the filters, so you can switch selection without clearing first.
+
+    Counts are over the whole result set, not the loaded page. A value that is
+    currently selected but no longer matches is still listed, with count 0, so the
+    menu can show it as picked instead of dropping it silently.
+
+    Returns {companies, sources, h1b_verdicts, statuses, score_bands}, each a list
+    of {name, count}; `score_bands` names the threshold ("70") and counts the jobs
+    at or above it with the score filter itself lifted.
+    """
+    expanded = _expand_company_filter(db, company)
+    base = dict(status=status, company=expanded, source=source, h1b_verdict=h1b_verdict,
+                min_score=min_score, saved=saved, title_search=title_search, remote=remote,
+                min_salary=min_salary, max_salary=max_salary, search_id=search_id)
+
+    def _counts(col, drop):
+        """(value, count) rows for one column with that column's own filter lifted."""
+        kw = dict(base)
+        kw[drop] = None
+        q = db.query(col, func.count(Job.id)).filter(col.isnot(None), col != "")
+        return _apply_common_filters(q, **kw).group_by(col).all()
+
+    def _pad(rows, selected):
+        """Keep a selected-but-now-empty value in the menu, at 0."""
+        have = {name for name, _ in rows}
+        return rows + [(v, 0) for v in selected if v not in have]
+
+    def _picked(raw):
+        return [v.strip() for v in (raw or "").split(",") if v.strip()]
+
+    # companies — aliases collapse onto their parent, as in /jobs/companies/list
+    from backend.models.db import build_company_lookup
+    lookup = build_company_lookup(db)
+    agg: dict[str, int] = {}
+    for name, cnt in _counts(Job.company, "company"):
+        co = lookup.get((name or "").lower())
+        cname = co.name if co else name
+        agg[cname] = agg.get(cname, 0) + cnt
+    # the selection is checked against the names the UI shows (canonical), not the
+    # alias-expanded list the query ran with
+    for picked in _picked(company):
+        co = lookup.get(picked.lower())
+        cname = co.name if co else picked
+        agg.setdefault(cname, 0)
+    companies = [{"name": n, "count": c}
+                 for n, c in sorted(agg.items(), key=lambda x: (-x[1], x[0].lower()))]
+
+    sources = [{"name": n, "count": c}
+               for n, c in sorted(_pad(_counts(Job.source, "source"), _picked(source)),
+                                  key=lambda x: x[0])]
+    verdicts = [{"name": n, "count": c}
+                for n, c in sorted(_pad(_counts(Job.h1b_verdict, "h1b_verdict"), _picked(h1b_verdict)),
+                                   key=lambda x: (_VERDICT_ORDER.get(x[0], 99), x[0]))]
+    statuses = [{"name": n, "count": c}
+                for n, c in sorted(_pad(_counts(Job.status, "status"), _picked(status)),
+                                   key=lambda x: x[0])]
+
+    # score bands: the score filter is the one lifted, so each preset says how many
+    # jobs it would leave from where the other filters already stand
+    score_kw = dict(base)
+    score_kw["min_score"] = None
+    score_bands = []
+    for n in _SCORE_BANDS:
+        q = _apply_common_filters(db.query(func.count(Job.id)), **score_kw)
+        score_bands.append({"name": str(n),
+                            "count": int(q.filter(Job.best_cv_score >= float(n)).scalar() or 0)})
+
+    return {
+        "companies": companies,
+        "sources": sources,
+        "h1b_verdicts": verdicts,
+        "statuses": statuses,
+        "score_bands": score_bands,
+    }
+
+
 @router.post("/save-from-extension")
 async def save_from_extension(body: dict, db: Session = Depends(get_db)):
     """Save a job from the Chrome Extension to the Job Feed (no application created), running the same enrichment as LinkedIn passive capture: Extension search title/company filters, salary extraction, H-1B/body-exclusion scan, and auto-score when configured."""
@@ -489,6 +618,10 @@ async def save_from_extension(body: dict, db: Session = Depends(get_db)):
                 trigger="manual",
                 scope_key=f"{job.id}:extension",
                 target_job_id=_uuid.UUID(str(job.id)),
+                meta={
+                    "resume_names": _score_resume_names(db, job),
+                    "depth": ext_search.auto_scoring_depth,
+                },
                 func_kwargs={"job_id": str(job.id), "depth": ext_search.auto_scoring_depth},
             )
         except JobAlreadyRunningError:
@@ -581,8 +714,13 @@ def get_job(job_id: str, db: Session = Depends(get_db)):
         Resume.job_id == job.id, Resume.is_base == False
     ).order_by(Resume.updated_at.desc()).first()
     import backend.job_monitor as _mon
-    in_flight = [r.job_type for r in _mon._running.values() if r.target_job_id == job.id]
-    return _job_to_dict(job, tailored_resume_id=tailored[0] if tailored else None, in_flight=in_flight)
+    running = [r for r in _mon._running.values() if r.target_job_id == job.id]
+    return _job_to_dict(
+        job,
+        tailored_resume_id=tailored[0] if tailored else None,
+        in_flight=[r.job_type for r in running],
+        in_flight_detail=[{"job_type": r.job_type, "meta": r.meta} for r in running],
+    )
 
 
 @router.patch("/{job_id}")
@@ -615,6 +753,7 @@ async def update_job(job_id: str, updates: dict, background_tasks: BackgroundTas
                     trigger="manual",
                     scope_key=f"{job.id}:on-save",
                     target_job_id=job.id,
+                    meta={"resume_names": _score_resume_names(db, job), "depth": on_save},
                     func_kwargs={"job_id": str(job.id), "depth": on_save},
                 )
             except JobAlreadyRunningError:
@@ -819,7 +958,8 @@ def _normalize_report(report, best_cv):
     return report
 
 
-def _job_to_dict(j: Job, tailored_resume_id=None, in_flight: list[str] | None = None) -> dict:
+def _job_to_dict(j: Job, tailored_resume_id=None, in_flight: list[str] | None = None,
+                 in_flight_detail: list[dict] | None = None) -> dict:
     scores = j.cv_scores or {}
     numeric_scores = [v for v in scores.values() if isinstance(v, (int, float))]
     best_score = max(numeric_scores) if numeric_scores else 0
@@ -855,4 +995,7 @@ def _job_to_dict(j: Job, tailored_resume_id=None, in_flight: list[str] | None = 
         "has_tailored_resume": tailored_resume_id is not None,
         "tailored_resume_id": str(tailored_resume_id) if tailored_resume_id else None,
         "in_flight": in_flight or [],
+        # Same ops as in_flight, with the run's meta (which résumés a score covers,
+        # which base a tailor copies from).
+        "in_flight_detail": in_flight_detail or [],
     }

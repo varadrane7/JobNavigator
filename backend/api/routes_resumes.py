@@ -136,33 +136,21 @@ def _merge_persona_experience(base_exp: list, persona_exp: list) -> list:
 
 logger = logging.getLogger("jobnavigator.resumes")
 
-import asyncio as _asyncio
+def _get_tailoring_semaphore():
+    """The process-wide tailoring gate (`tailoring_max_concurrent`).
 
-_tailoring_semaphore: _asyncio.Semaphore | None = None
-
-
-def _get_tailoring_semaphore() -> _asyncio.Semaphore:
-    """Lazy-init tailoring semaphore from DB setting. Created on first use."""
-    global _tailoring_semaphore
-    if _tailoring_semaphore is None:
-        db = SessionLocal()
-        try:
-            row = db.query(Setting).filter(Setting.key == "tailoring_max_concurrent").first()
-            try:
-                limit = max(1, int(row.value)) if row and row.value else 2
-            except (ValueError, TypeError):
-                limit = 2
-        finally:
-            db.close()
-        _tailoring_semaphore = _asyncio.Semaphore(limit)
-        logger.info(f"Tailoring semaphore initialized: max {limit} concurrent jobs")
-    return _tailoring_semaphore
+    Lives in job_monitor so launch_background can take it before the worker
+    opens its first DB session; re-entrant per task, so a worker already inside
+    the gate is not blocked by its own `async with` here.
+    """
+    from backend.job_monitor import get_limiter
+    return get_limiter("tailoring")
 
 
 def reset_tailoring_semaphore():
-    """Reset semaphore so next call re-reads the limit from DB."""
-    global _tailoring_semaphore
-    _tailoring_semaphore = None
+    """Drop the gate so the next call re-reads the limit from DB."""
+    from backend.job_monitor import reset_limiter
+    reset_limiter("tailoring")
 
 
 router = APIRouter(prefix="/resumes", tags=["resumes"])
@@ -185,51 +173,73 @@ async def _get_browser():
     return _pw_browser
 
 def _default_template_id() -> str:
-    """Return the first available template ID, or 'garamond' as last resort."""
+    """Return the first available template ID, or 'garamond_alt' as last resort."""
     templates = _discover_templates()
-    return templates[0]["id"] if templates else "garamond"
+    return templates[0]["id"] if templates else "garamond_alt"
 
 
 # A template name is a folder name, never a path: `pathlib` joins an absolute or
 # `../`-prefixed value by escaping the base directory, and the reachable set was the
-# whole container filesystem (R4-T5-01). Everything that renders or stores a template
-# name goes through validate_template_name().
+# whole container filesystem (R4-T5-01). Nothing here ever *builds* a path out of the
+# request: template_paths() lists the folders that exist and the request name is only
+# ever a key looked up in that mapping, so the Path that gets opened always comes from
+# the directory listing.
 _TEMPLATE_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
 
-def validate_template_name(name, templates_dir: Path) -> str:
-    """Return `name` when it is a real template folder directly under `templates_dir`; 422 otherwise (never 500, never a path escape)."""
-    if not isinstance(name, str) or not _TEMPLATE_NAME_RE.match(name):
-        raise HTTPException(status_code=422, detail=f"Unknown template: {name!r}")
-    candidate = templates_dir / name
+def template_paths(templates_dir: Path) -> dict:
+    """{folder name: Path} for every real template directly under `templates_dir`.
+
+    Both keys and values come from `iterdir()`, never from user input; a symlink that
+    points outside the tree is dropped because its resolved parent is not the base dir.
+    """
+    found: dict[str, Path] = {}
     try:
-        resolved = candidate.resolve()
         base = templates_dir.resolve()
+        entries = sorted(templates_dir.iterdir())
     except OSError:
+        return found
+    for d in entries:
+        if not d.is_dir() or not (d / "template.html.j2").is_file():
+            continue
+        try:
+            if d.resolve().parent != base:
+                continue  # a symlink escaping the template tree
+        except OSError:
+            continue
+        found[d.name] = d
+    return found
+
+
+def resolve_template_dir(name, templates_dir: Path) -> Path:
+    """Return the on-disk folder for template `name`, or 422 (never 500, never a path escape)."""
+    if not isinstance(name, str):
         raise HTTPException(status_code=422, detail=f"Unknown template: {name!r}")
-    # Belt-and-braces against a symlinked folder inside the template tree.
-    if resolved.parent != base or not (resolved / "template.html.j2").is_file():
+    path = template_paths(templates_dir).get(name)
+    if path is None:
         raise HTTPException(status_code=422, detail=f"Unknown template: {name!r}")
-    return name
+    return path
+
+
+def validate_template_name(name, templates_dir: Path) -> str:
+    """Return the folder name as it is spelled on disk when `name` names a real template; 422 otherwise."""
+    return resolve_template_dir(name, templates_dir).name
 
 
 def _discover_templates() -> list[dict]:
     """Scan resume_templates/ for folders containing template.html.j2; each folder can optionally include meta.json with 'name' and 'description'."""
     templates = []
-    if not TEMPLATES_DIR.exists():
-        return templates
-    for d in sorted(TEMPLATES_DIR.iterdir()):
-        if d.is_dir() and (d / "template.html.j2").exists():
-            meta = {"id": d.name, "name": d.name.replace("_", " ").title(), "description": ""}
-            meta_file = d / "meta.json"
-            if meta_file.exists():
-                try:
-                    with open(meta_file) as f:
-                        meta.update(json.load(f))
-                        meta["id"] = d.name  # folder name is always the ID
-                except Exception:
-                    pass
-            templates.append(meta)
+    for name, d in template_paths(TEMPLATES_DIR).items():
+        meta = {"id": name, "name": name.replace("_", " ").title(), "description": ""}
+        meta_file = d / "meta.json"
+        if meta_file.exists():
+            try:
+                with open(meta_file) as f:
+                    meta.update(json.load(f))
+                    meta["id"] = name  # folder name is always the ID
+            except Exception:
+                pass
+        templates.append(meta)
     return templates
 
 
@@ -297,7 +307,13 @@ def _render_html(json_data: dict, template_name: str, page_format: str,
     """Render a resume to HTML using its Jinja2 template."""
     from jinja2 import Environment, FileSystemLoader
 
-    template_dir = TEMPLATES_DIR / validate_template_name(template_name, TEMPLATES_DIR)
+    allowed = template_paths(TEMPLATES_DIR)
+    # A stored name that no longer exists on this install (a personal template, an old
+    # default) renders with the first available template instead of failing the page.
+    if (isinstance(template_name, str) and template_name not in allowed
+            and _TEMPLATE_NAME_RE.match(template_name)):
+        template_name = _default_template_id()
+    template_dir = resolve_template_dir(template_name, TEMPLATES_DIR)
 
     import re as _re
     env = Environment(loader=FileSystemLoader(str(template_dir)))
@@ -764,10 +780,12 @@ async def tailor_resume(body: dict, db: Session = Depends(get_db)):
         persona = db.query(Persona).filter(Persona.id == 1).first()
         if not persona or not (persona.resume_content or {}):
             raise HTTPException(400, "Persona has no resume_content — fill it in /persona first")
+        base_name = "Persona"
     else:
         base = db.query(Resume).filter(Resume.id == base_resume_id).first()
         if not base:
             raise HTTPException(404, "Base resume not found")
+        base_name = base.name
 
     # Fast-fail: job must exist and have some JD source; the worker resolves the actual
     # text (description → live fetch → cached page) later, so this just confirms something exists without the slow fetch.
@@ -786,6 +804,11 @@ async def tailor_resume(body: dict, db: Session = Depends(get_db)):
     target_uuid = _uuid.UUID(job_id) if job_id else None
     scope = f"{base_resume_id}:{job_id or 'freeform'}"
 
+    # A tailored copy for this job already exists, so the run supersedes it.
+    replaces = bool(job_id) and db.query(Resume.id).filter(
+        Resume.job_id == target_uuid, Resume.is_base == False
+    ).first() is not None
+
     try:
         run_id = launch_background(
             "tailor_resume",
@@ -793,6 +816,7 @@ async def tailor_resume(body: dict, db: Session = Depends(get_db)):
             trigger="manual",
             scope_key=scope,
             target_job_id=target_uuid,
+            meta={"base_name": base_name, "replaces": replaces},
             func_kwargs={
                 "base_resume_id": base_resume_id,
                 "job_id": job_id,
@@ -808,8 +832,29 @@ async def tailor_resume(body: dict, db: Session = Depends(get_db)):
         )
 
 
-async def _resolve_tailoring_jd(job, db) -> str:
-    """Resolve the JD text to tailor against, best-quality first: job.description, then a live fetch persisted back to job.description, then the noisier job.cached_page_text as a last resort; returns "" when nothing usable exists."""
+def _persist_job_description(job_id, description: str) -> None:
+    """Write a freshly fetched JD back to the job in its own short session."""
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.description = description
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"Could not persist fetched description for job {job_id}: {e}")
+    finally:
+        db.close()
+
+
+async def _resolve_tailoring_jd(job, db=None) -> str:
+    """Resolve the JD text to tailor against, best-quality first: job.description, then a live fetch persisted back to job.description, then the noisier job.cached_page_text as a last resort; returns "" when nothing usable exists.
+
+    `job` may be a detached snapshot: with db=None the fetched text is persisted
+    through a short session of its own, so no connection is held across the
+    fetch. Callers that already own a session pass it and keep the old
+    "caller commits" behaviour.
+    """
     if (job.description or "").strip():
         return job.description
     if (job.url or "").strip():
@@ -817,17 +862,27 @@ async def _resolve_tailoring_jd(job, db) -> str:
         fetched = await _fetch_job_description(job.url)
         if fetched and fetched.strip():
             job.description = fetched
-            db.commit()
+            if db is not None:
+                db.commit()
+            else:
+                _persist_job_description(job.id, fetched)
             return fetched
     return job.cached_page_text or ""
 
 
 async def _tailor_impl(base_resume_id: str, job_id: str | None, job_description_override: str | None):
-    """Background worker: does the actual LLM tailoring work; opens its own DB session (no request-scoped session available outside an HTTP handler) and is semaphore-guarded so concurrent tailors don't exceed tailoring_max_concurrent."""
+    """Background worker: does the actual LLM tailoring work.
+
+    Phased so no DB connection is held across the JD fetch or the LLM call:
+    read what the prompt needs -> release -> fetch/generate -> write. Gated by
+    `tailoring_max_concurrent`, taken before the first session is opened.
+    """
     import re as _re
     import json as _json
+    from types import SimpleNamespace
 
     async with _get_tailoring_semaphore():
+        # -- Phase 1: read the base, the job and the prompt, then release ----
         db = SessionLocal()
         try:
             # Reserved id 'persona' uses the singleton Persona's resume_content as
@@ -839,7 +894,6 @@ async def _tailor_impl(base_resume_id: str, job_id: str | None, job_description_
                 if not persona_row or not (persona_row.resume_content or {}):
                     logger.error("Tailor: persona has no resume_content at execution time")
                     raise RuntimeError("Tailor: persona has no resume_content at execution time")
-                base = None
                 base_data = persona_row.resume_content or {}
                 base_name = "Persona"
                 base_template = None
@@ -858,16 +912,15 @@ async def _tailor_impl(base_resume_id: str, job_id: str | None, job_description_
 
             jd_text = job_description_override or ""
             job_name = ""
+            job_ref = None
             if job_id:
                 job = db.query(Job).filter(Job.id == job_id).first()
                 if not job:
                     logger.error(f"Tailor: job {job_id} missing at execution time")
                     raise RuntimeError(f"Tailor: job {job_id} missing at execution time")
-                jd_text = await _resolve_tailoring_jd(job, db)
                 job_name = f"{job.company} \u2014 {job.title}" if job.company else (job.title or "")
-                if not jd_text:
-                    logger.error(f"Tailor: job {job_id} has no usable description")
-                    raise RuntimeError(f"Tailor: job {job_id} has no usable description")
+                job_ref = SimpleNamespace(id=job.id, description=job.description,
+                                          url=job.url, cached_page_text=job.cached_page_text)
 
             # Persona-as-base uses a constrained prompt (select 3-5 bullets per role from the
             # rich pool); falls back to the standard cv_tailor_prompt if unconfigured.
@@ -883,77 +936,91 @@ async def _tailor_impl(base_resume_id: str, job_id: str | None, job_description_
                     raise RuntimeError("Tailor: cv_tailor_prompt setting is empty")
                 prompt_template = prompt_row.value
 
-            resume_sections = {
-                "summary": base_data.get("summary", ""),
-                "experience": list(base_data.get("experience", []) or []),
-                "skills": dict(base_data.get("skills", {}) or {}),
-            }
-
-            # Persona is NOT auto-merged into Resume-as-base tailoring: Resume-as-base uses
-            # only the base resume's bullets (predictable length); Persona-as-base uses the full pool via persona_tailor_prompt.
-
-            prompt = prompt_template.replace("{resume_json}", _json.dumps(resume_sections, indent=2))
-            prompt = prompt.replace("{job_description}", jd_text[:6000])
-
-            system = (
-                "You are an expert resume tailor. Rewrite the resume to align with the "
-                "job description using the JD's exact vocabulary. Do NOT invent experience, "
-                "skills, or facts not present in the original resume. Only reformulate, "
-                "reframe, and reorder existing content. If something is missing, map to "
-                "the closest truthful concept."
-            )
-
-            from backend.analyzer.llm_client import call_cv_tailor_llm
-            from backend.analyzer.llm_logger import track_llm_call
-
             # Same resolver call_cv_tailor_llm dispatches with, so the log row can never
             # name a model that was not called.
             from backend.analyzer.llm_client import resolve_llm_config
             _cfg = resolve_llm_config("cv_tailor", db=db)
             _provider, _model = _cfg["provider"], _cfg["model"]
+        finally:
+            db.close()
 
-            try:
-                async with track_llm_call("tailor", _provider, _model, job_id=job_id) as _tracker:
-                    _resp = await call_cv_tailor_llm(prompt, system, max_tokens=3000)
-                    _tracker.record(_resp)
-                    raw = _resp["text"]
-            except Exception as e:
-                logger.error(f"Tailor LLM failed for base={base_resume_id} job={job_id}: {e}")
-                raise
+        # -- Phase 1b: resolve the JD (may fetch the page), no session held ---
+        if job_ref is not None:
+            jd_text = await _resolve_tailoring_jd(job_ref)
+            if not jd_text:
+                logger.error(f"Tailor: job {job_id} has no usable description")
+                raise RuntimeError(f"Tailor: job {job_id} has no usable description")
 
-            try:
-                text = raw.strip()
-                match = _re.search(r'\{[\s\S]*\}', text)
-                if match:
-                    text = match.group(0)
-                llm_result = _json.loads(text)
-            except _json.JSONDecodeError as e:
-                logger.error(f"Tailor JSON parse failed: {e}. Raw: {raw[:500]}")
-                raise
+        resume_sections = {
+            "summary": base_data.get("summary", ""),
+            "experience": list(base_data.get("experience", []) or []),
+            "skills": dict(base_data.get("skills", {}) or {}),
+        }
 
-            tailored_data = _json.loads(_json.dumps(base_data))
-            if "summary" in llm_result:
-                tailored_data["summary"] = llm_result["summary"]
-            if "experience" in llm_result:
-                llm_exp = llm_result["experience"]
-                base_exp = tailored_data.get("experience", [])
-                for i, llm_job in enumerate(llm_exp):
-                    if i < len(base_exp):
-                        base_exp[i]["bullets"] = llm_job.get("bullets", base_exp[i].get("bullets", []))
-                        if llm_job.get("suggested_bullets"):
-                            base_exp[i]["suggested_bullets"] = llm_job["suggested_bullets"]
-                        if llm_job.get("description") is not None:
-                            base_exp[i]["description"] = llm_job["description"]
-                tailored_data["experience"] = base_exp
-            if "skills" in llm_result:
-                tailored_data["skills"] = llm_result["skills"]
+        # Persona is NOT auto-merged into Resume-as-base tailoring: Resume-as-base uses
+        # only the base resume's bullets (predictable length); Persona-as-base uses the full pool via persona_tailor_prompt.
 
-            # A copy tailored from a pasted description has no Job row, so keep the text
-            # it was written against on the copy under an "_"-prefixed key, which _render_html and the editors ignore.
-            if not job_id and jd_text:
-                tailored_data["_tailor_context"] = {"job_description": jd_text[:6000], "source": "freeform"}
+        prompt = prompt_template.replace("{resume_json}", _json.dumps(resume_sections, indent=2))
+        prompt = prompt.replace("{job_description}", jd_text[:6000])
 
-            name = f"{base_name} \u2192 {job_name}" if job_name else f"{base_name} (tailored)"
+        system = (
+            "You are an expert resume tailor. Rewrite the resume to align with the "
+            "job description using the JD's exact vocabulary. Do NOT invent experience, "
+            "skills, or facts not present in the original resume. Only reformulate, "
+            "reframe, and reorder existing content. If something is missing, map to "
+            "the closest truthful concept."
+        )
+
+        from backend.analyzer.llm_client import call_cv_tailor_llm
+        from backend.analyzer.llm_logger import track_llm_call
+
+        # -- Phase 2: the LLM call, with no connection held -------------------
+        try:
+            async with track_llm_call("tailor", _provider, _model, job_id=job_id) as _tracker:
+                _resp = await call_cv_tailor_llm(prompt, system, max_tokens=3000)
+                _tracker.record(_resp)
+                raw = _resp["text"]
+        except Exception as e:
+            logger.error(f"Tailor LLM failed for base={base_resume_id} job={job_id}: {e}")
+            raise
+
+        try:
+            text = raw.strip()
+            match = _re.search(r'\{[\s\S]*\}', text)
+            if match:
+                text = match.group(0)
+            llm_result = _json.loads(text)
+        except _json.JSONDecodeError as e:
+            logger.error(f"Tailor JSON parse failed: {e}. Raw: {raw[:500]}")
+            raise
+
+        tailored_data = _json.loads(_json.dumps(base_data))
+        if "summary" in llm_result:
+            tailored_data["summary"] = llm_result["summary"]
+        if "experience" in llm_result:
+            llm_exp = llm_result["experience"]
+            base_exp = tailored_data.get("experience", [])
+            for i, llm_job in enumerate(llm_exp):
+                if i < len(base_exp):
+                    base_exp[i]["bullets"] = llm_job.get("bullets", base_exp[i].get("bullets", []))
+                    if llm_job.get("suggested_bullets"):
+                        base_exp[i]["suggested_bullets"] = llm_job["suggested_bullets"]
+                    if llm_job.get("description") is not None:
+                        base_exp[i]["description"] = llm_job["description"]
+            tailored_data["experience"] = base_exp
+        if "skills" in llm_result:
+            tailored_data["skills"] = llm_result["skills"]
+
+        # A copy tailored from a pasted description has no Job row, so keep the text
+        # it was written against on the copy under an "_"-prefixed key, which _render_html and the editors ignore.
+        if not job_id and jd_text:
+            tailored_data["_tailor_context"] = {"job_description": jd_text[:6000], "source": "freeform"}
+
+        name = f"{base_name} \u2192 {job_name}" if job_name else f"{base_name} (tailored)"
+
+        # -- Phase 3: persist the copy and chain the score --------------------
+        db = SessionLocal()
+        try:
             tailored = Resume(
                 name=name,
                 is_base=False,
@@ -966,32 +1033,36 @@ async def _tailor_impl(base_resume_id: str, job_id: str | None, job_description_
             db.add(tailored)
             db.commit()
             db.refresh(tailored)
+            tailored_id = str(tailored.id)
             # Optional: chain a score against the newly tailored CV.
             chain_depth = _resolve_chain_score_depth(db)
-            if chain_depth and job_id:
-                try:
-                    from backend.analyzer.cv_scorer import score_single_job
-                    launch_background(
-                        "analyze_job",
-                        score_single_job,
-                        trigger="manual",
-                        scope_key=f"{job_id}:tailored:{tailored.id}",
-                        target_job_id=_uuid.UUID(job_id) if isinstance(job_id, str) else job_id,
-                        func_kwargs={
-                            "job_id": job_id,
-                            "cv_ids": [str(tailored.id)],
-                            "depth": chain_depth,
-                        },
-                    )
-                except Exception as _e:
-                    # Non-fatal — tailor succeeded, chain is a nice-to-have
-                    logger.warning(f"Tailor chain score failed to launch: {_e}")
-            logger.info(f"Tailor: created resume {tailored.id} for job {job_id}")
-            # Returned string becomes JobRun.result_summary (Stats → Run history).
-            return (f"Created '{name}'"
-                    + (f" - {chain_depth} score chained" if chain_depth and job_id else ""))
         finally:
             db.close()
+
+        if chain_depth and job_id:
+            try:
+                from backend.analyzer.cv_scorer import score_single_job
+                launch_background(
+                    "analyze_job",
+                    score_single_job,
+                    trigger="manual",
+                    scope_key=f"{job_id}:tailored:{tailored_id}",
+                    target_job_id=_uuid.UUID(job_id) if isinstance(job_id, str) else job_id,
+                    # A lone tailored copy scores under the label "Tailored".
+                    meta={"resume_names": ["Tailored"], "depth": chain_depth},
+                    func_kwargs={
+                        "job_id": job_id,
+                        "cv_ids": [tailored_id],
+                        "depth": chain_depth,
+                    },
+                )
+            except Exception as _e:
+                # Non-fatal -- tailor succeeded, chain is a nice-to-have
+                logger.warning(f"Tailor chain score failed to launch: {_e}")
+        logger.info(f"Tailor: created resume {tailored_id} for job {job_id}")
+        # Returned string becomes JobRun.result_summary (Stats -> Run history).
+        return (f"Created '{name}'"
+                + (f" - {chain_depth} score chained" if chain_depth and job_id else ""))
 
 
 @router.get("/{resume_id}")
@@ -1295,9 +1366,15 @@ def _resume_to_score_text(json_data: dict) -> str:
 
 
 async def _score_resume_impl(resume_id: str, depth: str):
-    """Background worker: score a tailored resume against its linked job, or against the JD saved on the copy (json_data["_tailor_context"]) when it has none, storing the result under json_data["_score"] in that case; runs under launch_background so progress is visible via /monitor/active, and returns a one-line summary for JobRun.result_summary."""
+    """Background worker: score a tailored resume against its linked job, or against the JD saved on the copy (json_data["_tailor_context"]) when it has none, storing the result under json_data["_score"] in that case; runs under launch_background so progress is visible via /monitor/active, and returns a one-line summary for JobRun.result_summary.
+
+    Read, LLM and write are three separate short sessions -- the LLM call is
+    awaited with no pooled connection held.
+    """
+    from types import SimpleNamespace
     from backend.analyzer.cv_scorer import score_job_sync
 
+    # -- Phase 1: read the copy and its job, then release -------------------
     db = SessionLocal()
     try:
         resume = db.query(Resume).filter(Resume.id == resume_id).first()
@@ -1305,13 +1382,20 @@ async def _score_resume_impl(resume_id: str, depth: str):
             logger.error(f"Score: resume {resume_id} missing at execution time")
             return "Resume not found"
 
-        job = None
+        resume_name = resume.name
+        linked_job_id = resume.job_id
+        job_ref = None
+        job_title = None
         jd_text = ""
-        if resume.job_id:
-            job = db.query(Job).filter(Job.id == resume.job_id).first()
+        if linked_job_id:
+            job = db.query(Job).filter(Job.id == linked_job_id).first()
             if not job:
                 logger.error(f"Score: linked job {resume.job_id} not found")
                 return "Linked job not found"
+            job_title = job.title
+            job_ref = SimpleNamespace(id=job.id, company=job.company, title=job.title,
+                                      description=job.description,
+                                      cached_page_text=job.cached_page_text, url=job.url)
         else:
             jd_text = _tailor_context_jd(resume.json_data or {})
             if not jd_text:
@@ -1322,26 +1406,41 @@ async def _score_resume_impl(resume_id: str, depth: str):
         if len(resume_text) < 50:
             logger.warning(f"Score: resume {resume_id} has insufficient text ({len(resume_text)} chars)")
             return "Resume has insufficient text"
+    finally:
+        db.close()
 
-        cv_texts = {"Tailored": resume_text}
-        if job is not None:
-            result = await score_job_sync(job, cv_texts, db=db, depth=depth)
-        else:
-            # score_job_sync only reads `job` for its id (logging / LLM-cost rows)
-            # once the JD text is supplied, so a stand-in is enough here.
-            from types import SimpleNamespace
-            stand_in = SimpleNamespace(id=None, company=None, title=None, description=jd_text)
-            result = await score_job_sync(stand_in, cv_texts, db=db, depth=depth, preloaded_text=jd_text)
-        if not result:
-            logger.error(f"Score: scoring failed for resume {resume_id}")
-            return "Scoring failed"
+    cv_texts = {"Tailored": resume_text}
 
-        tailored_score = None
-        scores = result.get("scores", result)
-        if isinstance(scores, dict):
-            tailored_score = scores.get("Tailored")
+    # -- Phase 2: the LLM call, with no connection held ---------------------
+    if job_ref is not None:
+        from backend.analyzer.cv_scorer import _job_text_from_row, _fetch_job_text
+        job_text = _job_text_from_row(job_ref) or await _fetch_job_text(job_ref.id, job_ref.url)
+        if not job_text:
+            logger.error(f"Score: job {job_ref.id} has no text to score against")
+            return "No job text to score"
+        result = await score_job_sync(job_ref, cv_texts, db=None, depth=depth,
+                                      preloaded_text=job_text)
+    else:
+        # score_job_sync only reads `job` for its id (logging / LLM-cost rows)
+        # once the JD text is supplied, so a stand-in is enough here.
+        stand_in = SimpleNamespace(id=None, company=None, title=None, description=jd_text)
+        result = await score_job_sync(stand_in, cv_texts, db=None, depth=depth, preloaded_text=jd_text)
+    if not result:
+        logger.error(f"Score: scoring failed for resume {resume_id}")
+        return "Scoring failed"
 
-        if job is None:
+    tailored_score = None
+    scores = result.get("scores", result)
+    if isinstance(scores, dict):
+        tailored_score = scores.get("Tailored")
+
+    # -- Phase 3: write the result back -------------------------------------
+    db = SessionLocal()
+    try:
+        if job_ref is None:
+            resume = db.query(Resume).filter(Resume.id == resume_id).first()
+            if not resume:
+                return "Resume disappeared mid-run"
             data = dict(resume.json_data or {})
             entry = {"Tailored": tailored_score, "scored_at": utcnow().isoformat()}
             if depth == "full" and result.get("_scoring_report"):
@@ -1353,7 +1452,11 @@ async def _score_resume_impl(resume_id: str, depth: str):
             flag_modified(resume, "json_data")
             db.commit()
             logger.info(f"Score: resume {resume_id} (freeform JD) = {tailored_score} (depth={depth})")
-            return f"{resume.name} (pasted JD) - Tailored {tailored_score}, {depth}"
+            return f"{resume_name} (pasted JD) - Tailored {tailored_score}, {depth}"
+
+        job = db.query(Job).filter(Job.id == linked_job_id).first()
+        if not job:
+            return "Linked job disappeared mid-run"
 
         updated_scores = dict(job.cv_scores or {})
         if tailored_score is not None:
@@ -1378,8 +1481,8 @@ async def _score_resume_impl(resume_id: str, depth: str):
             job.scoring_report = existing
 
         db.commit()
-        logger.info(f"Score: resume {resume_id} → job {resume.job_id} = {tailored_score} (depth={depth})")
-        return f"{job.title} - Tailored {tailored_score}, {depth}"
+        logger.info(f"Score: resume {resume_id} -> job {linked_job_id} = {tailored_score} (depth={depth})")
+        return f"{job_title} - Tailored {tailored_score}, {depth}"
     finally:
         db.close()
 
@@ -1414,6 +1517,9 @@ async def score_check(resume_id: str, request_body: dict = None, db: Session = D
         depth = "light"
 
     scope = f"{resume.job_id}:resume:{resume_id}" if resume.job_id else f"resume:{resume_id}"
+    # A job-linked copy lands in job.cv_scores under "Tailored"; a freeform copy
+    # keeps its score on itself, so name the résumé instead.
+    score_label = "Tailored" if resume.job_id else resume.name
     try:
         run_id = launch_background(
             "score_resume",
@@ -1421,6 +1527,7 @@ async def score_check(resume_id: str, request_body: dict = None, db: Session = D
             trigger="manual",
             scope_key=scope,
             target_job_id=_uuid.UUID(str(resume.job_id)) if resume.job_id else None,
+            meta={"resume_names": [score_label], "depth": depth},
             func_kwargs={"resume_id": resume_id, "depth": depth},
         )
         return {"run_id": run_id, "status": "running", "depth": depth, "resume_id": resume_id}

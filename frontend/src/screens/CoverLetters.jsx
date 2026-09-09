@@ -164,7 +164,8 @@ export default function CoverLetters() {
     () => api.get('/persona').then(({ data }) => setPersonaAvailable(Object.keys(data?.resume_content || {}).length > 0)).catch((e) => { console.error(e); pushToast({ kind: 'error', msg: 'Could not load your Persona — it will not be offered as a source.' }) }),
     // saved AND applied — v1 fetched only saved, so a ?job= from an applied job
     // landed on an id with no matching option and the field rendered blank
-    () => api.get('/jobs', { params: { status: 'saved,applied', limit: 200 } })   // 200 is the endpoint's cap
+    // brief=1: the picker needs title/company/status only; 200 full rows ran to several MB
+    () => api.get('/jobs', { params: { status: 'saved,applied', limit: 200, brief: 1 } })   // 200 is the endpoint's cap
       .then(({ data }) => setJobs(mergeKeep(data.jobs || []))).catch((e) => { console.error(e); pushToast({ kind: 'error', msg: 'Could not load your saved jobs — the job picker is empty.' }) }),
     () => api.get('/settings').then(({ data }) => {
       let p = data.cover_letter_voice_presets
@@ -340,7 +341,9 @@ export default function CoverLetters() {
         </div>
       </HeaderRow>
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+      {/* both panes wait for the settle together, as the Résumés body does: the panel
+          painting a second before the voice row and the cards read as two loads */}
+      {ready && <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         {/* generate panel */}
         <div className="v2-scroll" style={{ flex: '0 0 340px', borderRight: '1px solid var(--line)', background: 'var(--bg)', overflow: 'auto', padding: '16px 26px 20px 30px', display: 'flex', flexDirection: 'column', gap: 13, minHeight: 0 }}>
           <Heading strong={600} size={16}>Generate new</Heading>
@@ -425,7 +428,7 @@ export default function CoverLetters() {
             </>}
           </div>
         </div>
-      </div>
+      </div>}
       <ToastStack toasts={toasts} onClose={dismissToast} />
     </div>
   )

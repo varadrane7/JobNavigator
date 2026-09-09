@@ -14,9 +14,22 @@ from backend.config import DATABASE_URL
 
 # Pool args are Postgres-specific; SQLite (used in CI tests via DATABASE_URL=sqlite:///:memory:)
 # rejects pool_size/max_overflow.
+#
+# The ceiling stays 30 connections: with background work bounded (job_monitor's
+# limiters) nothing holds a connection across an LLM call or a page fetch any
+# more, so the pool is no longer the binding constraint and raising the ceiling
+# would only hide a regression. What did change:
+#   pool_size 10 -> 20  the Feed's bulk actions fire one HTTP request per job,
+#                       and each takes a short session in the auth middleware
+#                       and again in the handler; 20 persistent connections
+#                       serve that burst without churning overflow connects.
+#   pool_timeout 5      a saturated pool must fail fast. The default is 30 s, so
+#                       every request piled up behind the drain and /health went
+#                       unanswerable; 5 s turns that into a quick 503.
+#   pool_recycle 1800   drop connections Postgres or a proxy may have killed.
 _engine_kwargs = {"pool_pre_ping": True}
 if not DATABASE_URL.startswith("sqlite"):
-    _engine_kwargs.update(pool_size=10, max_overflow=20)
+    _engine_kwargs.update(pool_size=20, max_overflow=10, pool_timeout=5, pool_recycle=1800)
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -370,6 +383,17 @@ class ActivityLog(Base):
 
 
 # ── Resumes ─────────────────────────────────────────────────────────────────
+
+def first_template(kind: str) -> str:
+    """First template folder shipped under backend/<kind>/ (alphabetical): the model default, so a fresh install never points at a template it does not have."""
+    from pathlib import Path
+    base = Path(__file__).resolve().parents[1] / kind
+    try:
+        names = sorted(p.name for p in base.iterdir() if (p / "template.html.j2").is_file())
+    except OSError:
+        names = []
+    return names[0] if names else "traditional"
+
 class Resume(Base):
     __tablename__ = "resumes"
 
@@ -378,7 +402,7 @@ class Resume(Base):
     is_base = Column(Boolean, default=True)
     parent_id = Column(UUID(as_uuid=True), ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True)
     job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
-    template = Column(String, default="garamond")
+    template = Column(String, default=lambda: first_template("resume_templates"))
     page_format = Column(String, default="letter")
     json_data = Column(JSON, default={})
     created_at = Column(DateTime(timezone=True), default=utcnow)
@@ -401,7 +425,7 @@ class CoverLetter(Base):
     parent_id = Column(UUID(as_uuid=True), ForeignKey("cover_letters.id", ondelete="SET NULL"), nullable=True)
     # garamond_alt (not garamond) — the garamond template dir is gitignored
     # (licensed fonts), so it may be absent on a fresh clone.
-    template = Column(String, default="garamond_alt")
+    template = Column(String, default=lambda: first_template("cover_letter_templates"))
     page_format = Column(String, default="letter")
     json_data = Column(JSON, default={})
     # How this draft was written; lets the list/editor show it and Regenerate
