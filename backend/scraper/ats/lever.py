@@ -3,7 +3,7 @@ slash guards against attacker-controlled paths) with department/team/location/co
 forwarded from the original query string."""
 import json
 import logging
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 
@@ -32,7 +32,9 @@ async def scrape(url: str, debug: bool = False) -> list[dict] | tuple:
     qs = parse_qs(parsed.query)
     for param in ("department", "team", "location", "commitment"):
         if param in qs:
-            api_url += f"&{param}={qs[param][0]}"
+            # parse_qs already decoded the value, so a filter with a space
+            # ("San Francisco") has to be re-encoded before it is appended.
+            api_url += f"&{param}={quote(qs[param][0], safe='')}"
 
     jobs = []
     rejected = []
@@ -51,7 +53,14 @@ async def scrape(url: str, debug: bool = False) -> list[dict] | tuple:
             job_url = p.get("hostedUrl") or ""
             reason = _validate_job(title, job_url)
             if reason is None:
-                jobs.append({"title": title, "url": job_url})
+                categories = p.get("categories") or {}
+                # `allLocations` is the full list; 9 of 75 postings on one live
+                # board name more than one place.
+                every = [x for x in (categories.get("allLocations") or []) if x]
+                jobs.append({"title": title, "url": job_url,
+                             "location": categories.get("location") or None,
+                             "locations": every,
+                             "arrangement": p.get("workplaceType") or None})
             elif debug:
                 rejected.append({"title": title, "url": job_url, "selector": "lever_api", "reason": reason})
 

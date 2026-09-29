@@ -3,6 +3,7 @@ API ignores department[]/offices[] query params, so filtering (including parent-
 to children) happens client-side, with office dedup keyed on location.name."""
 import json
 import logging
+import re
 from urllib.parse import urlparse, parse_qs
 
 import httpx
@@ -28,20 +29,62 @@ def _parse_greenhouse_url(url: str) -> tuple[str, set[int], set[int]]:
     qs = parse_qs(parsed.query)
     dept_ids = set()
     office_ids = set()
-    for key in ("departments[]", "departments%5B%5D"):
-        for v in qs.get(key, []):
-            try:
-                dept_ids.add(int(v))
-            except ValueError:
-                pass
-    for key in ("offices[]", "offices%5B%5D"):
-        for v in qs.get(key, []):
-            try:
-                office_ids.add(int(v))
-            except ValueError:
-                pass
+    discarded: list[str] = []
+
+    def _collect(keys: tuple[str, ...], into: set[int]) -> None:
+        for key in keys:
+            for v in qs.get(key, []):
+                # A stored URL sometimes carries a stray space inside the id
+                # ("4030 094003"); the id itself is still readable, so read it
+                # rather than dropping the whole filter.
+                squeezed = re.sub(r"\s+", "", v)
+                try:
+                    into.add(int(squeezed))
+                except ValueError:
+                    discarded.append(v)
+
+    _collect(("departments[]", "departments%5B%5D"), dept_ids)
+    _collect(("offices[]", "offices%5B%5D"), office_ids)
+
+    # One line per URL, not one per value: a board URL with a broken filter has
+    # every id broken the same way.
+    if discarded:
+        logger.warning(
+            f"Greenhouse: ignored {len(discarded)} unreadable filter id(s) "
+            f"{discarded} in URL {url}"
+        )
 
     return company_slug, dept_ids, office_ids
+
+
+# `location.name` carries several places on the boards that use them:
+# "New York City, NY; San Francisco, CA | New York City, NY" is one posting open
+# in three places, not a city with a long name.
+_PLACE_LIST = re.compile(r"[;|]")
+
+
+def _locations_of(posting: dict) -> list[str]:
+    """Every place one Greenhouse posting names, primary first.
+
+    Two fields carry them. `location.name` is the board's own line and may list
+    several places; `offices[].location` is the office address Greenhouse keeps
+    beside it ("New York, New York, United States"). A posting has to answer the
+    filter for each of them, so both are returned, de-duplicated, in the order
+    the board wrote them.
+    """
+    out: list[str] = []
+    name = (posting.get("location") or {}).get("name") or ""
+    for part in _PLACE_LIST.split(name):
+        part = part.strip()
+        if part and part not in out:
+            out.append(part)
+    for office in posting.get("offices") or []:
+        if not isinstance(office, dict):
+            continue
+        loc = (office.get("location") or "").strip()
+        if loc and loc not in out:
+            out.append(loc)
+    return out
 
 
 async def scrape(url: str, debug: bool = False) -> list[dict] | tuple:
@@ -145,7 +188,11 @@ async def scrape(url: str, debug: bool = False) -> list[dict] | tuple:
 
             reason = _validate_job(title, job_url)
             if reason is None:
-                jobs.append({"title": title, "url": job_url})
+                # Greenhouse carries no arrangement field; "Remote - US" arrives
+                # inside location.name and the cascade reads it from there.
+                jobs.append({"title": title, "url": job_url,
+                             "location": (posting.get("location") or {}).get("name") or None,
+                             "locations": _locations_of(posting)})
             elif debug:
                 rejected.append({"title": title, "url": job_url, "selector": "greenhouse_api", "reason": reason})
 

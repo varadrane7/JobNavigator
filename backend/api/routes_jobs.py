@@ -9,6 +9,8 @@ from backend.models.db import get_db, Job, find_company_by_name
 from backend.api._input import str_field, uuid_filter
 from backend.scraper._shared.dedup import make_external_id, make_content_hash
 from backend.analyzer.salary_extractor import apply_salary_to_job
+from backend.analyzer.work_arrangement import apply_arrangement_to_job
+from backend.analyzer.location import apply_location_to_job
 from backend.job_monitor import launch_background, JobAlreadyRunningError
 # LinkedIn extension enrichment — see sources/linkedin_extension.py
 from backend.scraper.sources.linkedin_extension import (
@@ -101,6 +103,8 @@ def list_jobs(
     search_id: Optional[str] = None,
     h1b_verdict: Optional[str] = None,
     remote: Optional[bool] = None,
+    location: Optional[str] = None,
+    arrangement: Optional[str] = None,
     source: Optional[str] = None,
     saved: Optional[bool] = None,
     title_search: Optional[str] = None,
@@ -148,17 +152,23 @@ def list_jobs(
         q = q.filter(Job.salary_max >= min_salary)
     if max_salary is not None:
         q = q.filter(Job.salary_min <= max_salary)
+    clause = _location_clause(location)
+    if clause is not None:
+        q = q.filter(clause)
+    clause = _arrangement_clause(arrangement)
+    if clause is not None:
+        q = q.filter(clause)
 
     total = q.count()
 
     if sort_by == "score":
-        q = q.order_by(desc(Job.best_cv_score).nullslast())
+        q = q.order_by(desc(Job.best_cv_score).nullslast(), Job.id)
     elif sort_by == "salary":
-        q = q.order_by(desc(Job.salary_max).nullslast())
+        q = q.order_by(desc(Job.salary_max).nullslast(), Job.id)
     elif sort_by == "company":
-        q = q.order_by(asc(Job.company))
+        q = q.order_by(asc(Job.company), Job.id)
     else:  # "date" (default)
-        q = q.order_by(desc(Job.discovered_at))
+        q = q.order_by(desc(Job.discovered_at), Job.id)   # id tiebreak: LIMIT/OFFSET over a tie-heavy sort is not stable without one
 
     jobs = q.offset(offset).limit(limit).all()
 
@@ -223,9 +233,73 @@ def _expand_company_filter(db, company):
     return ",".join(sorted(expanded))
 
 
+def _location_clause(raw):
+    """OR of the picked places, each an AND of the parts the key names.
+
+    A key is "CA", "CA:BC" or "CA:BC:vancouver", so picking a country keeps
+    every job under it.
+
+    A region is matched strictly. Letting a row with no region answer every
+    region of its country would report 51 jobs in Alberta when 5 are known to
+    be there. The one exception is a key that also names a city: the city
+    already identifies the place, so "Vancouver, BC" still reaches the rows
+    whose region the board never stated.
+    """
+    from backend.analyzer.location import split_key
+    from sqlalchemy import and_, or_
+
+    from backend.models.db import JobLocation
+
+    clauses = []
+    for key in [k.strip() for k in (raw or "").split(",") if k.strip()]:
+        country, region, city = split_key(key)
+        parts = [JobLocation.job_id == Job.id]
+        if country:
+            parts.append(JobLocation.country == country)
+        if region:
+            parts.append(or_(JobLocation.region == region, JobLocation.region.is_(None))
+                         if city else JobLocation.region == region)
+        if city:
+            parts.append(JobLocation.city == city)
+        if len(parts) > 1:
+            clauses.append(and_(*parts))
+    if not clauses:
+        return None
+    # EXISTS, not a join: a posting open in twenty-two cities must answer all
+    # twenty-two filters without being returned twenty-two times.
+    from sqlalchemy import exists
+    return or_(*[exists().where(clause) for clause in clauses])
+
+
+ARRANGEMENTS = ("remote", "hybrid", "onsite", "unknown")
+
+
+def _arrangement_clause(raw):
+    """OR of the picked work arrangements.
+
+    A posting carries a set, so one offered both remote and hybrid answers
+    either filter. "unknown" is its own value - all three flags NULL - and is
+    never folded into "not remote".
+    """
+    from sqlalchemy import and_, or_
+
+    picked = [v.strip().lower() for v in (raw or "").split(",") if v.strip()]
+    columns = {"remote": Job.arr_remote, "hybrid": Job.arr_hybrid,
+               "onsite": Job.arr_onsite}
+    clauses = []
+    for value in picked:
+        if value in columns:
+            clauses.append(columns[value].is_(True))
+        elif value == "unknown":
+            clauses.append(and_(Job.arr_remote.is_(None), Job.arr_hybrid.is_(None),
+                                Job.arr_onsite.is_(None)))
+    return or_(*clauses) if clauses else None
+
+
 def _apply_common_filters(q, status=None, company=None, source=None, h1b_verdict=None,
                           min_score=None, saved=None, title_search=None, remote=None,
-                          min_salary=None, max_salary=None, search_id=None):
+                          min_salary=None, max_salary=None, search_id=None,
+                          location=None, arrangement=None):
     """Apply shared filter logic for job list and filter-list endpoints."""
     if status:
         vals = [s.strip() for s in status.split(",") if s.strip()]
@@ -254,6 +328,12 @@ def _apply_common_filters(q, status=None, company=None, source=None, h1b_verdict
         q = q.filter(Job.salary_min <= max_salary)
     if search_id:
         q = q.filter(Job.search_id == uuid_filter(search_id, "search_id"))
+    clause = _location_clause(location)
+    if clause is not None:
+        q = q.filter(clause)
+    clause = _arrangement_clause(arrangement)
+    if clause is not None:
+        q = q.filter(clause)
     return q
 
 
@@ -292,6 +372,8 @@ def list_job_companies(
     saved: Optional[bool] = None,
     title_search: Optional[str] = None,
     remote: Optional[bool] = None,
+    location: Optional[str] = None,
+    arrangement: Optional[str] = None,
     min_salary: Optional[int] = None,
     max_salary: Optional[int] = None,
     search_id: Optional[str] = None,
@@ -305,7 +387,7 @@ def list_job_companies(
         cq = db.query(Job.company, func.count(Job.id)).filter(Job.company.isnot(None), Job.company != "")
         cq = _apply_common_filters(cq, status=status, source=source, h1b_verdict=h1b_verdict,
                                    min_score=min_score, saved=saved, title_search=title_search,
-                                   remote=remote, min_salary=min_salary, max_salary=max_salary,
+                                   remote=remote, location=location, arrangement=arrangement, min_salary=min_salary, max_salary=max_salary,
                                    search_id=search_id).group_by(Job.company)
         lookup = build_company_lookup(db)
         agg = {}
@@ -317,7 +399,7 @@ def list_job_companies(
     q = db.query(Job.company).distinct().filter(Job.company.isnot(None), Job.company != "")
     q = _apply_common_filters(q, status=status, source=source, h1b_verdict=h1b_verdict,
                               min_score=min_score, saved=saved, title_search=title_search,
-                              remote=remote, min_salary=min_salary, max_salary=max_salary,
+                              remote=remote, location=location, arrangement=arrangement, min_salary=min_salary, max_salary=max_salary,
                               search_id=search_id)
     raw_names = [r[0] for r in q.all()]
     lookup = build_company_lookup(db)
@@ -338,6 +420,8 @@ def list_job_sources(
     saved: Optional[bool] = None,
     title_search: Optional[str] = None,
     remote: Optional[bool] = None,
+    location: Optional[str] = None,
+    arrangement: Optional[str] = None,
     min_salary: Optional[int] = None,
     max_salary: Optional[int] = None,
     search_id: Optional[str] = None,
@@ -349,7 +433,7 @@ def list_job_sources(
     q = (db.query(Job.source, func.count(Job.id)) if counts else db.query(Job.source).distinct()).filter(Job.source.isnot(None), Job.source != "")
     q = _apply_common_filters(q, status=status, company=company, h1b_verdict=h1b_verdict,
                               min_score=min_score, saved=saved, title_search=title_search,
-                              remote=remote, min_salary=min_salary, max_salary=max_salary,
+                              remote=remote, location=location, arrangement=arrangement, min_salary=min_salary, max_salary=max_salary,
                               search_id=search_id)
     if counts:
         return [{"name": r[0], "count": r[1]} for r in q.group_by(Job.source).order_by(Job.source).all()]
@@ -367,6 +451,8 @@ def list_job_verdicts(
     saved: Optional[bool] = None,
     title_search: Optional[str] = None,
     remote: Optional[bool] = None,
+    location: Optional[str] = None,
+    arrangement: Optional[str] = None,
     min_salary: Optional[int] = None,
     max_salary: Optional[int] = None,
     search_id: Optional[str] = None,
@@ -378,7 +464,7 @@ def list_job_verdicts(
     q = (db.query(Job.h1b_verdict, func.count(Job.id)) if counts else db.query(Job.h1b_verdict).distinct()).filter(Job.h1b_verdict.isnot(None), Job.h1b_verdict != "")
     q = _apply_common_filters(q, status=status, company=company, source=source,
                               min_score=min_score, saved=saved, title_search=title_search,
-                              remote=remote, min_salary=min_salary, max_salary=max_salary,
+                              remote=remote, location=location, arrangement=arrangement, min_salary=min_salary, max_salary=max_salary,
                               search_id=search_id)
     if counts:
         return [{"name": r[0], "count": r[1]} for r in q.group_by(Job.h1b_verdict).order_by(Job.h1b_verdict).all()]
@@ -403,6 +489,8 @@ def job_facets(
     saved: Optional[bool] = None,
     title_search: Optional[str] = None,
     remote: Optional[bool] = None,
+    location: Optional[str] = None,
+    arrangement: Optional[str] = None,
     min_salary: Optional[int] = None,
     max_salary: Optional[int] = None,
     search_id: Optional[str] = None,
@@ -421,13 +509,16 @@ def job_facets(
     currently selected but no longer matches is still listed, with count 0, so the
     menu can show it as picked instead of dropping it silently.
 
-    Returns {companies, sources, h1b_verdicts, statuses, score_bands}, each a list
-    of {name, count}; `score_bands` names the threshold ("70") and counts the jobs
-    at or above it with the score filter itself lifted.
+    Returns {companies, sources, h1b_verdicts, statuses, locations, score_bands},
+    each a list of {name, count}; `score_bands` names the threshold ("70") and
+    counts the jobs at or above it with the score filter itself lifted.
+    `locations` carries a `key` for the filter and a `level` (0 country, 1 region,
+    2 city) for the menu's indentation, and a country's count includes every job
+    under it.
     """
     expanded = _expand_company_filter(db, company)
     base = dict(status=status, company=expanded, source=source, h1b_verdict=h1b_verdict,
-                min_score=min_score, saved=saved, title_search=title_search, remote=remote,
+                min_score=min_score, saved=saved, title_search=title_search, remote=remote, location=location, arrangement=arrangement,
                 min_salary=min_salary, max_salary=max_salary, search_id=search_id)
 
     def _counts(col, drop):
@@ -472,6 +563,102 @@ def job_facets(
                 for n, c in sorted(_pad(_counts(Job.status, "status"), _picked(status)),
                                    key=lambda x: x[0])]
 
+    # locations — one row per resolved place, rolled up so a country carries the
+    # sum of its regions and cities. The list is ordered coarse to fine, which is
+    # how the menu indents it.
+    from backend.analyzer.location import label_for, key_for
+    loc_kw = dict(base)
+    loc_kw["location"] = None
+    from backend.models.db import JobLocation
+    loc_rows = _apply_common_filters(
+        db.query(JobLocation.country, JobLocation.region, JobLocation.city,
+                 func.count(func.distinct(Job.id))),
+        **loc_kw
+    ).join(JobLocation, JobLocation.job_id == Job.id).filter(
+        JobLocation.country.isnot(None)).group_by(
+        JobLocation.country, JobLocation.region, JobLocation.city).all()
+
+    from backend.analyzer.location import split_key
+
+    # The candidate places, then a count per place under exactly the predicate
+    # `_location_clause` uses. Counting by a plain group-by instead would make
+    # the menu disagree with the click: a row stored as "Canada" with no region
+    # answers a "BC, Canada" filter, and must therefore be counted under it.
+    candidates = set()
+    for country, region, city, _cnt in loc_rows:
+        candidates.add((country, None, None))
+        if region:
+            candidates.add((country, region, None))
+        if city:
+            candidates.add((country, region, city))
+    # A city seen both with and without a region yields two keys for one set of
+    # jobs. The region-bearing key already reaches the region-less rows, so the
+    # bare one is dropped.
+    with_region = {(c, city) for c, r, city in candidates if r and city}
+    candidates = {(c, r, city) for c, r, city in candidates
+                  if r or not city or (c, city) not in with_region}
+    candidates.update(split_key(k) for k in _picked(location))
+
+    def _covers(key, row):
+        kc, kr, kcity = key
+        rc, rr, rcity = row
+        if kc and rc != kc:
+            return False
+        if kr and rr != kr and not (kcity and rr is None):
+            return False
+        if kcity and rcity != kcity:
+            return False
+        return True
+
+    roll = {key: sum(cnt for country, region, city, cnt in loc_rows
+                     if _covers(key, (country, region, city)))
+            for key in candidates}
+
+    def _depth(entry):
+        country, region, city = entry
+        if city:
+            return 2 if region else 1
+        return 1 if region else 0
+
+    # A city that is also its region's name ("Sao Paulo, Sao Paulo, Brazil") is
+    # one place, not two levels: keep the region entry, drop the city one when
+    # it counts the same jobs.
+    def _same_place(entry):
+        country, region, city = entry
+        return bool(region and city and region.strip().lower() == city.strip().lower()
+                    and roll.get((country, region, None)) == roll.get(entry))
+    roll = {k: v for k, v in roll.items() if not _same_place(k)}
+
+    # Busiest first at every level, tree order kept: a country row, then its
+    # regions by count, each followed by its cities by count; region-less
+    # cities sort with the regions.
+    def _order(kv):
+        (country, region, city), count = kv
+        cc = roll.get((country, None, None), 0)
+        if not region and not city:
+            return (-cc, country or "", 0, 0, "", 0, 0, "")
+        rc = roll.get((country, region, None), count) if region else count
+        if region and not city:
+            return (-cc, country or "", 1, -rc, region, 0, 0, "")
+        return (-cc, country or "", 1, -rc, region or "", 1, -count, city or "")
+
+    locations = [
+        {"key": key_for(*entry), "name": label_for(*entry),
+         "count": count, "level": _depth(entry)}
+        for entry, count in sorted(roll.items(), key=_order)
+    ]
+
+    # arrangements — counted with the arrangement filter itself lifted. A posting
+    # offered two ways is counted under both, so these do not sum to the total.
+    arr_kw = dict(base)
+    arr_kw["arrangement"] = None
+    arrangements = []
+    for value in ARRANGEMENTS:
+        clause = _arrangement_clause(value)
+        q = _apply_common_filters(db.query(func.count(func.distinct(Job.id))), **arr_kw)
+        arrangements.append({"name": value,
+                             "count": int(q.filter(clause).scalar() or 0)})
+
     # score bands: the score filter is the one lifted, so each preset says how many
     # jobs it would leave from where the other filters already stand
     score_kw = dict(base)
@@ -487,6 +674,8 @@ def job_facets(
         "sources": sources,
         "h1b_verdicts": verdicts,
         "statuses": statuses,
+        "locations": locations,
+        "arrangements": arrangements,
         "score_bands": score_bands,
     }
 
@@ -528,6 +717,8 @@ async def save_from_extension(body: dict, db: Session = Depends(get_db)):
             from backend.analyzer.h1b_checker import resolve_company_h1b
             _hd = await resolve_company_h1b(db, existing.company or "", allow_live=False)
             apply_salary_to_job(existing, (_hd or {}).get("median_salary"))
+            apply_arrangement_to_job(existing)
+            apply_location_to_job(existing)
         db.commit()
         # `saved` is the field the extension reads — a row sitting at `ignored` never
         # reaches the feed, and re-saving it will not change that.
@@ -588,6 +779,8 @@ async def save_from_extension(body: dict, db: Session = Depends(get_db)):
 
     if description:
         apply_salary_to_job(job, getattr(job, "_h1b_median", None))
+    apply_arrangement_to_job(job)
+    apply_location_to_job(job)
 
     # Skip flagged jobs OR jobs that hit the search-filter set.
     if filter_reject_reason:
@@ -643,6 +836,67 @@ async def save_from_extension(body: dict, db: Session = Depends(get_db)):
     if job.status == "ignored":
         out["reason"] = reject_message or "filtered out by your Extension search rules"
     return out
+
+
+# Statuses a hand-added feed job may start at. `applied` is not one of them:
+# POST /applications owns that path and writes the Application row with it.
+MANUAL_JOB_STATUSES = {"new", "saved"}
+
+
+@router.post("/manual")
+def create_manual_job(body: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Add one job to the feed by hand (Log-application modal, statuses new/saved), with no application attached; an already-known posting keeps the status it has and is returned with created=false."""
+    title = str_field(body, "title")
+    company = str_field(body, "company")
+    url = str_field(body, "url")
+    status = str_field(body, "status") or "new"
+    if not title or not company or not url:
+        raise HTTPException(status_code=400, detail="title, company, and url are required")
+    if status not in MANUAL_JOB_STATUSES:
+        raise HTTPException(status_code=400,
+                            detail=f"status must be one of {sorted(MANUAL_JOB_STATUSES)}")
+
+    # Same two-layer dedup as save-from-extension: external_id (URL), then
+    # content_hash (company+title) for the same posting reached by another URL.
+    external_id = make_external_id(company, title, url)
+    content_hash = make_content_hash(company, title)
+    existing = db.query(Job).filter(
+        (Job.external_id == external_id) | (Job.content_hash == content_hash)
+    ).first()
+    if existing:
+        # Report the row, change nothing: an `applied` or `ignored` posting must
+        # not fall back to `new` because the user pasted its URL a second time.
+        return {"id": str(existing.id), "created": False, "status": existing.status}
+
+    job = Job(
+        external_id=external_id,
+        content_hash=content_hash,
+        company=company,
+        title=title,
+        url=url,
+        source="manual",   # same marker the hand-logged application path uses
+        status=status,
+        location=str_field(body, "location") or None,
+        # `saved` and status='saved' move together everywhere else in the feed.
+        saved=(status == "saved"),
+        seen=True,         # the user typed this row in; it is not an unseen find
+    )
+    # A hand-added job has to answer the feed's Location and Work filters like any
+    # other. There is no description yet, so only the title and a typed-in
+    # location can say anything; the background fetch below covers the rest.
+    apply_arrangement_to_job(job)
+    apply_location_to_job(job)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    # The enrichment the hand-logged application path runs: without it the first
+    # score, tailor or cover letter pays for the fetch.
+    from backend.api.routes_applications import _cache_job_page, _fetch_and_store_description
+    background_tasks.add_task(_cache_job_page, str(job.id), url)
+    background_tasks.add_task(_fetch_and_store_description, str(job.id), url)
+
+    return {"id": str(job.id), "created": True, "status": job.status}
 
 
 # Column types for the three fields both job writers accept. Without this a
@@ -974,6 +1228,10 @@ def _job_to_dict(j: Job, tailored_resume_id=None, in_flight: list[str] | None = 
         "description": j.description,
         "location": j.location,
         "remote": j.remote,
+        # The set, so the feed can show every arrangement a posting offers.
+        "arr_remote": j.arr_remote,
+        "arr_hybrid": j.arr_hybrid,
+        "arr_onsite": j.arr_onsite,
         "salary_min": j.salary_min,
         "salary_max": j.salary_max,
         "salary_source": j.salary_source,

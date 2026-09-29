@@ -1,10 +1,12 @@
 """LLM-based CV scorer — scores job vs all uploaded CV versions dynamically."""
+from backend.analyzer.prompt_fence import fence
 import asyncio
 import json
 import logging
 import time
 from backend.analyzer.llm_client import call_llm
 from backend.analyzer.llm_logger import log_llm_call
+from backend.analyzer.model_json import UNPARSEABLE_MESSAGE, parse_model_json
 from backend.models.db import SessionLocal, Job, Setting
 
 logger = logging.getLogger("jobnavigator.cv_scorer")
@@ -54,6 +56,9 @@ def _flatten_resume(json_data: dict) -> str:
     if experience:
         parts.append("## Experience")
         for exp in experience:
+            if not isinstance(exp, dict):
+                parts.append(str(exp))
+                continue
             title = exp.get("title", "")
             company = exp.get("company", "")
             # schema field is "date"; keep "dates" as back-compat
@@ -84,6 +89,9 @@ def _flatten_resume(json_data: dict) -> str:
     if education:
         parts.append("## Education")
         for edu in education:
+            if not isinstance(edu, dict):
+                parts.append(str(edu))
+                continue
             degree = edu.get("degree", "")
             school = edu.get("school", "")
             loc = edu.get("location", "")
@@ -95,6 +103,9 @@ def _flatten_resume(json_data: dict) -> str:
     if projects:
         parts.append("## Projects")
         for proj in projects:
+            if not isinstance(proj, dict):
+                parts.append(str(proj))
+                continue
             name = proj.get("name", "")
             desc = proj.get("description", "")
             line = f"{name}: {desc}".strip(": ")
@@ -107,6 +118,9 @@ def _flatten_resume(json_data: dict) -> str:
     if publications:
         parts.append("## Publications")
         for pub in publications:
+            if not isinstance(pub, dict):
+                parts.append(str(pub))
+                continue
             title = pub.get("title", "")
             # schema is {title, description}; keep venue/year as back-compat
             detail = pub.get("description") or " ".join(x for x in (pub.get("venue"), pub.get("year")) if x)
@@ -355,7 +369,7 @@ async def _score_job_inner(job: Job, cv_texts: dict, db=None, depth="light", pre
 {output_schema}"""
 
     # PER-JOB SUFFIX: just the JD. Changes every call.
-    user_prompt = f"JOB DESCRIPTION:\n{job_text[:8000]}"
+    user_prompt = "JOB DESCRIPTION:\n" + fence(job_text[:8000], "JOB POSTING")
 
     max_tokens = 2000 if depth == "full" else 600
     system_msg = "You are a senior tech recruiter evaluating candidate-job fit. Score precisely using the rubric provided. Return ONLY valid JSON, no markdown."
@@ -379,13 +393,8 @@ async def _score_job_inner(job: Job, cv_texts: dict, db=None, depth="light", pre
         provider_for_log = resp.get("provider") or provider_for_log
         model_for_log = resp.get("model") or model_for_log
 
-        # Parse JSON — handle markdown wrapping and trailing commentary
-        import re
-        cleaned = text.strip()
-        match = re.search(r'\{[\s\S]*\}', cleaned)
-        if match:
-            cleaned = match.group(0)
-        result = json.loads(cleaned)
+        # Parse JSON — handles markdown wrapping and trailing commentary
+        result = parse_model_json(text)
 
         # A confused model can emit {"scores": null}; .get's default doesn't catch
         # an explicit null, so validate the shape and treat malformed output as a transient failure.
@@ -415,7 +424,7 @@ async def _score_job_inner(job: Job, cv_texts: dict, db=None, depth="light", pre
 
     except json.JSONDecodeError as e:
         call_success = False
-        call_error = f"JSON decode: {e}"
+        call_error = UNPARSEABLE_MESSAGE
         logger.error(f"Failed to parse LLM response as JSON: {e}")
     except Exception as e:
         call_success = False
@@ -474,6 +483,18 @@ def _find_company_for_job(db, job: Job):
     return find_company_by_name(db, job.company)
 
 
+def unscored_filter():
+    """SQL predicate for "this job carries no scores yet".
+
+    Job.cv_scores is Column(JSON), which Postgres builds as native `json`,
+    and Postgres has no `json = jsonb` operator. Compare the rendered text
+    instead -- the same predicate /api/jobs/feed-stats uses. A `'{}'::jsonb`
+    literal here raises UndefinedFunction and fails the whole scoring pass.
+    """
+    from sqlalchemy import cast, Text
+    return (Job.cv_scores == None) | (cast(Job.cv_scores, Text) == "{}")
+
+
 async def analyze_unscored_jobs(status: str = "saved"):
     """Score all unscored jobs against uploaded CVs in batches of 20; status='saved' scores saved jobs, status='new' scores new jobs from auto_scoring_depth != 'off' entities only.
 
@@ -484,7 +505,7 @@ async def analyze_unscored_jobs(status: str = "saved"):
     whole run.
     """
     from types import SimpleNamespace
-    from sqlalchemy import or_, text, func, cast, Text
+    from sqlalchemy import or_, func
     from backend.models.db import Search, Company as CompanyModel
 
     batch_size = 20
@@ -542,9 +563,7 @@ async def analyze_unscored_jobs(status: str = "saved"):
         needs_fetch = []  # (job_ref, cv_texts, depth, url)
         db = SessionLocal()
         try:
-            q = db.query(Job).filter(
-                (Job.cv_scores == None) | (cast(Job.cv_scores, Text) == '{}'),
-            )
+            q = db.query(Job).filter(unscored_filter())
             if status == "saved":
                 q = q.filter(Job.saved == True)
             else:

@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import backref, column_property, declarative_base, deferred, relationship, sessionmaker
 
 from backend.config import DATABASE_URL
+from backend.countries import DEFAULT_COUNTRY
 
 # Pool args are Postgres-specific; SQLite (used in CI tests via DATABASE_URL=sqlite:///:memory:)
 # rejects pool_size/max_overflow.
@@ -67,7 +68,16 @@ class Search(Base):
     search_mode = Column(String, default="keyword")  # keyword | levels_fyi | linkedin_personal | jobright | freehire | extension | linkedin_extension
     search_term = Column(String, nullable=True)
     direct_url = Column(String, nullable=True)
-    location = Column(String, default="United States")
+    # A city or a region, never a country: `country` is the single country
+    # source and the scraper appends its label. The old default was
+    # "United States", which the write path now refuses next to any other
+    # country. An empty location composes to the country label alone.
+    location = Column(String, default="")
+    # Picks the Indeed domain and the `indeed-co` API header. A US domain answers
+    # a question about a Canadian city with HTTP 200 and an empty result list, so
+    # the country is an explicit field instead of a literal. Values are jobspy
+    # Country aliases — see backend/countries.py.
+    country = Column(String, default=DEFAULT_COUNTRY)
     is_remote = Column(Boolean, nullable=True)  # null=any
     job_type = Column(String, default="fulltime")
     hours_old = Column(Integer, default=24)
@@ -155,7 +165,20 @@ class Job(Base):
     # delete handlers null this column themselves on existing databases.
     search_id = Column(UUID(as_uuid=True), ForeignKey("searches.id", ondelete="SET NULL"), nullable=True)
     description = Column(Text, nullable=True)
-    location = Column(String, nullable=True)
+    location = Column(String, nullable=True)   # as the board wrote it; never rewritten
+    # Parsed out of `location` for territorial search. `loc_city` holds the folded
+    # ascii form ("quebec"), so a filter matches regardless of accent or case.
+    loc_country = Column(String(2), nullable=True, index=True)
+    loc_region = Column(String(64), nullable=True, index=True)   # US/CA code, or a region name elsewhere ("Hesse")
+    loc_city = Column(String(120), nullable=True, index=True)   # bounded: indexed, and a btree entry caps near 2704 bytes
+    # Work arrangement is a set, not one value: a posting may be offered both
+    # remote and hybrid, and it must answer either filter. All three NULL means
+    # no source resolved it - the fourth state, "unknown".
+    arr_remote = Column(Boolean, nullable=True, index=True)
+    arr_hybrid = Column(Boolean, nullable=True, index=True)
+    arr_onsite = Column(Boolean, nullable=True, index=True)
+    # Derived from arr_remote and written with it. Kept because the API exposes
+    # `remote` as a filter; never set it on its own.
     remote = Column(Boolean, nullable=True)
     salary_min = Column(Integer, nullable=True)
     salary_max = Column(Integer, nullable=True)
@@ -197,6 +220,37 @@ class Job(Base):
                 base, *qs = url.split("?", 1)
                 url = base[:-len(suffix)] + ("?" + qs[0] if qs else "")
         return url
+
+class JobLocation(Base):
+    """Every place one posting names.
+
+    A job stored only under its primary place answers one filter when the board
+    listed twenty-two: levels.fyi writes "Vancouver ... + 21 More", and Lever
+    and Ashby carry the full list. The primary place also stays on `Job` itself,
+    denormalised, so the feed can show and sort it without a join.
+    """
+
+    __tablename__ = "job_locations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"),
+                    nullable=False, index=True)
+    country = Column(String(2), nullable=True, index=True)
+    region = Column(String(64), nullable=True, index=True)
+    city = Column(String(120), nullable=True, index=True)   # folded ascii, as on Job
+    is_primary = Column(Boolean, default=False, nullable=False)
+
+    # The ORM deletes these rows itself. `passive_deletes` would hand that to the
+    # database, and SQLite does not enforce foreign keys unless asked, so the
+    # rows would outlive their job there. The FK still carries ON DELETE CASCADE
+    # as a backstop for a bulk delete that never loads the ORM objects.
+    job = relationship("Job", backref=backref("locations", cascade="all, delete-orphan"))
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "country", "region", "city",
+                         name="uq_job_location"),
+    )
+
 
 from sqlalchemy import event
 
@@ -301,6 +355,22 @@ def record_transition(app, new_status: str, source: str):
     app.status = new_status
 
 
+def revert_transition(app, back_to: str) -> bool:
+    """Undo the last status change: when the newest transition took the row from
+    `back_to` to its current status, drop it and restore `back_to`, so an undo leaves
+    no trace (a misclick to Interview and back must not count as an interview in Stats).
+    Returns False, and records a normal transition instead, when the history does not
+    end with that move."""
+    transitions = list(app.status_transitions or [])
+    last = transitions[-1] if transitions else None
+    if last and last.get("to") == app.status and last.get("from") == back_to:
+        app.status_transitions = transitions[:-1]
+        app.status = back_to
+        return True
+    record_transition(app, back_to, "ui")
+    return False
+
+
 # ── Scrape Log ───────────────────────────────────────────────────────────────
 class ScrapeLog(Base):
     __tablename__ = "scrape_log"
@@ -357,7 +427,7 @@ class LlmCallLog(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     purpose = Column(String, nullable=False)  # score_light, score_full, tailor, email, pdf
-    provider = Column(String, nullable=False, default="")  # claude_api, claude_code, openai, ollama
+    provider = Column(String, nullable=False, default="")  # claude_api, claude_code, codex_cli, antigravity_cli, openai, ollama
     job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
     model = Column(String, nullable=False, default="")
     input_tokens = Column(Integer, default=0, nullable=False)

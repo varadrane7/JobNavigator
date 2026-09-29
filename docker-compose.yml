@@ -22,6 +22,9 @@ services:
       retries: 5
 
   backend:
+    # Prebuilt on every release (ghcr.io, .github/workflows/images.yml): `docker compose pull`
+    # skips the Chromium build. `docker compose up --build` still builds from source.
+    image: ghcr.io/vesaias/jobnavigator-backend:${JN_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.backend
@@ -36,7 +39,7 @@ services:
       DATABASE_URL: postgresql://jobnavigator:${POSTGRES_PASSWORD:-password}@db:5432/jobnavigator
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # everything external goes through Caddy on :80; the raw API stays on loopback
     depends_on:
       db:
         condition: service_healthy
@@ -44,8 +47,12 @@ services:
       - ./backend:/app/backend
       - ./backups:/app/backups
       - ./backend/.linkedin_api:/root/.linkedin_api
+      - codex_auth:/root/.codex
+      # agy keeps its OAuth token in a file here; no keyring in this image.
+      - antigravity_auth:/root/.gemini
 
   frontend:
+    image: ghcr.io/vesaias/jobnavigator-frontend:${JN_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.frontend
@@ -55,8 +62,8 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
-    ports:
-      - "3000:80"
+    # No published port: Caddy reaches this container over the compose network (frontend:80), and a
+    # host port only invites clashes (Windows reserves ranges around 3000 for Hyper-V after a restart).
     depends_on:
       - backend
 
@@ -83,3 +90,5 @@ volumes:
   pgdata:
   caddy_data:
   caddy_config:
+  codex_auth:
+  antigravity_auth:

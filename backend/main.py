@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.models.db import create_tables, SessionLocal, Setting, JobRun
 from backend.seed import run_seeds
 from backend.config import INITIAL_API_KEY, TELEGRAM_BOT_TOKEN
-from backend.job_monitor import launch_background, JobAlreadyRunningError, get_all_running, is_running, _get_running_by_job_type, cleanup_stale_runs
+from backend.job_monitor import launch_background, JobAlreadyRunningError, get_all_running, is_running, _get_running_by_job_type, cleanup_stale_runs, sanitize_run_error
 
 from backend.api.routes_settings import router as settings_router
 from backend.api.routes_jobs import router as jobs_router
@@ -87,9 +87,11 @@ OPENAPI_TAGS = [
     {"name": "system", "description": "Health check and system info"},
 ]
 
+APP_VERSION = "2.1.0"  # released version; shown in Settings and on /health
+
 app = FastAPI(
     title="JobNavigator API",
-    version="1.0.0",
+    version=APP_VERSION,
     description=(
         "Personal job hunt automation system. Scrapes job boards and career pages, "
         "scores jobs against resumes using Claude API, monitors Gmail for responses, "
@@ -354,7 +356,7 @@ def health_check():
     while the pool is drained, and it is in _PUBLIC_PREFIXES so the auth
     middleware's settings read is skipped too.
     """
-    return {"status": "ok", "service": "JobNavigator"}
+    return {"status": "ok", "service": "JobNavigator", "version": APP_VERSION}
 
 
 async def _tracer_click_and_redirect(token: str, request: Request):
@@ -671,7 +673,7 @@ async def trigger_auto_reject():
 
 @app.post("/api/jobs/backfill-descriptions", tags=["triggers"], summary="Fetch descriptions for jobs missing them", status_code=202)
 async def trigger_backfill_descriptions():
-    """Fetch job descriptions for saved/new jobs that have a URL but no description."""
+    """Fetch job descriptions for new/saved/applied jobs that have a URL but no description."""
     async def _do():
         from backend.models.db import Job
         from backend.scraper.ats._descriptions import _fetch_job_description
@@ -679,7 +681,9 @@ async def trigger_backfill_descriptions():
         db = SessionLocal()
         try:
             jobs = db.query(Job).filter(
-                Job.status.in_(["new", "saved"]),
+                # "applied" is in the set because a hand-logged job (Log application)
+                # lands there directly and needs the same repair.
+                Job.status.in_(["new", "saved", "applied"]),
                 Job.url != None,
                 (Job.description == None) | (Job.description == ""),
             ).order_by(Job.discovered_at.desc()).limit(50).all()
@@ -693,6 +697,8 @@ async def trigger_backfill_descriptions():
                     if desc and len(desc) > 50:
                         job.description = desc
                         apply_salary_to_job(job)
+                        from backend.analyzer.work_arrangement import apply_arrangement_to_job
+                        apply_arrangement_to_job(job)
                         count += 1
                         db.commit()
                         logger.info(f"Backfilled description for '{job.title}' ({len(desc)} chars)")
@@ -1142,7 +1148,7 @@ def get_run_history(limit: Annotated[int, Query(ge=0, le=1000)] = 30, offset: in
                 "finished_at": r.finished_at.isoformat() if r.finished_at else None,
                 "duration_seconds": r.duration_seconds,
                 "result_summary": r.result_summary,
-                "error": r.error,
+                "error": sanitize_run_error(r.error),
                 "meta": r.meta,
             }
             for r in runs
@@ -1168,7 +1174,7 @@ def get_run_detail(run_id: str):
             "finished_at": r.finished_at.isoformat() if r.finished_at else None,
             "duration_seconds": r.duration_seconds,
             "result_summary": r.result_summary,
-            "error": r.error,
+            "error": sanitize_run_error(r.error),
             "meta": r.meta,
         }
     finally:
@@ -1290,7 +1296,7 @@ def get_failing_entities(window: Annotated[int, Query(ge=1, le=100)] = 3):
     (R4-T1-10).
     """
     from backend.models.db import ScrapeLog, Company, Search, is_acknowledged
-    from backend.scraper.orchestrator import source_errors, source_label
+    from backend.scraper.orchestrator import empty_sources, source_errors, source_label
     db = SessionLocal()
     try:
         def _reason(entity_col, entity_id, acknowledged_at=None):
@@ -1311,7 +1317,20 @@ def get_failing_entities(window: Annotated[int, Query(ge=1, le=100)] = 3):
             if len(recent) < window or not all(r.error or r.is_warning for r in recent):
                 return None
             err = next((r.error for r in recent if r.error), None)
-            return err[:160] if err else f"No results in the last {window} scrapes"
+            if err:
+                return err[:160]
+            # is_warning also covers "one board returned nothing while the others
+            # worked". Two outcomes:
+            #  - a board quiet on every run in the window: name it;
+            #  - every other case: the original sentence. It can be false about
+            #    a run that found jobs while a board stayed quiet on some runs
+            #    only. The user accepts that cost and keeps this wording.
+            per_run = [set(empty_sources(r.source_breakdown)) for r in recent]
+            always_quiet = sorted(set.intersection(*per_run)) if per_run else []
+            if always_quiet:
+                return " · ".join(f"{source_label(k)} returned nothing" for k in always_quiet) \
+                       + f" in the last {window} scrapes"
+            return f"No results in the last {window} scrapes"
 
         # Paused/inactive entities are excluded on purpose (their last-run state
         # is history, not an open problem) but still show up muted in the row.

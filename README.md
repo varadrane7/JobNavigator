@@ -62,7 +62,8 @@ Scrape career pages and aggregators, score jobs against your résumés with an L
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              AI RESUME SCORING                              │
 │                                                                             │
-│   Providers ── Claude API, Claude CLI, OpenAI, OpenRouter, Ollama           │
+│   Providers ── Claude API/CLI, Codex CLI, Antigravity CLI, OpenAI,          │
+│                OpenRouter, Ollama                                           │
 │   Depths ───── Light (scores only) or Full (report + keyword analysis)      │
 │   Multi ────── Score against multiple resumes, compare fit per role         │
 │                                                                             │
@@ -97,7 +98,7 @@ Scrape career pages and aggregators, score jobs against your résumés with an L
 | Feature | Description |
 |---------|-------------|
 | **Discovery** | Career pages (Playwright + 11 ATS handlers), JobSpy (LinkedIn, Indeed, ZipRecruiter, Google), LinkedIn collections, Levels.fyi, Jobright.ai, freehire.me, the Chrome extension |
-| **Scoring** | Claude, OpenAI, OpenRouter, Ollama or Claude Code; live model search, a model per feature; Light (score) or Full (report, keyword coverage, requirement mapping) against every base résumé; prompt caching on Anthropic |
+| **Scoring** | Claude, OpenAI, OpenRouter, Ollama, Claude Code, Codex CLI or Antigravity CLI; live model search, a model per feature; Light (score) or Full (report, keyword coverage, requirement mapping) against every base résumé; prompt caching on Anthropic |
 | **Résumés** | Structured base résumés, tailoring per job with a review step, 8 PDF templates (drop in your own), tracked links that record opens |
 | **Cover letters** | Generated from the paired résumé and persona; voice and length presets, 8 templates, PDF |
 | **Dedup** | URL identity hash (tracking params stripped) plus company + title hash across sources |
@@ -115,25 +116,41 @@ Scrape career pages and aggregators, score jobs against your résumés with an L
 
 ## Quick Start
 
+**1. Run it**
+
 ```bash
 git clone https://github.com/vesaias/JobNavigator.git
 cd JobNavigator
 cp .env.example .env
-
-docker compose up --build -d
+docker compose pull && docker compose up -d      # prebuilt images from GHCR
 ```
 
-Open `http://localhost`. On first run sign in with a blank key, then set one in Settings › Advanced. The previous interface is at `/classic`.
+Open `http://localhost`. To build from source instead (or on ARM), use `docker compose up --build -d`; every release is also published as `ghcr.io/vesaias/jobnavigator-backend` and `-frontend`, pinnable with `JN_IMAGE_TAG=2.1.0` in `.env`. On first run sign in with a blank key, then set one in Settings › Advanced.
 
-**First steps:**
-1. Settings › AI — provider and key
+**2. Connect a model**
+
+Any API key goes straight into Settings › AI. A subscription needs one login inside the container first:
+
+| Subscription | Once after the containers start | Then pick |
+|---|---|---|
+| Claude Pro / Max | `docker compose exec backend claude setup-token`, put the printed token in `.env` as `CLAUDE_CODE_OAUTH_TOKEN`, then `docker compose up -d backend` | **Claude Code** |
+| ChatGPT | `docker compose exec backend codex login --device-auth` (check with `codex login status`; the login lives in the `codex_auth` volume) | **Codex CLI** |
+| Google Antigravity | `docker compose exec -it backend agy` — the container has no browser, so the CLI prints a URL and asks for the code it shows (the login lives in the `antigravity_auth` volume) | **Antigravity CLI** |
+
+No API key needed for any of them. A plan limit fails over to the fallback provider without retrying.
+
+**3. First steps**
+
+1. Settings › AI — provider and model
 2. Résumés — create a base résumé or import a PDF
 3. Persona — import from that résumé, fill the Q&A bank
 4. Companies and Searches — add a few, run them
 
+The full walkthrough, screen by screen, is in [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
+
 ## Chrome Extension ("The Navigator")
 
-- Unblocks the posting preview by stripping frame-blocking headers.
+- Unblocks the posting preview: frame-blocking headers are lifted only for frames the dashboard itself opens (scoped to your JobNavigator host); every other page keeps its own headers.
 - Captures job ids while you browse `linkedin.com/jobs/collections/*` and imports them with full details.
 - Fills ATS forms and drafts answers to free-text questions from your Persona and Q&A bank (toggle in the popup; model and prompt in Settings › AI).
 
@@ -153,7 +170,7 @@ Install: `chrome://extensions` › Developer mode › Load unpacked › `extensi
 | Frontend | React 18, Vite, Recharts, a token-based design system ([DESIGN-SYSTEM.md](frontend/src/DESIGN-SYSTEM.md)) |
 | Database | PostgreSQL 16 |
 | Infrastructure | Docker Compose, Caddy, nginx |
-| AI | Anthropic SDK, OpenAI SDK, Ollama, Claude Code CLI |
+| AI | Anthropic SDK, OpenAI SDK, Ollama, Claude Code CLI, Codex CLI, Antigravity CLI |
 | Extension | Chrome Manifest V3 |
 
 ## Contributing

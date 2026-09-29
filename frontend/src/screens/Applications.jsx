@@ -4,7 +4,8 @@ import api from '../api'
 import { useToasts, ToastStack } from '../Toast'
 import ConfirmDialog from '../ConfirmDialog'
 import { useEscape, useSettled, NBSP, DASH } from '../hooks'
-import { Button, Card, Check, CopyGlyph, DashedAdd, Dot, FooterRow, Heading, HeaderRow, Helper, IconButton, Input, Label, Link, Menu, MenuItem, ModalPanel, Mono, PageTitle, Pill, Row, SectionHead, Segmented, Spinner, Textarea } from '../ui'
+import { Button, Card, Check, CopyGlyph, DashedAdd, Dot, FooterRow, GlyphBadge, Heading, HeaderRow, Helper, IconButton, Input, Label, Link, Menu, MenuItem, ModalPanel, Mono, PageTitle, Pill, Row, SectionHead, Segmented, Spinner, Textarea } from '../ui'
+import { PICK_KEY, clickMods, clickSelection, pruneSelection } from './rowSelect'
 import '../theme.css'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -48,11 +49,30 @@ const STAGES = [
 const STAGE = Object.fromEntries(STAGES.map((s) => [s.id, s]))
 // legacy rows (ghosted / withdrawn) have no stage of their own — closed, so they list under Rejected
 const groupOf = (status) => (STAGE[status] ? status : 'rejected')
+// The Log modal writes one of two rows. `new`/`saved` are Job.status values and go to
+// POST /jobs/manual as a feed job with no application; the rest are Application.status
+// stages and go to POST /applications, which writes the job too.
+const LOG_JOB_STATUSES = ['new', 'saved']
+const LOG_STATUSES = [
+  { id: 'new', label: 'New', hint: 'Feed only — decide later' },
+  { id: 'saved', label: 'Saved', hint: 'Feed only — shortlisted' },
+  ...STAGES.filter((s) => s.id !== 'rejected'),
+]
 const SORTS = [['recent', 'Recent activity'], ['oldest', 'Waiting longest'], ['company', 'Company name']]
 const isStale = (a) => daysSince(a.updated_at) > 7 && ['applied', 'interview'].includes(a.status)
 
 // where a popover sits; how it looks is `Menu`'s.
 const POPOVER = { position: 'absolute', top: '100%', zIndex: 40 }
+// ui: keep — the bulk bar's on-rail controls: --rail-ink on an --on-rail-line
+// hairline, drawn over the dark --rail bar. Pill and Button paint for light
+// surfaces, so these keep their own look. The same object as the Feed's
+// (JobFeed.jsx, `RAIL_BTN`) — the two bulk bars are one control set, and the
+// constant is duplicated rather than hoisted because it is not a primitive.
+const RAIL_BTN = {
+  height: 27, padding: '0 11px', border: '1px solid var(--on-rail-line)', borderRadius: 'var(--radius-control)',
+  // --ctl-line, not the v2-ctl 1: at 1 the line box is the em and Plex's ink rides high in a centred box (see Select)
+  display: 'flex', alignItems: 'center', fontSize: 11.5, lineHeight: 'var(--ctl-line)', color: 'var(--rail-ink)', cursor: 'pointer',
+}
 // (round 9: ACT_BTN is gone — the three header actions it painted are now
 // `Button variant="secondary"` / `IconButton`, see the detail header below.)
 // FastAPI's `detail` is a plain string for HTTPException; append it when present.
@@ -84,6 +104,11 @@ export default function Applications() {
   const [prep, setPrep] = useState(null)           // {text} | 'loading'
   const [copied, setCopied] = useState(false)
   const [logOpen, setLogOpen] = useState(false)
+  // bulk selection — the Feed's mechanics: ⌘/Ctrl picks, ⇧ ranges from the last
+  // anchor in LIST order, a plain click focuses one row and drops the selection.
+  const [checked, setChecked] = useState(() => new Set())
+  const lastIdx = useRef(null)
+  const [bulkBusy, setBulkBusy] = useState(false)   // one bulk write at a time
   const timers = useRef([])
   const notesTimer = useRef(null)
   useEffect(() => () => { timers.current.forEach(clearTimeout); clearTimeout(notesTimer.current) }, [])
@@ -107,6 +132,9 @@ export default function Applications() {
       setTotal(typeof data?.total === 'number' ? data.total : null)   // header counts what the server has, not what fits in one page
       const list = data.applications || []
       setApps(list); setLoadErr(null)
+      // A background refresh keeps the bulk selection — only rows the server has
+      // stopped sending (deleted elsewhere) drop out of it.
+      setChecked((cur) => pruneSelection(cur, list.map((a) => a.id)))
       setSel((cur) => {
         if (forceId != null && list.some((a) => a.id === forceId)) return forceId
         if (cur != null && list.some((a) => a.id === cur)) return cur
@@ -132,7 +160,7 @@ export default function Applications() {
   const dropLog = () => { logDirty.current = false; setLogOpen(false) }
   const closeLog = () => {
     if (!logDirty.current) { dropLog(); return }
-    setConfirm({ title: 'Discard this application?', body: 'Everything typed will be lost.', label: 'Discard', danger: true, onConfirm: () => { setConfirm(null); dropLog() } })
+    setConfirm({ title: 'Discard this draft?', body: 'Everything typed will be lost.', label: 'Discard', danger: true, onConfirm: () => { setConfirm(null); dropLog() } })
   }
   useEffect(() => {
     const onDoc = () => closeAll()
@@ -141,7 +169,14 @@ export default function Applications() {
   }, [])
   // Escape closes filter menus, prep, interview edit and Log (its dirty-discard confirm still fires) via the shared hook, which claims the event.
   // Gated on !confirm so ConfirmDialog's own Escape wins while open; closeLog() is gated on logOpen so a stale dirty flag can't fire the discard confirm with no form open.
-  useEscape(() => { closeAll(); setPrep(null); setEditIv(null); setIntForm(false); if (logOpen) closeLog() }, !confirm)
+  // The selection is the LAST thing Escape takes: with a menu, the prep sheet, an
+  // interview editor or the Log form open, that key is closing the overlay, and
+  // clearing a bulk selection under it would be a second, unasked-for undo.
+  useEscape(() => {
+    const overlay = !!openFlt || menuOpen || !!prep || !!editIv || intForm || logOpen
+    closeAll(); setPrep(null); setEditIv(null); setIntForm(false); if (logOpen) closeLog()
+    if (!overlay) setChecked(new Set())
+  }, !confirm)
 
   // ── derived ──
   const nInterview = apps.filter((a) => a.status === 'interview').length
@@ -191,6 +226,13 @@ export default function Applications() {
 
   const d = apps.find((a) => a.id === sel) || null
 
+  // The rows as PAINTED — stage groups in order, a collapsed group left out
+  // entirely. This, not `visible`, is the list order a ⇧-range walks, so a range
+  // can never reach through a group the user has folded away.
+  const flatIds = useMemo(() => STAGES.flatMap((st) => (closed[st.id] ? []
+    : visible.filter((a) => groupOf(a.status) === st.id).map((a) => a.id))), [visible, closed])
+  const rowIndex = useMemo(() => new Map(flatIds.map((id, i) => [id, i])), [flatIds])
+
   // ── actions ──
   // Patches only the row it belongs to — never a full reload — and never touches `sel`, so a
   // response landing after the user has already selected a different row can't move the pane.
@@ -235,6 +277,63 @@ export default function Applications() {
       },
     })
   }
+  // ── bulk selection ──
+  // The Feed's rowClick, over the painted row order (`flatIds`): ⌘/Ctrl toggles,
+  // ⇧ ranges from the anchor, a plain click opens the row in the detail pane and
+  // drops whatever was selected.
+  const rowClick = (e, a) => {
+    const index = rowIndex.get(a.id) ?? -1
+    const { pick, range } = clickMods(e)
+    // `focused` is the row in the detail pane: as on the Feed, the first ⌘ or ⇧
+    // click takes it along, so picking a second row never silently loses the one
+    // the user was already looking at.
+    const next = clickSelection({ checked, ids: flatIds, index, anchor: lastIdx.current, pick, range, focused: rowIndex.get(sel) ?? null })
+    lastIdx.current = next.anchor
+    // as on the Feed: a plain click opens the row and leaves the selection alone (✕ or Esc clears)
+    if (next.focus) { closeAll(); setSel(a.id); return }
+    setChecked(next.checked)
+  }
+  const selectedRows = useMemo(() => apps.filter((a) => checked.has(a.id)), [apps, checked])
+  // one bulk write per (previous status) group — the rows in a batch can have come
+  // from different stages, and each goes back to its own.
+  // The stepper's own undo: the toast reverses the move, and the server drops the
+  // transition it reverses (undo: true) so a misclick never reaches the Stats funnel.
+  const stageWithUndo = (app, status) => {
+    const prev = app.status
+    if (!prev || prev === status) return
+    patch(app.id, { status })
+    pushToast({ kind: 'undo', msg: `Moved to ${STAGE[status]?.label || status}.`, action: 'Undo',
+      onAction: () => patch(app.id, { status: prev, undo: true }) })
+  }
+  const bulkUndo = async (prev) => {
+    if (!prev.length) return
+    const groups = new Map()
+    prev.forEach((p) => { if (!groups.has(p.status)) groups.set(p.status, []); groups.get(p.status).push(p.id) })
+    try {
+      for (const [status, ids] of groups) await api.post('/applications/bulk-update', { ids, status, undo: true })
+      load(); window.dispatchEvent(new CustomEvent('jn:counts-changed'))
+      pushToast({ kind: 'success', msg: `Restored ${prev.length} application${prev.length === 1 ? '' : 's'}.` })
+    } catch (e) { console.error(e); pushToast({ kind: 'error', msg: `Could not undo ${prev.length} application${prev.length === 1 ? '' : 's'}` + errSuffix(e) }); load() }
+  }
+  const bulkStatus = async (status) => {
+    const moving = selectedRows.filter((a) => a.status !== status)
+    if (!moving.length || bulkBusy) return
+    const ids = moving.map((a) => a.id)
+    const prev = moving.map((a) => ({ id: a.id, status: a.status }))   // snapshot before the write
+    setBulkBusy(true); setChecked(new Set())
+    // Optimistic, and each row's patchSeq is bumped first: a single-row PATCH still
+    // in flight on one of these rows must not land afterwards and win.
+    ids.forEach((id) => { patchSeq.current[id] = (patchSeq.current[id] || 0) + 1 })
+    setApps((p) => p.map((a) => (ids.includes(a.id) ? { ...a, status, updated_at: new Date().toISOString() } : a)))
+    try {
+      await api.post('/applications/bulk-update', { ids, status })
+      load(); window.dispatchEvent(new CustomEvent('jn:counts-changed'))
+      pushToast({ kind: 'undo', msg: `Moved ${ids.length} to ${STAGE[status].label}.`, action: 'Undo', onAction: () => bulkUndo(prev) })
+    } catch (e) {
+      console.error(e); pushToast({ kind: 'error', msg: `Could not move ${ids.length} application${ids.length === 1 ? '' : 's'}` + errSuffix(e) }); load()
+    } finally { setBulkBusy(false) }
+  }
+
   const canAddInterview = !intBusy && (!!intWhat.trim() || !!intWhen)   // a blank form adds nothing
   const addInterview = async () => {
     if (!d || !canAddInterview) return
@@ -379,6 +478,10 @@ export default function Applications() {
           )}
         </span>
 
+        {/* the Feed's head-row hint, over the list column: this list has no head row
+            of its own, so it rides along with the filters */}
+        <span style={{ flex: '0 0 auto', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '.02em', color: 'var(--muted)', whiteSpace: 'nowrap' }}>⇧ range · {PICK_KEY} pick</span>
+
         <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           {visible.length !== apps.length && <Helper style={{ whiteSpace: 'nowrap' }}>{visible.length} of {apps.length} shown</Helper>}
           <span style={{ position: 'relative', display: 'flex' }} onClick={(e) => e.stopPropagation()}>
@@ -402,11 +505,14 @@ export default function Applications() {
       </HeaderRow>
 
       {/* split body */}
-      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+      {/* position:relative — the bulk bar below floats over the list column, and the
+          list column is itself the scroller (a bar inside it would scroll away) */}
+      <div style={{ position: 'relative', flex: 1, display: 'flex', minHeight: 0 }}>
         {/* list */}
         {/* --list-well: transparent everywhere but win98, where the list column is a
             sunken #dfdfdf well (round-6 addendum) — same hook as the Feed's. */}
-        <div className="v2-scroll" style={{ flex: '0 0 472px', borderRight: '1px solid var(--line)', background: 'var(--list-well)', overflow: 'auto', padding: '6px 14px 14px 22px', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {/* userSelect:none — ⇧-click is a row range here, not a text range */}
+        <div className="v2-scroll" style={{ flex: '0 0 472px', borderRight: '1px solid var(--line)', background: 'var(--list-well)', overflow: 'auto', padding: '6px 14px 14px 22px', display: 'flex', flexDirection: 'column', minHeight: 0, userSelect: 'none', WebkitUserSelect: 'none' }}>
           {/* Nothing about the list is drawn before /applications settles: the four
               stage headers would otherwise paint with NBSP counts under a title that
               already says how many there are, and the row groups would fill in one
@@ -431,11 +537,18 @@ export default function Applications() {
                 {!shut && rows.map((a) => {
                   const stale = isStale(a)
                   const unknownTitle = !a.title || a.title === 'Unknown Role'
+                  const on = checked.has(a.id)   // in the bulk selection, which has no Row state of its own
                   // selection is `Row selected` and nothing else — a background wash, no
                   // accent bar and no left-pad compensation, so text stays on the same axis.
+                  // A bulk-picked row borrows the same wash (the Feed's `--row-selected` tint).
                   return (
-                    <Row key={a.id} selected={sel === a.id} onClick={() => { closeAll(); setSel(a.id) }} className="v2-arow"
-                      style={{ gap: 8, flex: '0 0 46px', marginBottom: 3 }}>
+                    <Row key={a.id} selected={sel === a.id} onClick={(e) => rowClick(e, a)} className="v2-arow"
+                      style={{ position: 'relative', gap: 8, flex: '0 0 46px', marginBottom: 3, ...(on ? { backgroundColor: 'var(--row-selected)' } : null) }}>
+                      {/* ui: keep — the Feed's bulk tick, at the same -4/-3 offsets. With no
+                          score ring (or any other leading element) to hang off, it pins to the
+                          row's own top-left corner, and the 2px --surface knock-out ring is what
+                          lifts it off both the row and the gutter it half sits in. */}
+                      {on && <GlyphBadge style={{ position: 'absolute', left: -4, top: -3, border: '2px solid var(--surface)', fontSize: 'var(--t-9)' }}>✓</GlyphBadge>}
                       {/* lineHeight:normal — the design is authored at the browser default;
                           Tailwind's preflight sets 1.5 on <html>, which would inflate the block */}
                       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 'normal' }}>
@@ -477,7 +590,7 @@ export default function Applications() {
 
         {/* detail */}
         {d ? <Detail d={d} history={history} menuOpen={menuOpen} setMenuOpen={setMenuOpen}
-          onStage={(s) => patch(d.id, { status: s })} onNotes={(v, now) => saveNotes(d.id, v, now)}
+          onStage={(s) => stageWithUndo(d, s)} onNotes={(v, now) => saveNotes(d.id, v, now)}
           onDelete={() => remove(d)} navigate={navigate}
           intForm={intForm} setIntForm={setIntForm} intWhat={intWhat} setIntWhat={setIntWhat}
           intWhen={intWhen} setIntWhen={setIntWhen} intWhere={intWhere} setIntWhere={setIntWhere}
@@ -489,6 +602,33 @@ export default function Applications() {
              it is still loading the same box holds a Spinner instead. Identical box
              either way, so the settled frame does not move. */
           : <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface)', color: 'var(--muted)', fontSize: 13 }}>{loaded ? 'Select an application.' : <Spinner />}</div>}
+
+        {/* Bulk bar — the Feed's, over the list column. It is the split body's LAST
+            child on purpose: the list scroller's next sibling has to stay the detail
+            pane (tests/e2e/case_apps_select.py finds the pane that way), so the bar is
+            positioned over the 472px list column instead of sitting next to it. */}
+        {checked.size > 0 && (
+          <div style={{ position: 'absolute', left: 0, bottom: 14, width: 472, zIndex: 25, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+            {/* ui: keep — floating bulk bar is a pill-shaped *bar* on --rail with --shadow-pop; no primitive owns a bar */}
+            <div className="v2-bulkbar" style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 6, padding: '7px 8px 7px 14px', background: 'var(--rail)', borderRadius: 'var(--radius-control)', boxShadow: 'var(--shadow-pop)' }}>
+              <span style={{ fontSize: 12, color: 'var(--rail-ink)', fontWeight: 600, whiteSpace: 'nowrap' }}>{checked.size} selected</span>
+              <div className="v2-bulksep" style={{ width: 1, height: 16, background: 'var(--on-rail-sep)', margin: '0 3px' }} />
+              {STAGES.map((st) => {
+                // a stage every picked row is already in has nothing to do: dimmed and inert,
+                // rather than gone — the four stages are one row of controls and must not reflow.
+                const n = selectedRows.filter((a) => a.status !== st.id).length
+                const done = n === 0
+                // ui: keep — RAIL_BTN controls (--rail-ink on --on-rail-line); the Pill tokens are for light surfaces
+                return (
+                  <div key={st.id} onClick={done ? undefined : () => bulkStatus(st.id)} className={done ? undefined : 'v2-onrail v2-ctl'}
+                    title={done ? `All selected are already in ${st.label}` : `Move ${n} to ${st.label}`}
+                    style={{ ...RAIL_BTN, ...(done ? { opacity: 0.4, cursor: 'default' } : null) }}>{st.label}</div>
+                )
+              })}
+              <div onClick={() => setChecked(new Set())} className="v2-onrail" title="Clear the selection" style={{ width: 27, height: 27, borderRadius: 'var(--radius-control)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: 'var(--on-rail-dim)', cursor: 'pointer' }}>✕</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {prep && <PrepModal prep={prep} company={d ? companyOf(d) : ''} copied={copied} onCopy={copyPrep} onClose={() => setPrep(null)} />}
@@ -497,7 +637,10 @@ export default function Applications() {
       {/* the first load(id) forces open the just-logged application (nothing else could be
           selected yet); the 5s follow-up (picking up a still-processing score) must NOT
           force it again — the user may have moved on by then — so it's a plain load(). */}
-      {logOpen && <LogModal onClose={closeLog} onDirty={(v) => { logDirty.current = v }} onSaved={(id) => { dropLog(); load(id); setTimeout(() => load(), 5000); window.dispatchEvent(new CustomEvent('jn:counts-changed')) }} pushToast={pushToast} />}
+      {logOpen && <LogModal onClose={closeLog} onDirty={(v) => { logDirty.current = v }} onSaved={(id) => { dropLog(); load(id); setTimeout(() => load(), 5000); window.dispatchEvent(new CustomEvent('jn:counts-changed')) }}
+        // a feed job has no row on this screen — hand it to the Feed, where its status lives
+        onJobSaved={(jobId, existing) => { dropLog(); pushToast({ kind: 'progress', msg: existing ? 'Already in the Job Feed — opened it.' : 'Added to the Job Feed.' }); window.dispatchEvent(new CustomEvent('jn:counts-changed')); navigate(`/feed?job=${jobId}`) }}
+        pushToast={pushToast} />}
       {confirm && <ConfirmDialog {...confirm} onCancel={() => setConfirm(null)} />}
       <ToastStack toasts={toasts} onClose={dismissToast} />
     </div>
@@ -728,18 +871,20 @@ function PrepModal({ prep, company, copied, onCopy, onClose }) {
 }
 
 // ── log-application modal ────────────────────────────────────────────────────
-function LogModal({ onClose, onSaved, pushToast, onDirty }) {
+function LogModal({ onClose, onSaved, onJobSaved, pushToast, onDirty }) {
   const [url, setUrl] = useState('')
   const [title, setTitle] = useState('')
   const [company, setCompany] = useState('')
   const [resumes, setResumes] = useState([])
-  const [cv, setCv] = useState('')
-  const [stage, setStage] = useState('applied')
+  const [cv, setCv] = useState('')                  // a résumé id: the API takes the name, the tailor call the id
+  const [status, setStatus] = useState('applied')
   const [when, setWhen] = useState(() => { const t = new Date(), p = (n) => String(n).padStart(2, '0'); return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}` })   // local date, not UTC
   const [notes, setNotes] = useState('')
   useEffect(() => { onDirty?.(!!(url.trim() || title.trim() || company.trim() || notes.trim())) }, [url, title, company, notes])
   const [busy, setBusy] = useState(false)
   const [reading, setReading] = useState(false)
+  const isApp = !LOG_JOB_STATUSES.includes(status)
+  const cvName = resumes.find((r) => r.id === cv)?.name || ''
 
   // The chips are the modal's only way to attach a résumé; an empty list must not read as
   // "you have no résumés" when the user is just here to log an application.
@@ -762,6 +907,8 @@ function LogModal({ onClose, onSaved, pushToast, onDirty }) {
       if (urlRef.current !== target) return                                  // a newer URL is in the field
       if (data.title && !draftRef.current.title.trim()) setTitle(data.title)
       if (data.company && !draftRef.current.company.trim()) setCompany(data.company)
+      // an empty field after a refused read is the site's doing, not a parser miss
+      if (data.blocked && !(data.title && data.company)) pushToast({ kind: 'progress', spin: false, msg: 'This site blocks automatic reading. Type the title and company.' })
     } catch (e) {
       if (urlRef.current !== target) return
       console.error(e); pushToast({ kind: 'error', msg: 'Could not read job details from that URL' + errSuffix(e) })
@@ -770,7 +917,25 @@ function LogModal({ onClose, onSaved, pushToast, onDirty }) {
     }
   }
 
-  const save = async () => {
+  // Writes the row and reports {jobId, done}: `done` is what the screen does with it —
+  // select the new application, or open the feed at the new job.
+  const persist = async (attached) => {
+    const body = { url: url.trim(), title: title.trim(), company: company.trim() }
+    if (!isApp) {
+      const { data } = await api.post('/jobs/manual', { ...body, status })
+      return { jobId: data.id, done: () => onJobSaved(data.id, !data.created) }
+    }
+    const { data } = await api.post('/applications', {
+      ...body,
+      cv_version_used: attached || null, notes: notes.trim() || null,
+      status, applied_at: when ? new Date(when + 'T12:00:00').toISOString() : null,   // local noon, never the previous UTC day
+    })
+    return { jobId: data.job_id, done: () => onSaved(data.id) }
+  }
+
+  // `tailorFrom` is a base résumé row {id, name}, or null for a plain save. The row is
+  // saved first either way, because tailoring needs the job id.
+  const submit = async (tailorFrom) => {
     if (!title.trim() || !company.trim() || !url.trim()) {
       pushToast({ kind: 'error', msg: !url.trim() ? 'The posting URL is required — it identifies the job' : 'Title and company are required' })
       const first = [url, title, company].findIndex((v) => !v.trim()); document.querySelectorAll('input[placeholder]')[first]?.focus()
@@ -778,25 +943,30 @@ function LogModal({ onClose, onSaved, pushToast, onDirty }) {
     }
     setBusy(true)
     try {
-      const { data } = await api.post('/applications', {
-        url: url.trim(), title: title.trim(), company: company.trim(),
-        cv_version_used: cv || null, notes: notes.trim() || null,
-        status: stage, applied_at: when ? new Date(when + 'T12:00:00').toISOString() : null,   // local noon, never the previous UTC day
-      })
-      onSaved(data.id)
+      const { jobId, done } = await persist(tailorFrom?.name || cvName)
+      if (tailorFrom && jobId) {
+        // A failed tailor must not lose the row that is already saved — report it and go on.
+        try {
+          await api.post('/resumes/tailor', { base_resume_id: tailorFrom.id, job_id: jobId })
+          pushToast({ kind: 'progress', msg: `Tailoring ${tailorFrom.name} for "${title.trim()}"…` })
+        } catch (e) { console.error(e); pushToast({ kind: 'error', msg: 'Saved, but tailoring could not start' + errSuffix(e) }) }
+      }
+      done()
     } catch (e) {
       const existing = e.response?.status === 409 ? e.response?.data?.detail?.application_id : null
       if (existing) { pushToast({ kind: 'progress', msg: 'Already logged — opened the existing application.' }); onSaved(existing); return }
-      pushToast({ kind: 'error', msg: 'Could not save this application' + errSuffix(e) }); setBusy(false)
+      pushToast({ kind: 'error', msg: `Could not save this ${isApp ? 'application' : 'job'}` + errSuffix(e) }); setBusy(false)
     }
   }
 
   return (
     // escape={false}: as PrepModal — the screen owns Escape for its overlays.
-    <ModalPanel width={520} title="Log application" onClose={onClose} escape={false} zIndex={60} style={{ overflow: 'hidden' }}>
+    <ModalPanel width={520} title={isApp ? 'Log application' : 'Add job to feed'} onClose={onClose} escape={false} zIndex={60} style={{ overflow: 'hidden' }}>
         <HeaderRow align="stretch" style={{ flexDirection: 'column', gap: 3 }}>
-          <Heading className="v2-dialogtitle">Log application</Heading>
-          <Helper style={{ textWrap: 'pretty' }}>For applications made outside the app. Jobs marked Applied in the Feed are logged automatically.</Helper>
+          <Heading className="v2-dialogtitle">{isApp ? 'Log application' : 'Add job to feed'}</Heading>
+          <Helper style={{ textWrap: 'pretty' }}>{isApp
+            ? 'For applications made outside the app. Jobs marked Applied in the Feed are logged automatically.'
+            : 'Adds the posting to the Job Feed at this status. No application, date or notes are stored.'}</Helper>
         </HeaderRow>
         <div className="v2-scroll" style={{ padding: '15px 22px', display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 470, overflow: 'auto' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -815,35 +985,48 @@ function LogModal({ onClose, onSaved, pushToast, onDirty }) {
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <Label>Applied with</Label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+            <Label>{isApp ? 'Applied with' : 'Tailor from'}</Label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5 }}>
               {resumes.map((r) => {
-                const on = cv === r.name
-                return <Pill key={r.id} size="sm" on={on} onClick={() => setCv(on ? '' : r.name)}>{r.name}</Pill>
+                const on = cv === r.id
+                return (
+                  <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                    <Pill size="sm" on={on} onClick={() => setCv(on ? '' : r.id)}>{r.name}</Pill>
+                    {/* the trigger sits opposite its résumé and saves first, since tailoring needs the job id */}
+                    <Pill size="sm" disabled={busy} onClick={() => { setCv(r.id); submit(r) }}
+                      title={`Save, then tailor a copy of ${r.name} for this job`}>
+                      <span style={{ color: 'var(--ai)' }}>✦</span>Tailor
+                    </Pill>
+                  </div>
+                )
               })}
             </div>
+            <Helper>✦ saves the row first, then tailors a copy of that résumé in the background.</Helper>
           </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            <Label>Status</Label>
+            <Segmented value={status} onChange={setStatus} ariaLabel="Status"
+              options={LOG_STATUSES.map((s) => ({ value: s.id, label: s.label, hint: s.hint }))} />
+          </div>
+          {/* a feed job holds neither of these — the Job row has no date and no notes column */}
+          {isApp && (<>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
-            <Label>Stage</Label>
-            <Segmented value={stage} onChange={setStage} ariaLabel="Stage"
-              options={['applied', 'interview', 'offer'].map((id) => ({ value: id, label: STAGE[id].label }))} />
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
-            <Label>Applied on</Label>
-            <Input type="date" value={when} onChange={setWhen} ariaLabel="Applied on" />
-          </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
+              <Label>Applied on</Label>
+              <Input type="date" value={when} onChange={setWhen} ariaLabel="Applied on" />
+            </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             <Label>Notes</Label>
             <Textarea value={notes} onChange={setNotes} placeholder="Optional — referral, recruiter contact…"
               ariaLabel="Notes" rows={2} style={{ minHeight: 52 }} />
           </div>
+          </>)}
         </div>
         <FooterRow bg="page">
-          <Helper>A copy of the posting is saved with the application</Helper>
+          <Helper>A copy of the posting is saved with the {isApp ? 'application' : 'job'}</Helper>
           <Button variant="secondary" size="sm" onClick={onClose} style={{ marginLeft: 'auto' }}>Cancel</Button>
-          <Button size="sm" onClick={save} busy={busy}>{busy ? 'Saving…' : 'Save application'}</Button>
+          <Button size="sm" onClick={() => submit(null)} busy={busy}>{busy ? 'Saving…' : (isApp ? 'Save application' : 'Save job')}</Button>
         </FooterRow>
     </ModalPanel>
   )

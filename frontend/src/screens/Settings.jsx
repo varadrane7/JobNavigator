@@ -11,15 +11,18 @@ import '../theme.css'
 const PROVIDERS = [
   ['claude_api', 'Claude API (Anthropic)'],
   ['claude_code', 'Claude Code (Subscription)'],
+  ['codex_cli', 'Codex CLI (ChatGPT Subscription)'],
+  ['antigravity_cli', 'Antigravity CLI (Google Subscription)'],
   ['openai', 'OpenAI'],
   ['ollama', 'Ollama (Local)'],
+  ['lmstudio', 'LM Studio (Local)'],
   ['openrouter', 'OpenRouter'],
 ]
 const PROVIDER_LABEL = Object.fromEntries(PROVIDERS)
 // providers whose catalog /api/llm/models can search live
 const SEARCHABLE = ['openrouter', 'openai', 'claude_api', 'claude_code']
 // providers that need no key
-const KEYLESS = ['claude_code', 'ollama', '']
+const KEYLESS = ['claude_code', 'codex_cli', 'antigravity_cli', 'ollama', 'lmstudio', '']
 
 // The value rows' fields are `Input` now (adornment slot and all), so the box
 // lives in ui.jsx with every other field. What is left here is the type these
@@ -164,6 +167,12 @@ export default function Settings() {
   const [resumes, setResumes] = useState([])
   const [personaAvailable, setPersonaAvailable] = useState(false)
   const [query, setQuery] = useState('')
+  const [backendVersion, setBackendVersion] = useState('')  // from /health; the colophon notes it only when it differs from this build
+  useEffect(() => {
+    let on = true
+    fetch('/health').then((r) => r.ok ? r.json() : null).then((h) => { if (on && h?.version) setBackendVersion(String(h.version)) }).catch(() => {})
+    return () => { on = false }
+  }, [])
   // Anchor rail highlights where the scroller is parked; opens at the top (Display, the first section).
   const [active, setActive] = useState('appearance')
   const [info, setInfo] = useState(null)      // which row's info panel is open
@@ -344,10 +353,14 @@ export default function Settings() {
         { kind: 'theme', label: 'Theme', help: 'The app’s look: colours, fonts and shapes. Saved in this browser.' },
         BT('Classic dashboard', 'Open the previous (v1) interface.', 'Open classic UI', null, { href: '/classic' }),
       ]],
+      ['feed', '', 'Feed', '', [
+        SW('Zoom control on postings', 'The small + / − floater top-right of a posting.', 'Hidden — postings open at last selected zoom level.', 'feed_zoom_floater',
+          { dflt: true, info: 'Zoom is remembered per browser, not per job: set it once and every posting opens at that size. Both the live page and the cached copy are frames, so zoom scales the frame and the page reflows to the new width.' }),
+      ]],
       ['models', 'AI', 'Models', '', [
         { kind: 'pair', label: 'Primary provider · model', help: 'Every AI feature uses this pair unless overridden below.',
           pKey: 'llm_provider', mKey: 'llm_model',
-          info: "Providers: Claude API, Claude Code, OpenAI, Ollama (local), OpenRouter. The model list shows that provider's models, including any you added under Model catalog. OpenRouter covers every vendor with one key but has no prompt-cache discount." },
+          info: "Providers: Claude API, Claude Code, Codex CLI (your ChatGPT subscription), OpenAI, Ollama (local), LM Studio (local), OpenRouter. The model list shows that provider's models, including any you added under Model catalog. OpenRouter covers every vendor with one key but has no prompt-cache discount. The two subscription CLIs are meant for attended use and have plan limits; a limit hit fails over to the fallback without retrying." },
         B('API key', 'API key for the primary provider.', 'llm_api_key', { secret: true, mono: true, w: '340px', hide: () => KEYLESS.includes(val('llm_provider', 'claude_api')) }),
         LLM('Scoring', 'Model that scores new jobs against your résumés.', 'scoring_llm'),
         LLM('Scoring fallback', 'Retries scoring once on error or rate limit — scoring only.', 'llm_fallback',
@@ -357,7 +370,7 @@ export default function Settings() {
         LLM('Autofill', 'Model that answers application-form questions in the extension.', 'autofill_llm'),
         LLM('Email classification', 'Model that sorts Gmail replies into application events.', 'email_llm'),
         { kind: 'models', label: 'Model catalog', help: 'Add new or unlisted models and remove your additions.',
-          info: 'Add models that are not in the built-in list. Search uses the provider’s catalog for OpenRouter, OpenAI and Claude. For Ollama, type the local model name. Removed models stay removed.' },
+          info: 'Add models that are not in the built-in list. Search uses the provider’s catalog for OpenRouter, OpenAI and Claude. For Ollama/LM Studio, type the local model name. Removed models stay removed.' },
       ]],
       ['scoring', '', 'Scoring behavior', '', [
         SEL('Default résumé', 'Used when a company has no résumés of its own selected.', 'default_resume_id', resumeOpts, { w: '260px' }),
@@ -585,7 +598,8 @@ export default function Settings() {
             <Helper style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '34px 0 6px' }}>
               <span style={{ fontStyle: 'italic' }}>
                 {/* ui: keep — serif 12 wordmark, below the 18/19 Heading scale */}
-                <span style={{ color: 'var(--muted)', fontFamily: 'var(--serif)', fontSize: 12, fontStyle: 'normal' }}>JobNavigator</span>&nbsp;v.2.0
+                <span style={{ color: 'var(--muted)', fontFamily: 'var(--serif)', fontSize: 12, fontStyle: 'normal' }}>JobNavigator</span>&nbsp;v{__APP_VERSION__}
+                {backendVersion && backendVersion !== __APP_VERSION__ && <> · backend v{backendVersion}</>}
               </span>
               <span style={{ marginLeft: 'auto', display: 'flex', gap: 14 }}>
                 {/* These use Link (not hand-written anchors) but keep the colophon's ink/size, not the link scale —
@@ -594,6 +608,8 @@ export default function Settings() {
                   style={{ color: 'var(--muted)', fontSize: 'inherit', lineHeight: 'inherit', fontWeight: 400, textDecoration: 'none' }}>API docs ↗</Link>
                 <Link href="https://github.com/vesaias/JobNavigator" target="_blank" rel="noopener noreferrer"
                   style={{ color: 'var(--muted)', fontSize: 'inherit', lineHeight: 'inherit', fontWeight: 400, textDecoration: 'none' }}>github.com/vesaias/JobNavigator ↗</Link>
+                <Link href="https://viktoresadze.com" target="_blank" rel="noopener noreferrer"
+                  style={{ color: 'var(--muted)', fontSize: 'inherit', lineHeight: 'inherit', fontWeight: 400, textDecoration: 'none' }}>viktoresadze.com ↗</Link>
               </span>
             </Helper>
           </div>

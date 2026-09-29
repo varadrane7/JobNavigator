@@ -159,6 +159,14 @@ async def _fetch_recommendations(session_id: str, position: int, count: int = 20
 async def _fetch_search_ssr(keyword: str, location: str = "") -> tuple[list[dict], int]:
     """Fetch jobs via SSR search page (__NEXT_DATA__). Returns (jobs, total_count)."""
     params = {"titleKeyword": keyword, "visit": "search"}
+    # A jobright search has no location input: neither form shows the field for
+    # this mode. So a stored row carries "United States" only as the old column
+    # default or as a leftover from a mode change, and a new row carries "".
+    # The two populations send different requests, and that is accepted: they
+    # get the same answer. Measured with "program manager", no location gave
+    # totalJobs=2026 and "United States" gave 2027, and the one extra job was
+    # posted between the two requests. The stored text is sent as it is, so a
+    # location that an API client sets on purpose still reaches jobright.
     if location:
         params["location"] = location
 
@@ -447,10 +455,15 @@ async def run(search: Search) -> dict:
                 try:
                     from backend.analyzer.h1b_checker import check_job_h1b
                     from backend.analyzer.salary_extractor import apply_salary_to_job
+                    from backend.analyzer.work_arrangement import apply_arrangement_to_job
+                    from backend.analyzer.location import apply_location_to_job
                     await check_job_h1b(job, db)
                     from backend.models.db import find_company_by_name
                     company_obj = find_company_by_name(db, j["company"])
                     apply_salary_to_job(job, getattr(job, "_h1b_median", None))
+                    # workModel is Jobright's own field, parsed in _parse_job.
+                    apply_arrangement_to_job(job, structured=j.get("work_model"))
+                    apply_location_to_job(job)
                 except Exception as e:
                     logger.warning(f"Inline analysis failed for {j['title']}: {e}")
 

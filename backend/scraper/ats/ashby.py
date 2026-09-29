@@ -110,16 +110,28 @@ async def scrape(url: str, debug: bool = False) -> list[dict] | tuple:
                         rejected.append({"title": title, "url": job_url, "selector": "ashby_api", "reason": f"Dept '{job_dept}' / team '{job_team}' not in filter {group_names}"})
                     continue
 
+            job_loc = (posting.get("location") or "").strip()
+            # A posting open in several places carries the extra ones here; the
+            # location filter has to read them too, or a New York filter drops
+            # a posting whose primary line happens to say San Francisco.
+            secondary = [(entry or {}).get("location")
+                         for entry in (posting.get("secondaryLocations") or [])]
             if loc_names:
-                job_loc = (posting.get("location") or "").strip()
-                if not any(ln.lower() in job_loc.lower() for ln in loc_names):
+                places = [p for p in ([job_loc] + secondary) if isinstance(p, str) and p]
+                if not any(ln.lower() in p.lower() for ln in loc_names for p in places):
                     if debug:
                         rejected.append({"title": title, "url": job_url, "selector": "ashby_api", "reason": f"Location '{job_loc}' not in filter {loc_names}"})
                     continue
 
             reason = _validate_job(title, job_url)
             if reason is None:
-                jobs.append({"title": title, "url": job_url})
+                # `workplaceType` is the arrangement. `isRemote` is not: a posting
+                # with workplaceType "Hybrid" still reports isRemote true, so it
+                # means "has a remote option", not "is a remote job".
+                jobs.append({"title": title, "url": job_url,
+                             "location": job_loc or None,
+                             "locations": [x for x in ([job_loc] + secondary) if x],
+                             "arrangement": posting.get("workplaceType") or None})
             elif debug:
                 rejected.append({"title": title, "url": job_url, "selector": "ashby_api", "reason": reason})
 

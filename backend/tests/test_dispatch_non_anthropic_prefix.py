@@ -33,6 +33,46 @@ async def test_dispatch_concatenates_prefix_for_claude_code(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_concatenates_prefix_for_codex_cli(monkeypatch):
+    """codex_cli receives cached_prefix + prompt combined."""
+    captured = {}
+
+    async def fake_codex_cli(prompt, system, model, max_tokens):
+        captured["prompt"] = prompt
+        return {"text": "ok", "usage": {"input_tokens": 1, "output_tokens": 1,
+                                            "cache_read_tokens": 0, "cache_write_tokens": 0}}
+
+    monkeypatch.setattr("backend.analyzer.llm_client._call_codex_cli", fake_codex_cli)
+    from backend.analyzer.llm_client import _dispatch
+    await _dispatch(
+        provider="codex_cli", model="gpt-5.6-sol", api_key="",
+        prompt="JOB DESCRIPTION", system="rubric scorer", max_tokens=600,
+        cached_prefix="RUBRIC + CVs",
+    )
+
+    assert captured["prompt"] == "RUBRIC + CVs\n\nJOB DESCRIPTION"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_concatenates_prefix_for_antigravity_cli(monkeypatch):
+    """antigravity_cli receives cached_prefix + prompt combined (a CLI cannot cache)."""
+    seen = {}
+
+    async def fake_agy(prompt, system, model, max_tokens):
+        seen["prompt"] = prompt
+        return {"text": "ok", "usage": {"input_tokens": 1, "output_tokens": 1,
+                                        "cache_read_tokens": 0, "cache_write_tokens": 0}}
+
+    monkeypatch.setattr("backend.analyzer.llm_client._call_antigravity_cli", fake_agy)
+    from backend.analyzer.llm_client import _dispatch
+    await _dispatch(
+        provider="antigravity_cli", model="gemini-3.8-flash-medium", api_key="",
+        prompt="the question", system="s", max_tokens=10, cached_prefix="the resume",
+    )
+    assert seen["prompt"] == "the resume\n\nthe question"
+
+
+@pytest.mark.asyncio
 async def test_dispatch_concatenates_prefix_for_openai(monkeypatch):
     """openai provider receives cached_prefix + prompt combined."""
     captured = {}
@@ -112,6 +152,36 @@ async def test_dispatch_claude_api_still_uses_cache_control(monkeypatch):
     # For Anthropic, the prefix must stay separate (it becomes the cache_control block)
     assert captured["prompt"] == "JD only"
     assert captured["cached_prefix"] == "RUBRIC"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_lmstudio_routes_to_openai_client(monkeypatch):
+    """lmstudio is OpenAI-API-compatible — routes to _call_openai with the :1234 base URL and a dummy key when none is set."""
+    captured = {}
+
+    async def fake_openai(prompt, system, model, api_key, max_tokens, base_url=None, extra_body=None):
+        captured["prompt"] = prompt
+        captured["api_key"] = api_key
+        captured["base_url"] = base_url
+        captured["extra_body"] = extra_body
+        return {"text": "ok",
+                "usage": {"input_tokens": 1, "output_tokens": 1,
+                          "cache_read_tokens": 0, "cache_write_tokens": 0}}
+
+    monkeypatch.setattr("backend.analyzer.llm_client._call_openai", fake_openai)
+    monkeypatch.delenv("LMSTUDIO_BASE_URL", raising=False)
+
+    from backend.analyzer.llm_client import _dispatch
+    await _dispatch(
+        provider="lmstudio", model="qwen2.5-7b-instruct",
+        api_key="", prompt="JD text", system="sys", max_tokens=600,
+        cached_prefix="RUBRIC HERE",
+    )
+
+    assert captured["base_url"] == "http://localhost:1234/v1"
+    assert captured["api_key"] == "lm-studio"  # dummy — LM Studio ignores it
+    assert captured["prompt"] == "RUBRIC HERE\n\nJD text"  # prefix concatenated, like other non-Anthropic providers
+    assert captured["extra_body"] == {"reasoning_effort": "none"}
 
 
 @pytest.mark.asyncio

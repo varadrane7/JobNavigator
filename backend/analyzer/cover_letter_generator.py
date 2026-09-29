@@ -1,11 +1,12 @@
 """Cover-letter generation — builds the prompt and calls the LLM. Voice comes from the paired resume plus a selectable voice preset, with persona preferences supplying the "why this role/company" beat.
 Prompt-caching split: cacheable PREFIX = resume + preferences + schema (stable per resume), per-job SUFFIX = JD + voice + length, so switching voice/length reuses the cached prefix."""
+from backend.analyzer.prompt_fence import fence
 import json
 import logging
-import re
 
 from backend.analyzer.cv_scorer import _flatten_resume
 from backend.analyzer.llm_client import call_cover_letter_llm
+from backend.analyzer.model_json import UNPARSEABLE_MESSAGE, ModelReplyError, parse_model_json
 from backend.models.db import Setting
 
 logger = logging.getLogger("jobnavigator.cover_letter")
@@ -65,18 +66,14 @@ def build_cover_letter_prompt(resume_data: dict, preferences: dict, jd_text: str
         prompt_template
         .replace("{voice_instruction}", voice_instruction or "Professional and concise.")
         .replace("{length_instruction}", length_instruction)
-        .replace("{job_description}", (jd_text or "")[:6000])
+        .replace("{job_description}", fence((jd_text or "")[:6000], "JOB POSTING"))
     )
     return cached_prefix, suffix
 
 
 def parse_cover_letter_response(raw: str) -> dict:
-    """Extract the {greeting, body_paragraphs[], closing, signature} JSON."""
-    text = (raw or "").strip()
-    match = re.search(r"\{[\s\S]*\}", text)
-    if match:
-        text = match.group(0)
-    data = json.loads(text)
+    """Extract the {greeting, body_paragraphs[], closing, signature} JSON; raises json.JSONDecodeError when the reply carries none."""
+    data = parse_model_json(raw)
     return {
         "greeting": (data.get("greeting") or "Dear Hiring Team,").strip(),
         "body_paragraphs": [str(p).strip() for p in (data.get("body_paragraphs") or []) if str(p).strip()],
@@ -98,7 +95,13 @@ async def generate_cover_letter_body(resume_data: dict, preferences: dict, jd_te
         "Never fabricate facts. Output only the requested JSON."
     )
     resp = await call_cover_letter_llm(suffix, system, max_tokens=1500, cached_prefix=cached_prefix)
-    parsed = parse_cover_letter_response(resp["text"])
+    try:
+        parsed = parse_cover_letter_response(resp["text"])
+    except json.JSONDecodeError as e:
+        # The run's error goes straight to the user; a character offset into a
+        # reply they never saw tells them nothing.
+        logger.error(f"Cover letter JSON parse failed: {e}. Raw: {resp['text'][:500]}")
+        raise ModelReplyError(UNPARSEABLE_MESSAGE)
     parsed["_usage"] = resp.get("usage", {})
     # What actually dispatched, for the caller's llm_call_log row.
     parsed["_llm"] = {

@@ -6,8 +6,18 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from backend.models.db import get_db, Application, Job, Company, Setting, utcnow, SessionLocal
+from backend.scraper._shared.bot_wall import is_bot_wall
 
 logger = logging.getLogger("jobnavigator.applications")
+
+_BOT_WALL_ERROR = "blocked by bot protection"
+
+# Statuses a board answers with when it refuses a server-side read of a posting.
+_BLOCKED_STATUSES = {401, 403, 429}
+
+
+class _ReadBlocked(Exception):
+    """The posting site refused the read; the page parse is skipped."""
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
@@ -35,6 +45,7 @@ class ApplicationCreate(BaseModel):
     notes: Optional[str] = None
     status: Optional[str] = None          # applied|interview|offer (Log-application modal)
     applied_at: Optional[str] = None      # ISO date/datetime for back-dated entries
+    location: Optional[str] = None        # optional; the feed's territorial filter reads it
 
 
 class InterviewCreate(BaseModel):
@@ -197,6 +208,12 @@ async def _cache_job_page(job_id: str, url: str):
                 logger.info(f"httpx failed for job {job_id}, will try Playwright: {e}")
                 last_error = f"httpx: {e}"
 
+            # A challenge page has enough text to pass as content, and the cached
+            # text is what tailoring falls back to as the JD.
+            if is_bot_wall(html):
+                last_error = f"httpx: {_BOT_WALL_ERROR}"
+                html = None
+
             clean_html, text = _extract_clean_content(html) if html else ("", "")
             # Up to 1 MB of raw markup plus the soup built from it; drop the
             # reference before the (slow) Playwright branch so it is not pinned
@@ -208,7 +225,9 @@ async def _cache_job_page(job_id: str, url: str):
                 logger.info(f"Thin content ({len(text)} chars) for job {job_id}, trying Playwright")
                 try:
                     pw_html = await _fetch_with_playwright(url)
-                    if pw_html:
+                    if is_bot_wall(pw_html):
+                        last_error = f"playwright: {_BOT_WALL_ERROR}"
+                    elif pw_html:
                         clean_html, text = _extract_clean_content(pw_html)
                         logger.info(f"Playwright got {len(text)} text chars for job {job_id}")
                     pw_html = None
@@ -243,6 +262,35 @@ async def _cache_job_page(job_id: str, url: str):
         _set_job_cache_error(job_id, msg)
 
 
+async def _fetch_and_store_description(job_id: str, url: str) -> None:
+    """Write the ATS-quality JD onto a job that has none. `_resolve_tailoring_jd`
+    owns the fetch, the SSRF gate and the write, so this adds no second cascade."""
+    from types import SimpleNamespace
+    from backend.api.routes_resumes import _resolve_tailoring_jd
+    try:
+        await _resolve_tailoring_jd(
+            SimpleNamespace(id=job_id, description="", url=url, cached_page_text="")
+        )
+    except Exception as e:
+        logger.warning(f"Could not fetch a description for job {job_id}: {e}")
+        return
+
+    # The description is the only arrangement signal a hand-added job has, and it
+    # arrives here rather than at insert time.
+    from backend.analyzer.work_arrangement import apply_arrangement_to_job
+    from backend.models.db import Job, SessionLocal
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            apply_arrangement_to_job(job)
+            db.commit()
+    except Exception as e:
+        logger.warning(f"Could not read the arrangement for job {job_id}: {e}")
+    finally:
+        db.close()
+
+
 @router.post("")
 def create_application(
     data: ApplicationCreate,
@@ -263,8 +311,17 @@ def create_application(
             url=data.url,
             source="manual",   # APPS-15: hand-logged via the Log modal / extension, not a scrape
             status="applied",
+            location=data.location or None,
             seen=True,
         )
+        # A hand-logged job has to answer the feed's Location and Work filters
+        # like any other. There is no description yet, so only the title and a
+        # typed-in location say anything; the background fetch below covers the
+        # rest once the JD lands.
+        from backend.analyzer.location import apply_location_to_job
+        from backend.analyzer.work_arrangement import apply_arrangement_to_job
+        apply_arrangement_to_job(job)
+        apply_location_to_job(job)
         db.add(job)
         db.flush()
     else:
@@ -328,6 +385,12 @@ def create_application(
     if data.url and not job.has_cached_page:
         background_tasks.add_task(_cache_job_page, str(job.id), data.url)
 
+    # A hand-logged job arrives with no description, which every LLM step needs.
+    # Fetch it once here instead of on first use, so the first score, tailor or
+    # cover letter does not pay for it.
+    if data.url and not (job.description or "").strip():
+        background_tasks.add_task(_fetch_and_store_description, str(job.id), data.url)
+
     return {
         "id": str(app.id),
         "job_id": str(job.id),
@@ -383,10 +446,14 @@ def update_application(app_id: str, updates: dict, db: Session = Depends(get_db)
         raise HTTPException(status_code=400,
                             detail=f"status must be one of {sorted(VALID_STATUSES)}")
     changed = False
+    undo = bool(updates.pop("undo", False))   # the toast's Undo: reverse the last move, do not log a new one
     if "status" in updates:
         if updates["status"] != app.status:
-            from backend.models.db import record_transition
-            record_transition(app, updates["status"], "ui")
+            from backend.models.db import record_transition, revert_transition
+            if undo:
+                revert_transition(app, updates["status"])
+            else:
+                record_transition(app, updates["status"], "ui")
             changed = True
         # Same status = click on the already-active stage; record_transition() already
         # skips logging it, so skip updated_at too — bumping it would reset the ageing signal.
@@ -416,6 +483,101 @@ def delete_application(app_id: str, db: Session = Depends(get_db)):
     db.delete(app)
     db.commit()
     return {"deleted": True}
+
+
+# ── Bulk actions (the Applications screen's selection bar) ───────────────────
+# Same shape as POST /jobs/bulk-update: a malformed id is reported in
+# `not_found` rather than aborting the batch with a DataError, and every bad
+# body shape answers 400, never a 500.
+def _bulk_ids(body: dict) -> list:
+    """The `ids` list off a bulk body, as a list — any other shape is a 400."""
+    ids = (body or {}).get("ids")
+    if ids is None:
+        return []
+    if not isinstance(ids, (list, tuple)):
+        raise HTTPException(status_code=400, detail="ids must be a list")
+    return list(ids)
+
+
+def _parse_app_id(raw):
+    """A single bulk id as a UUID, or None when it is not one."""
+    import uuid as _uuid
+    try:
+        return _uuid.UUID(str(raw))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+@router.post("/bulk-update")
+def bulk_update_applications(body: dict, db: Session = Depends(get_db)):
+    """Move several applications to one status.
+
+    Each row goes through the same path as PATCH /{app_id}: record_transition()
+    with source "ui", then a fresh updated_at. A row already in that status is
+    skipped entirely (no transition, no updated_at bump — the ageing signal on
+    the row must not reset because it was caught in a selection).
+    """
+    from backend.api._input import str_field
+    from backend.models.db import record_transition, revert_transition
+
+    ids = _bulk_ids(body)
+    status = str_field(body, "status", required=True)
+    undo = bool((body or {}).get("undo", False))   # the bulk toast's Undo, see PATCH
+    if status not in VALID_STATUSES:
+        raise HTTPException(status_code=400,
+                            detail=f"status must be one of {sorted(VALID_STATUSES)}")
+
+    updated = 0
+    skipped = 0
+    not_found: list[str] = []
+    for raw in ids:
+        parsed = _parse_app_id(raw)
+        if parsed is None:
+            not_found.append(str(raw))
+            continue
+        app = db.query(Application).filter(Application.id == parsed).first()
+        if app is None:
+            not_found.append(str(raw))
+            continue
+        if app.status == status:
+            skipped += 1
+            continue
+        if undo:
+            revert_transition(app, status)
+        else:
+            record_transition(app, status, "ui")
+        app.updated_at = utcnow()
+        updated += 1
+    db.commit()
+    return {"updated": updated, "skipped": skipped, "not_found": not_found}
+
+
+@router.post("/bulk-delete")
+def bulk_delete_applications(body: dict, db: Session = Depends(get_db)):
+    """Delete several applications, exactly as DELETE /{app_id} deletes one.
+
+    The job each row points at is released back to 'saved' so it stops counting
+    as applied, and the row's interviews go with it (delete-orphan cascade).
+    """
+    ids = _bulk_ids(body)
+    deleted = 0
+    not_found: list[str] = []
+    for raw in ids:
+        parsed = _parse_app_id(raw)
+        if parsed is None:
+            not_found.append(str(raw))
+            continue
+        app = db.query(Application).filter(Application.id == parsed).first()
+        if app is None:
+            not_found.append(str(raw))
+            continue
+        job = app.job
+        if job is not None and job.status == "applied":
+            job.status = "saved"
+        db.delete(app)
+        deleted += 1
+    db.commit()
+    return {"deleted": deleted, "not_found": not_found}
 
 
 # ── Employer detection for the posting-URL reader ────────────────────────────
@@ -526,9 +688,30 @@ def _decode_entities(value):
     return text
 
 
+def _known_posting(url: str):
+    """(title, company) of a job already stored under this URL's dedup identity, or None.
+
+    Boards that wall off server-side fetches (Indeed, LinkedIn) are exactly the
+    ones the scrapers already read through their own APIs.
+    """
+    from backend.scraper._shared.dedup import make_external_id
+    db = SessionLocal()
+    try:
+        row = (db.query(Job.title, Job.company)
+               .filter(Job.external_id == make_external_id("", "", url)).first())
+    except Exception as e:  # a shortcut only: the page read below still answers
+        logger.warning("extract: stored-job lookup failed for %s: %s", url, e)
+        return None
+    finally:
+        db.close()
+    if row and (row.title or "").strip() and (row.company or "").strip():
+        return row.title, row.company
+    return None
+
+
 @router.post("/extract")
 async def extract_posting(payload: ExtractRequest):
-    """Read title + company off a posting URL for the Log-application modal (JSON-LD JobPosting, then OpenGraph, then <title>/hostname); always returns 200 with whatever it found so form fields stay editable."""
+    """Read title + company off a posting URL for the Log-application modal: a job already stored under that URL first, then the page (JSON-LD JobPosting, OpenGraph, <title>/hostname); always returns 200 with whatever it found so form fields stay editable, and `blocked` says the site refused the read."""
     import json
     import re
     from urllib.parse import urlparse
@@ -541,10 +724,21 @@ async def extract_posting(payload: ExtractRequest):
     except UnsafeURLError as e:
         raise HTTPException(status_code=400, detail=f"Unsafe URL: {e}")
 
+    known = _known_posting(url)
+    if known:
+        return {"title": known[0].strip(), "company": known[1].strip(), "blocked": False}
+
     title = company = None
+    blocked = False
     try:
         resp = await safe_get(url, timeout=15, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+        # Checked before the status: a challenge can arrive as a 200, and its
+        # <title> ("Just a moment...") would otherwise become the job title.
+        blocked = resp.status_code in _BLOCKED_STATUSES or is_bot_wall(resp.text)
+        if blocked:
+            logger.warning("extract: %s refused the read (HTTP %s)", url, resp.status_code)
+            raise _ReadBlocked()
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text[:1_000_000], "html.parser")
 
@@ -580,6 +774,8 @@ async def extract_posting(payload: ExtractRequest):
             title = re.split(r"\s+[|–—-]\s+", soup.title.string.strip())[0]
     except HTTPException:
         raise
+    except _ReadBlocked:
+        pass  # already logged; the URL-only readings below still apply
     except Exception as e:
         logger.info("extract failed for %s: %s", url, e)
 
@@ -596,7 +792,8 @@ async def extract_posting(payload: ExtractRequest):
         company = candidate if candidate and not _is_ats_brand(candidate) else None
 
     return {"title": (_decode_entities(title) or "").strip() or None,
-            "company": (_decode_entities(company) or "").strip() or None}
+            "company": (_decode_entities(company) or "").strip() or None,
+            "blocked": blocked}
 
 
 @router.post("/{app_id}/interviews", status_code=201)

@@ -11,10 +11,15 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
+from backend.scraper._shared.bot_wall import is_bot_wall
 from backend.scraper._shared.browser import _USER_AGENT
 from backend.scraper._shared.urls import host_matches as _host_matches
 
 logger = logging.getLogger("jobnavigator.scraper.ats.descriptions")
+
+# The public job page wraps the posting in this block; everything around it is
+# sign-in forms and "similar jobs" chrome.
+_LINKEDIN_DESCRIPTION_SELECTOR = "div.show-more-less-html__markup"
 
 
 # Greenhouse slugs are constrained to alphanumerics + hyphens, rejecting anything
@@ -68,8 +73,13 @@ def _resolve_branded_greenhouse_slug(host: str) -> str | None:
         db.close()
 
 
-async def _fetch_job_description(url: str) -> str | None:
-    """Fetch a job page and extract plaintext description via ATS-specific APIs, falling back to generic HTML extraction."""
+async def _fetch_job_description(url: str, job: dict = None) -> str | None:
+    """Fetch a job page and extract plaintext description via ATS-specific APIs, falling back to generic HTML extraction.
+
+    `job` is the scraper's job dict, when the caller has one. A board whose
+    detail document carries fields the listing left out (Workday's other sites)
+    writes them onto it here, so no second request is made for them.
+    """
     from backend.scraper._shared.url_safety import (
         assert_public_http_url,
         safe_get,
@@ -85,7 +95,7 @@ async def _fetch_job_description(url: str) -> str | None:
 
     # Try ATS-specific fetchers first (SPA pages won't work with plain HTTP)
     try:
-        desc = await _fetch_description_ats(url)
+        desc = await _fetch_description_ats(url, job=job)
         if desc:
             return desc
     except Exception as e:
@@ -95,7 +105,18 @@ async def _fetch_job_description(url: str) -> str | None:
     try:
         resp = await safe_get(url, timeout=15, headers={"User-Agent": _USER_AGENT})
         resp.raise_for_status()
+        if is_bot_wall(resp.text):
+            logger.info(f"Bot protection answered instead of the posting at {url}")
+            return None
         soup = BeautifulSoup(resp.text, "html.parser")
+        # A LinkedIn job page repeats its sign-in form several times before the
+        # posting, which pushes the requirements past the prompt's JD cap; only
+        # the description block is the JD.
+        if _host_matches(url, "linkedin.com"):
+            soup = soup.select_one(_LINKEDIN_DESCRIPTION_SELECTOR)
+            if soup is None:
+                logger.info(f"No description block on LinkedIn page {url}")
+                return None
         for tag in soup.find_all(["script", "style", "nav", "footer", "header", "noscript", "svg", "img"]):
             tag.decompose()
         text = soup.get_text(separator="\n", strip=True)[:30_000]
@@ -122,12 +143,16 @@ async def _fetch_job_description(url: str) -> str | None:
         return None
 
 
-async def _fetch_description_ats(url: str) -> str | None:
-    """Try ATS-specific APIs to get job description. Returns plaintext or None."""
+async def _fetch_description_ats(url: str, job: dict = None) -> str | None:
+    """Try ATS-specific APIs to get job description. Returns plaintext or None.
+
+    `job`, when passed, is the job dict this URL came from; a fetcher may fill in
+    fields its board only publishes on the detail document.
+    """
 
     # Lazy imports to avoid circular imports.
     from backend.scraper.ats.oracle_hcm import _oracle_hcm_host
-    from backend.scraper.ats.workday import _parse_workday_url, _LOCALE_PATH_RE
+    from backend.scraper.ats.workday import _parse_workday_url, _LOCALE_PATH_RE, detail_locations
 
     parsed = urlparse(url)
 
@@ -191,6 +216,12 @@ async def _fetch_description_ats(url: str) -> str | None:
                 if resp.status_code == 200:
                     data = json.loads(resp.text)
                     info = data.get("jobPostingInfo", {})
+                    # The listing entry only counts a posting's other sites
+                    # ("5 Locations"); this document names them, at no extra cost.
+                    if job is not None:
+                        places = detail_locations(data)
+                        if places:
+                            job["locations"] = places
                     desc_html = info.get("jobDescription", "")
                     if desc_html:
                         soup = BeautifulSoup(desc_html, "html.parser")
@@ -541,7 +572,7 @@ async def _fetch_descriptions_parallel(jobs_to_fetch, max_concurrent=5):
 
     async def fetch_one(job_dict):
         async with sem:
-            desc = await _fetch_job_description(job_dict["url"])
+            desc = await _fetch_job_description(job_dict["url"], job=job_dict)
             return job_dict, desc
 
     results = await asyncio.gather(*[fetch_one(j) for j in jobs_to_fetch], return_exceptions=True)
