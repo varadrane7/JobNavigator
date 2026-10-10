@@ -54,8 +54,8 @@ SPEC = {
     "autoapply_company_blocklist": ("json", [], "Company names never auto-applied to (case-insensitive)"),
     "autoapply_title_blocklist": ("json", [], "Title substrings never auto-applied to (case-insensitive)"),
     "autoapply_enabled_submitters": (
-        "json", ["greenhouse", "lever", "ashby", "generic", "linkedin", "ziprecruiter"],
-        "Submitters allowed to receive jobs (workday is added once its handler exists)"),
+        "json", ["greenhouse", "lever", "ashby", "workday", "generic", "linkedin", "ziprecruiter"],
+        "Submitters allowed to receive jobs"),
     "autoapply_queue_cron": ("cron", "15 6 * * *", "When the daily queue is built (5-field cron, server time)"),
     "autoapply_jitter_min_s": ("int", 45, "Shortest wait between two submits"),
     "autoapply_jitter_max_s": ("int", 180, "Longest wait between two submits"),

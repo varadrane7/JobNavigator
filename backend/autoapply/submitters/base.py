@@ -44,6 +44,9 @@ class Packet:
     cover_letter_text: Optional[str] = None
     # Called the first time a form asks for a letter, when none was made up front.
     make_cover_letter: Optional[Callable[[], Awaitable[tuple]]] = None
+    # Per-tenant ATS logins (Workday): host -> (email, password) | None, and store a new one.
+    get_login: Optional[Callable[[str], Optional[tuple]]] = None
+    save_login: Optional[Callable[[str, str, str], None]] = None
 
 
 @dataclass

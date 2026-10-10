@@ -346,6 +346,34 @@ async def cdp_status(db: Session = Depends(get_db)):
     return await status(url)
 
 
+@router.get("/credentials")
+def credentials_list(db: Session = Depends(get_db)):
+    """ATS tenant logins AutoApply holds (host + email only; never the password)."""
+    from backend.autoapply import credentials
+    return credentials.listing(db)
+
+
+@router.put("/credentials")
+def credentials_put(body: dict, db: Session = Depends(get_db)):
+    """Store a login you made yourself for a tenant (e.g. after an account already existed)."""
+    from backend.autoapply import credentials
+    host = str(body.get("host") or "").strip().lower()
+    email = str(body.get("email") or "").strip()
+    password = str(body.get("password") or "")
+    if not host or not email or not password:
+        raise HTTPException(422, "host, email and password are required")
+    credentials.save(db, aa_settings.get(db, "autoapply_data_dir"), host, email, password, created_by="user")
+    return {"ok": True}
+
+
+@router.delete("/credentials/{host}")
+def credentials_delete(host: str, db: Session = Depends(get_db)):
+    from backend.autoapply import credentials
+    if not credentials.delete(db, host.lower()):
+        raise HTTPException(404, "no login for that host")
+    return {"ok": True}
+
+
 @router.get("/stats")
 def stats(days: int = 14, db: Session = Depends(get_db)):
     from backend.autoapply import stats as aa_stats

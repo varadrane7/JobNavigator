@@ -124,4 +124,18 @@ class AutoApplyLLMUsage(Base):
     __table_args__ = (Index("ix_autoapply_llm_usage_day_provider", "day", "provider", unique=True),)
 
 
+class AutoApplyCredential(Base):
+    """Login for one ATS tenant (Workday makes you create an account per employer). The password
+    is Fernet-encrypted; the key lives outside the database (see credentials.py)."""
+    __tablename__ = "autoapply_ats_credentials"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    host = Column(String, nullable=False, unique=True, index=True)
+    email = Column(String, nullable=False)
+    password_enc = Column(Text, nullable=False)
+    created_by = Column(String, default="autoapply")     # autoapply | user
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+
+
 Index("ix_autoapply_items_date_status", AutoApplyItem.run_date, AutoApplyItem.status)

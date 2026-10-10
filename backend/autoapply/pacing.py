@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from backend.autoapply.models import AutoApplyItem
 
 # Submitters with a working implementation; others stay 'ready' until theirs lands.
-IMPLEMENTED = {"greenhouse", "lever", "ashby", "generic", "linkedin", "ziprecruiter"}
+IMPLEMENTED = {"greenhouse", "lever", "ashby", "generic", "workday", "linkedin", "ziprecruiter"}
 # Driven in the user's own Chrome: slower pacing, pause on checkpoints.
 CDP_SITES = {"linkedin", "ziprecruiter"}
 

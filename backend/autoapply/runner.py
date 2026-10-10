@@ -22,8 +22,31 @@ def submitter_for(name: str):
     from backend.autoapply.submitters.ats import Greenhouse, Lever, Ashby
     from backend.autoapply.submitters.generic import Generic
     from backend.autoapply.submitters.modal import LinkedInEasyApply, ZipRecruiter
+    from backend.autoapply.submitters.workday import Workday
     return {"greenhouse": Greenhouse, "lever": Lever, "ashby": Ashby, "generic": Generic,
-            "linkedin": LinkedInEasyApply, "ziprecruiter": ZipRecruiter}.get(name)
+            "workday": Workday, "linkedin": LinkedInEasyApply, "ziprecruiter": ZipRecruiter}.get(name)
+
+
+def _get_login(cfg):
+    def get(host):
+        from backend.autoapply import credentials
+        s = SessionLocal()
+        try:
+            return credentials.load(s, cfg["autoapply_data_dir"], host)
+        finally:
+            s.close()
+    return get
+
+
+def _save_login(cfg):
+    def save(host, email, password):
+        from backend.autoapply import credentials
+        s = SessionLocal()
+        try:
+            credentials.save(s, cfg["autoapply_data_dir"], host, email, password)
+        finally:
+            s.close()
+    return save
 
 
 def browser_for(submitter: str, cfg: dict):
@@ -152,7 +175,7 @@ async def submit_item(item_id, browser_factory=None, planner=None, now=None) -> 
     packet = Packet(item_id=str(item_id), company=snap["company"], title=snap["title"], url=snap["url"],
                     resume_pdf=snap["resume_pdf"], folder=folder, ctx=None, dry_run=bool(cfg["autoapply_dry_run"]),
                     cover_letter_pdf=snap["cl_pdf"], cover_letter_text=snap["cl_text"],
-                    make_cover_letter=make_cover_letter)
+                    make_cover_letter=make_cover_letter, get_login=_get_login(cfg), save_login=_save_login(cfg))
     try:
         packet.ctx = planner.ctx if planner else load_context(snap["company"], snap["title"], snap["resume_json"])
         plan = planner or Planner(packet.ctx)

@@ -41,7 +41,7 @@ def test_pick_next_rules(test_db, make_job, aa_settings):
     cfg = settings.get_all(test_db)
     a = _item(test_db, make_job("A"), rank=1)
     b = _item(test_db, make_job("B"), rank=2, submitter="lever")
-    _item(test_db, make_job("C"), rank=0, submitter="workday")             # not implemented yet
+    _item(test_db, make_job("C"), rank=0, submitter="icims")               # no handler yet
     it, why = pacing.pick_next(test_db, cfg, NOON_NY)
     assert it.id == a.id
 
