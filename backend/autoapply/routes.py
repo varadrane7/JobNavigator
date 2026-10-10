@@ -25,6 +25,8 @@ ACTIONS = {
     "requeue": (("rejected", "skipped", "failed"), "queued"),
     # Retry a parked or dry-run item through the submitter (documents are kept).
     "submit": (("dry_run_ok", "needs_human", "failed"), "ready"),
+    # You applied by hand (OTP, external site, ...): record it in the tracker like an auto submit.
+    "applied": (("ready", "needs_human", "failed", "dry_run_ok", "skipped"), "submitted"),
 }
 
 
@@ -142,6 +144,12 @@ async def item_action(body: dict, db: Session = Depends(get_db)):
             else:
                 to_now = to
             it.status = to_now
+            if to_now == "submitted":
+                from backend.autoapply.tracker import record_application
+                app = record_application(db, it.job_id, it.base_resume_name, it.submitter, it.id, by_hand=True)
+                it.application_id = app.id
+                it.submitted_at = datetime.now(timezone.utc)
+                it.flags = list(it.flags or []) + ["marked applied by hand"]
             if to_now == "ready":
                 it.attempts = 0
                 it.next_attempt_at = None

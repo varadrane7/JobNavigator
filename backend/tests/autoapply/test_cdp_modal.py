@@ -123,6 +123,24 @@ async def test_already_applied_is_skipped(user_chrome, site, packet):  # noqa: F
     assert out.status == "already"
 
 
+async def test_linkedin_unlabeled_late_dialog(user_chrome, site, packet):  # noqa: F811
+    """Current LinkedIn: the apply box has no role=dialog, renders seconds after the click, and job
+    cards above the button also say "Easy Apply" in their link text."""
+    from backend.autoapply.submitters.modal import LinkedInEasyApply
+    planner, _ = _planner(Fake(choice=0, text="6"))
+    out, stored = await _run_cdp(LinkedInEasyApply(), user_chrome, packet(f"{site}/li/jobs/view/3/", dry_run=False), planner)
+    assert out.status == "submitted", (out.error, out.steps)
+    assert stored["phone"] == "+1 555 0100"
+
+
+async def test_linkedin_closed_posting(user_chrome, site, packet):  # noqa: F811
+    from backend.autoapply.submitters.modal import LinkedInEasyApply
+    planner, _ = _planner()
+    out, stored = await _run_cdp(LinkedInEasyApply(), user_chrome, packet(f"{site}/li/jobs/view/4/", dry_run=False), planner)
+    assert out.status == "closed" and "no longer accepting" in out.error.lower(), (out.error, out.steps)
+    assert stored is None
+
+
 def test_paused_site_is_not_picked(test_db, make_job, aa_settings):
     from datetime import datetime, timedelta, timezone
     from datetime import date

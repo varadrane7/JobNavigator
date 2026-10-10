@@ -10,7 +10,7 @@ from backend.models.db import Application, Job, utcnow
 logger = logging.getLogger("jobnavigator.autoapply.tracker")
 
 
-def record_application(db, job_id, resume_name: str | None, submitter: str, item_id) -> Application:
+def record_application(db, job_id, resume_name: str | None, submitter: str, item_id, by_hand: bool = False) -> Application:
     existing = db.query(Application).filter(Application.job_id == job_id).first()
     if existing:
         return existing
@@ -18,7 +18,8 @@ def record_application(db, job_id, resume_name: str | None, submitter: str, item
         job_id=job_id,
         status="applied",
         cv_version_used=resume_name,
-        notes=f"Auto-applied via AutoApply ({submitter}), item {item_id}",
+        notes=(f"Applied by hand, tracked from AutoApply ({submitter}), item {item_id}" if by_hand
+               else f"Auto-applied via AutoApply ({submitter}), item {item_id}"),
         status_transitions=[{"from": None, "to": "applied", "at": utcnow().isoformat(), "source": "autoapply"}],
     )
     db.add(app)

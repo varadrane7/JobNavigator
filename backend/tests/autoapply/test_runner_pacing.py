@@ -135,7 +135,7 @@ async def test_submit_item_needs_human_then_answer_requeues(test_db, ready_item,
     assert {"question": q.question, "answer": "6+"} in bank
 
 
-async def test_submit_item_failure_backs_off(test_db, ready_item):
+async def test_submit_item_failure_is_not_retried(test_db, ready_item):
     from backend.autoapply.runner import submit_item
 
     class Boom:
@@ -145,16 +145,66 @@ async def test_submit_item_failure_backs_off(test_db, ready_item):
         async def __aexit__(self, *a):
             return False
     planner, _ = _planner()
-    for n in (1, 2, 3):
-        await submit_item(ready_item.id, browser_factory=Boom, planner=planner)
-        test_db.expire_all()
-        it = test_db.query(AutoApplyItem).get(ready_item.id)
-        assert it.attempts == n and "chromium crashed" in it.error
-        assert it.status == ("failed" if n == 3 else "ready")
-        if n < 3:
-            assert it.next_attempt_at is not None
-            it.next_attempt_at = None
-            test_db.commit()
+    await submit_item(ready_item.id, browser_factory=Boom, planner=planner)
+    test_db.expire_all()
+    it = test_db.query(AutoApplyItem).get(ready_item.id)
+    assert it.status == "failed" and it.attempts == 1 and "chromium crashed" in it.error
+
+
+def _fake_submitter(monkeypatch, outcome):
+    from backend.autoapply import runner
+
+    class Sub:
+        async def run(self, page, packet, plan):
+            return outcome
+
+    class NoBrowser:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *a):
+            return False
+    monkeypatch.setattr(runner, "submitter_for", lambda name: Sub)
+    return NoBrowser
+
+
+async def test_clicked_submit_without_confirmation_parks(test_db, ready_item, monkeypatch):
+    from backend.autoapply.runner import submit_item
+    from backend.autoapply.submitters.base import Outcome
+    factory = _fake_submitter(monkeypatch, Outcome(status="failed", error="no confirmation after submit",
+                                                   steps=["open x", "clicked submit"]))
+    planner, _ = _planner()
+    await submit_item(ready_item.id, browser_factory=factory, planner=planner)
+    test_db.expire_all()
+    it = test_db.query(AutoApplyItem).get(ready_item.id)
+    assert it.status == "needs_human" and "submit was clicked" in it.error
+
+
+async def test_closed_posting_skips_item_and_job(test_db, ready_item, monkeypatch):
+    from backend.autoapply.runner import submit_item
+    from backend.autoapply.submitters.base import Outcome
+    from backend.models.db import Job
+    factory = _fake_submitter(monkeypatch, Outcome(status="closed", error="posting closed: no longer accepting applications"))
+    planner, _ = _planner()
+    await submit_item(ready_item.id, browser_factory=factory, planner=planner)
+    test_db.expire_all()
+    it = test_db.query(AutoApplyItem).get(ready_item.id)
+    assert it.status == "skipped" and "closed" in it.error
+    assert test_db.query(Job).get(it.job_id).status == "skip"
+
+
+def test_mark_applied_records_application(api_client, test_db, ready_item):
+    from backend.models.db import Application, Job
+    ready_item.status = "needs_human"
+    test_db.commit()
+    r = api_client.post("/api/autoapply/items/action", json={"action": "applied", "ids": [str(ready_item.id)]}).json()
+    assert r["changed"] == [str(ready_item.id)]
+    test_db.expire_all()
+    it = test_db.query(AutoApplyItem).get(ready_item.id)
+    assert it.status == "submitted" and it.submitted_at is not None
+    app = test_db.query(Application).get(it.application_id)
+    assert app.status == "applied" and "by hand" in app.notes
+    assert test_db.query(Job).get(it.job_id).status == "applied"
 
 
 async def test_tick_disabled_and_quiet(test_db, aa_settings):

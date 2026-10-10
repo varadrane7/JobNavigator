@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Engineer | Acme | LinkedIn</title></head><body>
+<!-- Current LinkedIn look-alike: the apply box has no role=dialog / known class and renders late. -->
+<a href="/li/jobs/view/9/">Backend Engineer · Acme · New York · Easy Apply</a>
+<h1>Software Engineer</h1><p>Acme · New York</p>
+<a id="ea" href="#apply" aria-label="Easy Apply to Software Engineer at Acme">Easy Apply</a>
+<div id="box" style="display:none">
+  <div class="hdr"><h2>Apply to Acme</h2><span>1/1 pages</span></div>
+  <h3>Contact info</h3>
+  <label for="ph">Mobile phone number *</label><input id="ph" required>
+  <div class="foot"><button type="button" id="sub">Submit application</button></div>
+</div>
+<div id="done" style="display:none"><h2>Your application was sent to Acme!</h2></div>
+<script>
+document.getElementById('ea').onclick = function (e) {
+  e.preventDefault();
+  setTimeout(function () { document.getElementById('box').style.display = 'block'; }, 2500);
+};
+document.getElementById('sub').onclick = function () {
+  localStorage.setItem('submitted', JSON.stringify({ phone: document.getElementById('ph').value }));
+  document.getElementById('box').style.display = 'none'; document.getElementById('done').style.display = 'block';
+};
+</script></body></html>

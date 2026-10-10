@@ -6,10 +6,31 @@ site for a day, and never tries to get past a challenge."""
 import asyncio
 import re
 
-from backend.autoapply.submitters.base import BaseSubmitter, NeedsHuman, Outcome, _pause
+from backend.autoapply.submitters.base import BaseSubmitter, CLOSED_TEXT, JobClosed, NeedsHuman, Outcome, _pause, needs_human_status
 from backend.autoapply.submitters.registry import classify
 
 MAX_STEPS = 12
+DIALOG_WAIT_S = 12
+
+# Marks the open apply dialog so every later lookup (and field discovery) is scoped to it. Tries the
+# site's selectors first, then falls back to the visible "Apply to <company>" heading walked up to the
+# box that holds the step buttons, for when the site renames its modal classes or drops role=dialog.
+_MARK_DIALOG = """(sel) => {
+  document.querySelectorAll('[data-aa-modal]').forEach(e => e.removeAttribute('data-aa-modal'));
+  const vis = e => e && e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+  let el = Array.from(document.querySelectorAll(sel)).find(vis);
+  if (!el) {
+    const h = Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]'))
+      .find(x => vis(x) && /^\\s*apply to\\b/i.test(x.innerText || ''));
+    for (let p = h && h.parentElement; p && p !== document.body; p = p.parentElement) {
+      if (Array.from(p.querySelectorAll('button')).some(b =>
+          /^(next|continue|review|submit)/i.test((b.innerText || '').trim()))) { el = p; break; }
+    }
+  }
+  if (!el) return false;
+  el.setAttribute('data-aa-modal', '1');
+  return true;
+}"""
 
 
 class SitePaused(Exception):
@@ -31,7 +52,15 @@ class ModalFlow(BaseSubmitter):
 
     @property
     def form_root(self):
-        return self.modal
+        return "[data-aa-modal]"
+
+    async def find_dialog(self, page, wait_s: float = DIALOG_WAIT_S):
+        """The open apply dialog (marked data-aa-modal), waiting for it to render; None if it never shows."""
+        for _ in range(max(1, int(wait_s * 2))):
+            if await page.evaluate(_MARK_DIALOG, self.modal):
+                return page.locator("[data-aa-modal]").first
+            await asyncio.sleep(0.5)
+        return None
 
     async def _btn(self, scope, pattern):
         for role in ("button", "link"):
@@ -73,6 +102,9 @@ class ModalFlow(BaseSubmitter):
             if self.already.search(st.get("text") or ""):
                 out.status, out.error = "already", "already applied on the site"
                 return out
+            m = CLOSED_TEXT.search(st.get("text") or "")
+            if m:
+                raise JobClosed(f"posting closed: {m.group(0)}")
 
             entry = await self._btn(page, self.entry)
             if not entry:
@@ -111,9 +143,9 @@ class ModalFlow(BaseSubmitter):
                     out.confirmation_text, out.status = conf[:500], "submitted"
                     await self.shot(page, packet, out, "confirmation")
                     return out
-                dialog = page.locator(self.modal).first
-                if not await dialog.count():
-                    raise RuntimeError("apply dialog did not open")
+                dialog = await self.find_dialog(page, DIALOG_WAIT_S if step == 0 else 5)
+                if dialog is None:
+                    raise RuntimeError(f"apply dialog did not open (no {self.modal} or 'Apply to' heading after clicking {label!r})")
                 await self.before_step(page, dialog)
                 missing = await self.fill(page, packet, out, planner)
                 await self.shot(page, packet, out, f"step{step + 1}")
@@ -158,7 +190,7 @@ class ModalFlow(BaseSubmitter):
             out.status, out.error, out.pause_site = "needs_human", str(e), self.site
             await self.shot(page, packet, out, "checkpoint")
         except NeedsHuman as e:
-            out.status, out.error = "needs_human", str(e)
+            out.status, out.error = needs_human_status(e), str(e)
             await self.shot(page, packet, out, "needs-human")
             await self.discard(page)
         except Exception as e:
@@ -170,9 +202,11 @@ class ModalFlow(BaseSubmitter):
 
 class LinkedInEasyApply(ModalFlow):
     name = site = "linkedin"
-    entry = re.compile(r"easy apply", re.I)
+    # Anchored: the top-card button reads "Easy Apply" (aria-label "Easy Apply to <job>"); similar-job
+    # cards lower on the page are links whose names merely contain "Easy Apply" and must not match.
+    entry = re.compile(r"^\s*easy apply\b", re.I)
     external = re.compile(r"^\s*apply(\s+on\s+company\s+(website|site))?\b(?!.*easy)", re.I)
-    modal = '.jobs-easy-apply-modal, div[role="dialog"]'
+    modal = '.jobs-easy-apply-modal, [data-test-modal][role="dialog"], div[role="dialog"], [aria-modal="true"], .artdeco-modal'
     submit_btn = re.compile(r"^\s*submit application\s*$", re.I)
     success_text = re.compile(r"(your )?application (was )?sent|you applied", re.I)
     already = re.compile(r"\bapplied (\d+|a|an) \w+ ago\b|application submitted\b", re.I)

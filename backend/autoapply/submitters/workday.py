@@ -11,7 +11,7 @@ import asyncio
 import re
 from urllib.parse import urlparse
 
-from backend.autoapply.submitters.base import BaseSubmitter, NeedsHuman, Outcome, _pause
+from backend.autoapply.submitters.base import BaseSubmitter, NeedsHuman, Outcome, _pause, needs_human_status
 
 MAX_STEPS = 10
 
@@ -189,7 +189,7 @@ class Workday(BaseSubmitter):
                     raise NeedsHuman("Workday rejected a step: " + "; ".join(errs[:3]))
             raise RuntimeError(f"gave up after {MAX_STEPS} steps")
         except NeedsHuman as e:
-            out.status, out.error = "needs_human", str(e)
+            out.status, out.error = needs_human_status(e), str(e)
             await self.shot(page, packet, out, "needs-human")
         except Exception as e:
             out.status, out.error = "failed", str(e)[:1000]

@@ -20,13 +20,14 @@ const TABS = [
 const TAB_ACTIONS = {
   queue: ['approve', 'reject', 'skip'],
   flight: ['reject', 'skip'],
-  needs: ['submit', 'reject', 'skip'],
+  needs: ['submit', 'applied', 'reject', 'skip'],
   submitted: [],
-  failed: ['submit', 'approve', 'skip'],
-  skipped: ['requeue'],
+  failed: ['submit', 'applied', 'approve', 'skip'],
+  skipped: ['requeue', 'applied'],
 }
-// approve on a failed item rebuilds its documents; submit retries the form with the ones it has.
-const ACTION_LABEL = { approve: 'Approve', reject: 'Reject', skip: 'Skip', requeue: 'Requeue', submit: 'Retry submit' }
+// approve on a failed item rebuilds its documents; submit retries the form with the ones it has;
+// applied records a job you finished by hand as an application in the tracker.
+const ACTION_LABEL = { approve: 'Approve', reject: 'Reject', skip: 'Skip', requeue: 'Requeue', submit: 'Retry submit', applied: 'Mark applied' }
 const STATUS_TONE = {
   queued: 'neutral', approved: 'accent', preparing: 'accent', ready: 'accent', submitting: 'accent',
   submitted: 'good', dry_run_ok: 'warn', needs_human: 'warn', failed: 'bad', rejected: 'neutral', skipped: 'neutral',

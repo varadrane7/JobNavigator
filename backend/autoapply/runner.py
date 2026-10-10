@@ -1,4 +1,8 @@
-"""ready -> submitting -> submitted | dry_run_ok | needs_human | failed, one item per tick.
+"""ready -> submitting -> submitted | dry_run_ok | needs_human | skipped | failed, one item per tick.
+
+Nothing is retried on its own: a failure stays failed (with its screenshots) until a person retries it,
+and a form whose submit button was clicked is never sent again unattended, because the application
+may already be in even when no confirmation was recognised.
 
 Headless Chromium with its own context per item (bypass_csp so the field engine's init script
 runs on every page), closed afterwards so a stuck form can never leak a browser."""
@@ -14,7 +18,7 @@ from backend.autoapply.submitters.registry import classify, site_host
 
 logger = logging.getLogger("jobnavigator.autoapply.runner")
 
-MAX_SUBMIT_ATTEMPTS = 3
+CLICKED_SUBMIT = "clicked submit"     # every submitter logs this step right after the submit click
 STALE_SUBMITTING = timedelta(minutes=20)
 
 
@@ -102,8 +106,9 @@ def release_stale(db, now) -> int:
         if ts is not None and ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
         if ts is None or now - ts > STALE_SUBMITTING:
-            it.status = "ready"
-            it.error = "interrupted while submitting (restart?)"
+            # The submit click may have happened before the restart, so a person decides.
+            it.status = "needs_human"
+            it.error = "interrupted while submitting (restart?); check the site before retrying"
             n += 1
     db.commit()
     return n
@@ -220,6 +225,16 @@ async def submit_item(item_id, browser_factory=None, planner=None, now=None) -> 
             it.status = "dry_run_ok"
         elif out.status == "already":
             it.status = "skipped"
+        elif out.status == "closed":
+            it.status = "skipped"
+            job = db.query(Job).filter(Job.id == it.job_id).first()
+            if job and job.status in (None, "new", "saved"):
+                job.status = "skip"
+        elif out.status == "failed" and CLICKED_SUBMIT in (out.steps or []):
+            # The application may have gone through: park it for a person instead of failing it.
+            it.status = "needs_human"
+            it.error = (f"submit was clicked but no confirmation was recognised ({out.error}); "
+                        "check your email or the site, then Mark applied or Skip")
         elif out.status == "needs_human":
             it.status = "needs_human"
             for q in out.questions:
@@ -227,11 +242,7 @@ async def submit_item(item_id, browser_factory=None, planner=None, now=None) -> 
                                          options=q.get("options") or []))
         else:
             it.attempts = (it.attempts or 0) + 1
-            if it.attempts < MAX_SUBMIT_ATTEMPTS:
-                it.status = "ready"
-                it.next_attempt_at = datetime.now(timezone.utc) + timedelta(minutes=15 * it.attempts)
-            else:
-                it.status = "failed"
+            it.status = "failed"
         if out.pause_site:
             _pause_site(db, cfg, out.pause_site, now)
         db.commit()

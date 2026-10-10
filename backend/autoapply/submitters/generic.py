@@ -3,7 +3,7 @@ fill, ..., Submit) with the same field planner. Lands on a known ATS -> hands th
 runner re-routes the item. Account walls and captchas park as needs_human."""
 import re
 
-from backend.autoapply.submitters.base import BaseSubmitter, NeedsHuman, Outcome, _pause, NEXT_TEXT
+from backend.autoapply.submitters.base import BaseSubmitter, NeedsHuman, Outcome, _pause, needs_human_status, NEXT_TEXT
 from backend.autoapply.submitters.registry import classify
 
 APPLY = re.compile(r"^\s*(apply( now| for this (job|position|role))?|start (your )?application|i'?m interested)\s*$", re.I)
@@ -79,7 +79,7 @@ class Generic(BaseSubmitter):
                 await _pause(1.5, 3.0)
             raise RuntimeError(f"gave up after {MAX_STEPS} steps")
         except NeedsHuman as e:
-            out.status, out.error = "needs_human", str(e)
+            out.status, out.error = needs_human_status(e), str(e)
             await self.shot(page, packet, out, "needs-human")
         except Exception as e:
             out.status, out.error = "failed", str(e)[:1000]

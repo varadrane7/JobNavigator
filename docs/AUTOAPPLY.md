@@ -77,8 +77,15 @@ quirks and use dry run first.
 
 Quiet hours (`23-7` in `autoapply_timezone`), jittered gap between submits (45-180 s, 90-300 s on your
 Chrome), global / per-site / per-company daily caps counted on real submissions, never the same
-company back to back, retry backoff. CAPTCHAs and login walls park the item; there is no solver and no
+company back to back. CAPTCHAs and login walls park the item; there is no solver and no
 fingerprint spoofing.
+
+Nothing is retried on its own. A failure stays in **Failed** with its screenshots until you press
+**Retry submit**. If the submit button was clicked but no confirmation was recognised (an emailed
+verification code, an unfamiliar thank-you page), the item parks in **Needs you** rather than being
+sent again. Postings that no longer take applications are skipped, and the job is marked `skip`.
+For anything you finish by hand, **Mark applied** records it in the application tracker like an
+automatic submit.
 
 ## Tests
 

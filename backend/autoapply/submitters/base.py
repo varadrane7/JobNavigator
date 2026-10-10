@@ -51,7 +51,7 @@ class Packet:
 
 @dataclass
 class Outcome:
-    status: str = "failed"          # submitted | dry_run_ok | needs_human | failed
+    status: str = "failed"          # submitted | dry_run_ok | needs_human | closed | failed
     error: Optional[str] = None
     receipt: dict = field(default_factory=dict)
     screenshots: list = field(default_factory=list)
@@ -69,6 +69,25 @@ NEXT_TEXT = re.compile(r"^\s*(next|continue|save (and|&) continue|proceed|review
 
 class NeedsHuman(Exception):
     pass
+
+
+class JobClosed(NeedsHuman):
+    """The posting no longer takes applications: nothing to fill, nothing for a person to fix."""
+
+
+# Posting-closed banners (LinkedIn's top card, hosted ATS "job not found" pages).
+CLOSED_TEXT = re.compile(
+    r"no longer accepting applications|not currently accepting applications|"
+    r"(this )?(job|position|posting|role|requisition) (is )?no longer (available|open|active|accepting)|"
+    r"position has (already )?been filled|(job|posting) (has )?expired", re.I)
+
+# Shown after submit when the ATS wants an emailed code before it accepts the application.
+VERIFY_TEXT = re.compile(r"verification code|security code|enter the (\d+-(digit|character) )?code|"
+                         r"we('ve| have)? (sent|emailed) (you )?a code", re.I)
+
+
+def needs_human_status(e: NeedsHuman) -> str:
+    return "closed" if isinstance(e, JobClosed) else "needs_human"
 
 
 async def _pause(lo=0.25, hi=0.9):
@@ -117,6 +136,9 @@ class BaseSubmitter:
     async def check_walls(self, page, out: Outcome):
         from backend.scraper._shared.bot_wall import is_bot_wall
         st = await self.state(page)
+        m = CLOSED_TEXT.search(st.get("text") or "")
+        if m:
+            raise JobClosed(f"posting closed: {m.group(0)}")
         if st.get("challenge") or st.get("captchaWidget"):
             raise NeedsHuman("captcha on the form")
         if is_bot_wall(await page.content()):
@@ -317,6 +339,8 @@ class BaseSubmitter:
             st = await self.state(page)
             if st.get("challenge"):
                 raise NeedsHuman("captcha after submit")
+            if VERIFY_TEXT.search(st.get("text") or ""):
+                raise NeedsHuman("the site emailed a verification code after submit; enter it by hand")
         errs = await page.evaluate("() => __aa.errorsShown()")
         raise RuntimeError("no confirmation after submit" + (f": {'; '.join(errs[:5])}" if errs else ""))
 
@@ -337,7 +361,7 @@ class BaseSubmitter:
             await self.shot(page, packet, out, "confirmation")
             out.status = "submitted"
         except NeedsHuman as e:
-            out.status, out.error = "needs_human", str(e)
+            out.status, out.error = needs_human_status(e), str(e)
             await self.shot(page, packet, out, "needs-human")
         except Exception as e:
             out.status, out.error = "failed", str(e)[:1000]
