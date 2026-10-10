@@ -346,6 +346,17 @@ async def cdp_status(db: Session = Depends(get_db)):
     return await status(url)
 
 
+@router.get("/llm/usage")
+def llm_usage(days: int = 7, db: Session = Depends(get_db)):
+    """Calls, failures and quota hits per provider, plus who is cooling down."""
+    from datetime import datetime, timezone
+    from backend.autoapply import llm_router
+    cfg = aa_settings.get_all(db)
+    now = datetime.now(timezone.utc)
+    return {"usage": llm_router.usage_summary(db, max(1, min(days, 90))),
+            "cooling": {p: t.isoformat() for p, t in llm_router.cooldowns(cfg).items() if t > now}}
+
+
 @router.post("/sites/{site}/resume")
 def resume_site(site: str, db: Session = Depends(get_db)):
     """Lift a checkpoint pause early (after you have dealt with the check in your browser)."""

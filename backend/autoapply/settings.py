@@ -12,6 +12,12 @@ DEFAULT_SITE_CAPS = {
     "greenhouse": 40, "lever": 40, "ashby": 40, "workday": 40, "generic": 40,
 }
 
+# Local model first for volume, subscriptions for quality; each tier falls back to the others.
+DEFAULT_CHEAP = [{"provider": "openai_local", "model": ""}, {"provider": "antigravity_cli", "model": ""},
+                 {"provider": "claude_code", "model": ""}]
+DEFAULT_QUALITY = [{"provider": "claude_code", "model": ""}, {"provider": "antigravity_cli", "model": ""},
+                   {"provider": "openai_local", "model": ""}]
+
 TAILOR_PROMPT = """Tailor ONLY the summary and the skills of this resume to the job posting below.
 
 The full resume is shown for context. Every fact you may use is in it.
@@ -65,6 +71,11 @@ SPEC = {
     "autoapply_paused_until": ("json", {}, "Sites paused after a checkpoint: {site: ISO time}"),
     # Under the ./backend bind mount, so files survive a container rebuild with no compose change.
     "autoapply_data_dir": ("str", "/app/backend/autoapply_data", "Where PDFs and screenshots are written"),
+    "autoapply_llm_cheap": ("json", DEFAULT_CHEAP, "Provider chain for high-volume calls (form answers): [{provider, model}], tried in order"),
+    "autoapply_llm_quality": ("json", DEFAULT_QUALITY, "Provider chain for quality calls (tailoring, cover letters, free-text answers)"),
+    "autoapply_llm_quota_cooldown_min": ("int", 300, "How long a provider that hit its usage limit is skipped"),
+    "autoapply_llm_error_cooldown_min": ("int", 5, "How long a provider that errored is skipped"),
+    "autoapply_llm_cooldowns": ("json", {}, "Providers cooling down: {provider: ISO time}"),
     "autoapply_tailor_prompt": ("str", TAILOR_PROMPT, "Prompt for the summary + skills rewrite ({resume_text}, {sections_json}, {job_description})"),
 }
 

@@ -32,12 +32,9 @@ def build_prompt(template: str, base: dict, jd_text: str) -> str:
 
 
 async def _default_llm(prompt: str, system: str, job_id=None) -> str:
-    from backend.analyzer.llm_client import call_cv_tailor_llm, resolve_llm_config
-    from backend.analyzer.llm_logger import track_llm_call
-    cfg = resolve_llm_config("cv_tailor")
-    async with track_llm_call("autoapply_tailor", cfg["provider"], cfg["model"], job_id=job_id) as t:
-        resp = await call_cv_tailor_llm(prompt, system, max_tokens=1500)
-        t.record(resp)
+    from backend.autoapply import llm_router
+    resp = await llm_router.call("quality", prompt, system, max_tokens=1500,
+                                 purpose="autoapply_tailor", job_id=job_id)
     return resp["text"]
 
 

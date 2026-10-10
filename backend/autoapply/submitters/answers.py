@@ -301,7 +301,7 @@ class Planner:
 
 
 async def default_llm_choose(question: str, options: list, ctx: Context) -> int | None:
-    from backend.analyzer.llm_client import call_autofill_llm
+    from backend.autoapply import llm_router
     from backend.analyzer.model_json import parse_model_json
     from backend.analyzer.prompt_fence import fence
     numbered = "\n".join(f"{i + 1}. {o}" for i, o in enumerate(options))
@@ -312,8 +312,8 @@ async def default_llm_choose(question: str, options: list, ctx: Context) -> int 
               'Pick the option that truthfully fits the candidate. Reply ONLY with JSON: {"choice": <option number>, "sure": true|false}. '
               'If the profile does not support any option, reply {"choice": null, "sure": false}.')
     try:
-        resp = await call_autofill_llm(prompt, "You answer job-application questions truthfully from the candidate's profile. Output only JSON.",
-                                       max_tokens=60)
+        resp = await llm_router.call("cheap", prompt, "You answer job-application questions truthfully from the candidate's profile. Output only JSON.",
+                                     max_tokens=60, purpose="autoapply_choose")
         data = parse_model_json(resp.get("text") or "")
         n = data.get("choice")
         if not data.get("sure") or not isinstance(n, int):
@@ -325,11 +325,19 @@ async def default_llm_choose(question: str, options: list, ctx: Context) -> int 
 
 
 async def default_llm_write(question: str, max_chars: int, ctx: Context) -> str | None:
-    from backend.api.routes_autofill import autofill_answer
+    from backend.api.routes_autofill import _build_autofill_prompt, _extract_answer, _trim_to_chars
+    from backend.autoapply import llm_router
     try:
-        out = await autofill_answer({"question": question, "company": ctx.company, "position": ctx.title,
-                                     "max_chars": max_chars})
-        return (out or {}).get("answer") or None
+        built = _build_autofill_prompt({"question": question, "company": ctx.company, "position": ctx.title,
+                                        "max_chars": max_chars})
+        resp = await llm_router.call(
+            "quality", (built["cached_prefix"] or "") + built["suffix"],
+            "You write concise, truthful first-person job-application answers grounded only in the provided profile.",
+            max_tokens=max(96, min(900, built["max_chars"] // 4 + 96)), purpose="autoapply_answer")
+        answer = _extract_answer((resp.get("text") or "").strip())
+        if not answer:
+            return None
+        return _trim_to_chars(answer, built["max_chars"])[0] or None
     except Exception as e:
         logger.warning(f"llm_write failed: {e}")
         return None

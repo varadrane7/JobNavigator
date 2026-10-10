@@ -106,4 +106,22 @@ class AutoApplyQuestion(Base):
     item = relationship("AutoApplyItem")
 
 
+class AutoApplyLLMUsage(Base):
+    """Per provider per day: calls, failures and quota hits of the AutoApply LLM router."""
+    __tablename__ = "autoapply_llm_usage"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider = Column(String, nullable=False)
+    day = Column(Date, nullable=False)
+    model = Column(String, nullable=True)
+    calls = Column(Integer, default=0)
+    failures = Column(Integer, default=0)
+    quota_hits = Column(Integer, default=0)
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    last_quota_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_autoapply_llm_usage_day_provider", "day", "provider", unique=True),)
+
+
 Index("ix_autoapply_items_date_status", AutoApplyItem.run_date, AutoApplyItem.status)
