@@ -4,6 +4,7 @@ import { Button, Check, Helper, Input, Link, Mono, PageTitle, Segmented, Tag, sc
 import '../theme.css'
 import { getItems, getSummary, itemAction, rebuildQueue, errText } from './api'
 import AutoApplySettings from './AutoApplySettings'
+import ItemDrawer from './ItemDrawer'
 
 // Tabs mirror Tsenta's tracker: what needs a decision, what is moving, what landed.
 const TABS = [
@@ -41,6 +42,7 @@ export default function AutoApplyQueue() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
   const [showSettings, setShowSettings] = useState(false)
+  const [openId, setOpenId] = useState(null)
 
   const statuses = useMemo(() => TABS.find((t) => t.value === tab).statuses, [tab])
 
@@ -145,9 +147,10 @@ export default function AutoApplyQueue() {
                   <td style={{ padding: '7px 4px' }}><Mono size="sm">{it.rank ?? ''}</Mono></td>
                   <td style={{ padding: '7px 4px' }}><Tag tone={scoreTone(it.score)}>{it.score != null ? Math.round(it.score) : '–'}</Tag></td>
                   <td style={{ padding: '7px 4px', minWidth: 240 }}>
-                    <div style={{ fontWeight: 600 }}>{it.company}</div>
+                    <div style={{ fontWeight: 600, cursor: 'pointer' }} onClick={() => setOpenId(it.id)} title="Open details">{it.company}</div>
                     <Link href={it.url} target="_blank" rel="noopener noreferrer">{it.title}</Link>
                     {it.location && <Helper size="sm">{it.location}</Helper>}
+                    {(it.flags || []).length > 0 && <Helper size="sm" style={{ color: 'var(--warn)' }}>{it.flags.length} flag(s) — open for details</Helper>}
                     {it.error && <Helper size="sm" style={{ color: 'var(--bad)' }}>{it.error}</Helper>}
                   </td>
                   <td style={{ padding: '7px 4px' }} title={Object.entries(it.cv_scores || {}).map(([k, v]) => `${k}: ${v}`).join('\n')}>
@@ -162,6 +165,7 @@ export default function AutoApplyQueue() {
         )}
       </div>
 
+      {openId && <ItemDrawer itemId={openId} onClose={() => setOpenId(null)} onChanged={load} push={push} />}
       {showSettings && <AutoApplySettings onClose={() => setShowSettings(false)} onSaved={load} />}
       <ToastStack toasts={toasts} onClose={dismiss} />
     </div>

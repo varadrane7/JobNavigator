@@ -3,6 +3,8 @@ import api from '../api'
 // Thin wrappers over /api/autoapply/*, so screens never spell out paths.
 export const getSummary = (runDate) => api.get('/autoapply/summary', { params: { run_date: runDate } }).then((r) => r.data)
 export const getItems = (params) => api.get('/autoapply/items', { params }).then((r) => r.data)
+export const getItem = (id) => api.get(`/autoapply/items/${id}`).then((r) => r.data)
+export const reprepareItem = (id) => api.post(`/autoapply/items/${id}/prepare`).then((r) => r.data)
 export const itemAction = (action, ids) => api.post('/autoapply/items/action', { action, ids }).then((r) => r.data)
 export const rebuildQueue = () => api.post('/autoapply/queue/rebuild').then((r) => r.data)
 export const getSettings = () => api.get('/autoapply/settings').then((r) => r.data)

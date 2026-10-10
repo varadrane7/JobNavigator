@@ -8,6 +8,19 @@ from backend.models.db import SessionLocal
 logger = logging.getLogger("jobnavigator.autoapply.scheduler")
 
 QUEUE_JOB_ID = "autoapply_queue"
+PREPARE_JOB_ID = "autoapply_prepare"
+PREPARE_EVERY_MIN = 2
+
+
+async def run_prepare(trigger: str = "scheduler") -> str:
+    from backend.job_monitor import tracked_run, JobAlreadyRunningError
+    from backend.autoapply.prepare import prepare_batch
+    try:
+        async with tracked_run("autoapply_prepare", trigger) as run:
+            run.summary = await prepare_batch()
+            return run.summary
+    except JobAlreadyRunningError:
+        return "already running"
 
 
 async def run_queue_build(trigger: str = "scheduler") -> str:
@@ -41,6 +54,7 @@ def register_jobs(scheduler) -> None:
     upstream schedule, which has already been configured when this runs."""
     try:
         from apscheduler.triggers.cron import CronTrigger
+        from apscheduler.triggers.interval import IntervalTrigger
         from backend.autoapply import settings as aa_settings
         db = SessionLocal()
         try:
@@ -53,5 +67,7 @@ def register_jobs(scheduler) -> None:
         if cron:
             scheduler.add_job(run_queue_build, CronTrigger.from_crontab(cron),
                               id=QUEUE_JOB_ID, replace_existing=True)
+        scheduler.add_job(run_prepare, IntervalTrigger(minutes=PREPARE_EVERY_MIN),
+                          id=PREPARE_JOB_ID, replace_existing=True, max_instances=1, coalesce=True)
     except Exception as e:
         logger.error(f"AutoApply scheduler registration failed: {e}")

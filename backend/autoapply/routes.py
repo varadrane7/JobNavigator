@@ -5,10 +5,10 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session, joinedload
 
-from backend.models.db import get_db
+from backend.models.db import get_db, Resume
 from backend.autoapply import settings as aa_settings
 from backend.autoapply.models import AutoApplyItem, STATUSES
 
@@ -119,7 +119,7 @@ def summary(run_date: Optional[str] = None, db: Session = Depends(get_db)):
 
 
 @router.post("/items/action")
-def item_action(body: dict, db: Session = Depends(get_db)):
+async def item_action(body: dict, db: Session = Depends(get_db)):
     action = (body or {}).get("action")
     if action not in ACTIONS:
         raise HTTPException(status_code=422, detail=f"action must be one of {', '.join(ACTIONS)}")
@@ -138,7 +138,82 @@ def item_action(body: dict, db: Session = Depends(get_db)):
         else:
             unchanged.append({"id": str(it.id), "status": it.status})
     db.commit()
+    if action == "approve" and changed:
+        _kick_prepare()
     return {"changed": changed, "unchanged": unchanged}
+
+
+def _kick_prepare() -> None:
+    """Start preparing approved items now rather than at the next worker tick."""
+    from backend.job_monitor import launch_background, JobAlreadyRunningError
+    from backend.autoapply.prepare import prepare_batch
+    try:
+        launch_background("autoapply_prepare", prepare_batch, trigger="manual")
+    except JobAlreadyRunningError:
+        pass   # the running batch, or the next tick, picks the new ones up
+    except Exception as e:
+        logger.warning(f"AutoApply prepare kick failed: {e}")
+
+
+def _get_item(db, item_id: str) -> AutoApplyItem:
+    try:
+        iid = uuid.UUID(item_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="item not found")
+    it = db.query(AutoApplyItem).options(joinedload(AutoApplyItem.job)).filter(AutoApplyItem.id == iid).first()
+    if not it:
+        raise HTTPException(status_code=404, detail="item not found")
+    return it
+
+
+@router.get("/items/{item_id}")
+def get_item(item_id: str, db: Session = Depends(get_db)):
+    """One item with what changed: base vs tailored summary/skills (Tsenta's "every change shown")."""
+    it = _get_item(db, item_id)
+    out = _item_to_dict(it)
+    base = db.query(Resume).filter(Resume.id == it.base_resume_id).first() if it.base_resume_id else None
+    tailored = db.query(Resume).filter(Resume.id == it.tailored_resume_id).first() if it.tailored_resume_id else None
+    pick = lambda r: {"summary": (r.json_data or {}).get("summary"), "skills": (r.json_data or {}).get("skills")} if r else None
+    out["base"] = pick(base)
+    out["tailored"] = pick(tailored)
+    out["has_resume_pdf"] = bool(it.resume_pdf_path)
+    out["has_cover_letter_pdf"] = bool(it.cl_pdf_path)
+    out["attempts_log"] = [{
+        "id": str(a.id), "started_at": a.started_at.isoformat() if a.started_at else None,
+        "finished_at": a.finished_at.isoformat() if a.finished_at else None,
+        "dry_run": a.dry_run, "outcome": a.outcome, "receipt": a.receipt or {},
+        "screenshots": len(a.screenshots or []), "confirmation_text": a.confirmation_text,
+        "step_log": a.step_log or [],
+    } for a in it.attempts_log]
+    return out
+
+
+@router.get("/items/{item_id}/file/{kind}")
+def get_item_file(item_id: str, kind: str, db: Session = Depends(get_db)):
+    it = _get_item(db, item_id)
+    path = {"resume": it.resume_pdf_path, "cover_letter": it.cl_pdf_path}.get(kind)
+    if not path:
+        raise HTTPException(status_code=404, detail="no such file")
+    import os
+    data_dir = os.path.realpath(aa_settings.get(db, "autoapply_data_dir"))
+    real = os.path.realpath(path)
+    if not real.startswith(data_dir + os.sep) or not os.path.isfile(real):
+        raise HTTPException(status_code=404, detail="file missing")
+    return FileResponse(real, media_type="application/pdf", filename=os.path.basename(real))
+
+
+@router.post("/items/{item_id}/prepare", status_code=202)
+async def reprepare_item(item_id: str, db: Session = Depends(get_db)):
+    """Rebuild the documents (e.g. after editing the base résumé): back to approved, then prepare."""
+    it = _get_item(db, item_id)
+    if it.status not in ("ready", "failed", "needs_human", "dry_run_ok", "approved"):
+        raise HTTPException(status_code=409, detail=f"cannot prepare an item that is {it.status}")
+    it.status = "approved"
+    it.attempts = 0
+    it.error = None
+    db.commit()
+    _kick_prepare()
+    return {"status": "approved"}
 
 
 @router.post("/queue/rebuild", status_code=202)

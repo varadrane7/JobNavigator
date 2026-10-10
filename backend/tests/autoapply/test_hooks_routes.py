@@ -63,8 +63,11 @@ def test_settings_routes(api_client):
     assert r.status_code == 200 and r.json()["values"]["autoapply_daily_cap"] == 50
 
 
-def test_items_and_actions(api_client, test_db, make_job):
+def test_items_and_actions(api_client, test_db, make_job, monkeypatch):
+    from backend.autoapply import routes
     from backend.autoapply.models import AutoApplyItem
+    kicks = []
+    monkeypatch.setattr(routes, "_kick_prepare", lambda: kicks.append(1))
     j1, j2 = make_job("A"), make_job("B")
     a = AutoApplyItem(job_id=j1.id, run_date=date(2026, 10, 9), rank=1, submitter="greenhouse", status="queued")
     b = AutoApplyItem(job_id=j2.id, run_date=date(2026, 10, 9), rank=2, submitter="greenhouse", status="submitted")
@@ -79,6 +82,7 @@ def test_items_and_actions(api_client, test_db, make_job):
     assert r["changed"] == [str(a.id)]
     assert r["unchanged"] == [{"id": str(b.id), "status": "submitted"}]
     assert api_client.get("/api/autoapply/items?status=approved").json()[0]["id"] == str(a.id)
+    assert kicks == [1]
 
     s = api_client.get("/api/autoapply/summary?run_date=2026-10-09").json()
     assert s["total"] == 2 and s["by_status"] == {"approved": 1, "submitted": 1}

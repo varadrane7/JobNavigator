@@ -12,6 +12,27 @@ DEFAULT_SITE_CAPS = {
     "greenhouse": 40, "lever": 40, "ashby": 40, "workday": 40, "generic": 40,
 }
 
+TAILOR_PROMPT = """Tailor ONLY the summary and the skills of this resume to the job posting below.
+
+The full resume is shown for context. Every fact you may use is in it.
+
+FULL RESUME:
+{resume_text}
+
+SECTIONS YOU MAY CHANGE (JSON):
+{sections_json}
+
+JOB POSTING:
+{job_description}
+
+Rules:
+- summary: 2-4 sentences aimed at this role, using the posting's vocabulary where it is truthful. Use only facts, numbers and technologies that appear in the full resume. Do not change any number (years, sizes, percentages) or add new ones.
+- skills: keep the same JSON shape (same type of object or list). Reorder categories and items so the posting's skills come first. You may drop low-relevance items or rename a category label. Never add a skill that does not appear somewhere in the full resume.
+- Plain ASCII, regular hyphens, no em-dashes.
+- Do not mention the company name or the job title in the summary.
+
+Return ONLY this JSON: {"summary": "...", "skills": <same shape as input skills>}"""
+
 # key -> (kind, default, description). kind: int | bool | str | json | cron | enum:<a>|<b>
 SPEC = {
     "autoapply_enabled": ("bool", False, "Master switch: build the daily queue and run the submit worker"),
@@ -36,7 +57,9 @@ SPEC = {
     "autoapply_cover_letter": ("enum:off|if_field|always", "if_field", "When a cover letter is generated"),
     "autoapply_allow_new_skills": ("bool", False, "Let tailoring add skills that appear nowhere in the base résumé"),
     "autoapply_cdp_url": ("str", "http://host.docker.internal:9222", "Chrome DevTools endpoint of your logged-in Chrome"),
-    "autoapply_data_dir": ("str", "/app/autoapply_data", "Where PDFs and screenshots are written"),
+    # Under the ./backend bind mount, so files survive a container rebuild with no compose change.
+    "autoapply_data_dir": ("str", "/app/backend/autoapply_data", "Where PDFs and screenshots are written"),
+    "autoapply_tailor_prompt": ("str", TAILOR_PROMPT, "Prompt for the summary + skills rewrite ({resume_text}, {sections_json}, {job_description})"),
 }
 
 
