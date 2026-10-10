@@ -1,7 +1,27 @@
 # AutoApply overlay. Enable it by adding this line to .env (compose reads it):
 #   COMPOSE_FILE=docker-compose.yml:docker-compose.autoapply.yml
-# Lets the backend reach your own Chrome's DevTools port on the host (LinkedIn / ZipRecruiter mode).
 services:
   backend:
+    # Lets the backend reach your own Chrome's DevTools port on the host (legacy LinkedIn / ZipRecruiter mode).
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  # The form-filling agent: its own Chromium + Claude Code, reachable only on the compose network.
+  # It gets just the variables below, never the whole .env. See applier/README.md.
+  applier:
+    build:
+      context: .
+      dockerfile: applier/Dockerfile
+    restart: unless-stopped
+    environment:
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      APPLIER_TOKEN: ${APPLIER_TOKEN:-}
+      APPLIER_MODEL: ${APPLIER_MODEL:-sonnet}
+      # Set to turn on the live view at https://<your host>/applier/vnc.html (VNC uses the first 8 chars).
+      APPLIER_VNC_PASSWORD: ${APPLIER_VNC_PASSWORD:-}
+    shm_size: "1gb"
+    volumes:
+      - applier_profile:/data
+
+volumes:
+  applier_profile:

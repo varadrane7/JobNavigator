@@ -9,6 +9,7 @@ export const getQuestions = (params) => api.get('/autoapply/questions', { params
 export const answerQuestion = (id, answer) => api.post(`/autoapply/questions/${id}/answer`, { answer, save_to_bank: true }).then((r) => r.data)
 export const getStats = (days) => api.get('/autoapply/stats', { params: { days } }).then((r) => r.data)
 export const cdpStatus = () => api.get('/autoapply/cdp/status').then((r) => r.data)
+export const applierStatus = () => api.get('/autoapply/applier/status').then((r) => r.data)
 export const resumeSite = (site) => api.post(`/autoapply/sites/${site}/resume`).then((r) => r.data)
 export const itemAction = (action, ids) => api.post('/autoapply/items/action', { action, ids }).then((r) => r.data)
 export const rebuildQueue = () => api.post('/autoapply/queue/rebuild').then((r) => r.data)

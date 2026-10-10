@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useToasts, ToastStack } from '../Toast'
 import { Button, Check, Helper, Input, Link, Mono, Notice, PageTitle, Segmented, Tag, scoreTone } from '../ui'
 import '../theme.css'
-import { getItems, getSummary, itemAction, rebuildQueue, cdpStatus, resumeSite, errText } from './api'
+import { getItems, getSummary, itemAction, rebuildQueue, applierStatus, resumeSite, errText } from './api'
 import AutoApplySettings from './AutoApplySettings'
 import ItemDrawer from './ItemDrawer'
 
@@ -47,6 +47,7 @@ export default function AutoApplyQueue() {
   const [busy, setBusy] = useState('')
   const [showSettings, setShowSettings] = useState(false)
   const [openId, setOpenId] = useState(null)
+  const [applier, setApplier] = useState(null)
 
   const statuses = useMemo(() => TABS.find((t) => t.value === tab).statuses, [tab])
 
@@ -66,6 +67,14 @@ export default function AutoApplyQueue() {
   }, [runDate, allDays, statuses, push])
 
   useEffect(() => { load() }, [load])
+  const refreshApplier = useCallback(() => applierStatus().then(setApplier).catch(() => setApplier({ reachable: false })), [])
+  useEffect(() => { refreshApplier() }, [refreshApplier])
+  // While something is moving, keep the list and the applier's state fresh without a manual reload.
+  useEffect(() => {
+    if (!summary?.enabled && tab !== 'flight') return undefined
+    const t = setInterval(() => { load(); refreshApplier() }, 20000)
+    return () => clearInterval(t)
+  }, [summary?.enabled, tab, load, refreshApplier])
 
   const act = async (action) => {
     if (!sel.size) return
@@ -89,12 +98,14 @@ export default function AutoApplyQueue() {
     } finally { setBusy('') }
   }
 
-  const checkChrome = async () => {
-    setBusy('cdp')
+  const checkApplier = async () => {
+    setBusy('applier')
     try {
-      const st = await cdpStatus()
-      if (!st.reachable) push({ kind: 'error', msg: `Chrome not reachable at ${st.cdp_url}: ${st.error || 'no answer'}` })
-      else push({ kind: 'success', msg: `Chrome ${st.version} reachable · LinkedIn ${st.linkedin_logged_in ? 'logged in' : 'NOT logged in'} · ZipRecruiter cookies: ${st.ziprecruiter_cookies}` })
+      const st = await applierStatus()
+      setApplier(st)
+      if (!st.reachable) push({ kind: 'error', msg: `Applier not reachable at ${st.url}: ${st.error || 'no answer'}` })
+      else if (!st.ok) push({ kind: 'error', msg: `Applier up but not ready: browser ${st.browser || 'down'}, claude ${st.claude || 'missing'}` })
+      else push({ kind: 'success', msg: `Applier ready · ${st.browser} · Claude Code ${st.claude}${st.auth ? '' : ' · NO Claude login (set CLAUDE_CODE_OAUTH_TOKEN)'}` })
     } catch (e) {
       push({ kind: 'error', msg: errText(e, 'Status check failed') })
     } finally { setBusy('') }
@@ -119,13 +130,22 @@ export default function AutoApplyQueue() {
               {summary.total}/{summary.daily_cap} queued for {summary.run_date}
               {' · '}gate: {summary.mode}{summary.dry_run ? ' · dry run' : ''}
               {!summary.enabled && ' · scheduler off (enable in settings)'}
+              {applier && (
+                <span title={applier.error || ''}>
+                  {' · '}applier{' '}
+                  <Tag tone={!applier.reachable ? 'bad' : !applier.ok ? 'warn' : applier.busy ? 'accent' : 'good'}>
+                    {!applier.reachable ? 'down' : !applier.ok ? 'not ready' : applier.busy ? 'applying' : 'idle'}
+                  </Tag>
+                </span>
+              )}
             </Helper>
           )}
         </div>
-        <Input type="date" value={runDate} onChange={(e) => setRunDate(e.target.value || today())} width={150} ariaLabel="Run date" />
+        <Input type="date" value={runDate} onChange={(v) => setRunDate(v || today())} width={150} ariaLabel="Run date" />
         <Check checked={allDays} onChange={setAllDays} label="All days" />
         <Button variant="secondary" onClick={rebuild} busy={busy === 'rebuild'}>Build today’s queue</Button>
-        <Button variant="ghost" onClick={checkChrome} busy={busy === 'cdp'}>Check Chrome</Button>
+        <Button variant="ghost" onClick={checkApplier} busy={busy === 'applier'}>Check applier</Button>
+        {applier?.live_view && <Button variant="ghost" href={applier.live_view_url} target="_blank">Live view ↗</Button>}
         <Button variant="ghost" onClick={() => navigate('/autoapply/stats')}>Stats</Button>
         <Button variant="ghost" onClick={() => setShowSettings(true)}>Settings</Button>
       </div>

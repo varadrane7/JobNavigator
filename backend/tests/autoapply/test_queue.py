@@ -86,17 +86,38 @@ async def test_score_budget_and_scoring_failure(test_db, three_resumes, make_job
 
 
 async def test_site_and_company_caps(test_db, three_resumes, make_job, aa_settings):
-    aa_settings(autoapply_site_caps={"linkedin": 1, "greenhouse": 10, "generic": 10},
+    aa_settings(autoapply_site_caps={"lever": 1, "greenhouse": 10, "generic": 10},
                 autoapply_company_daily_cap=2)
     s = {"SDE": 90, "Cloud": 1, "DotNet": 1}
-    make_job("LI1", url="https://www.linkedin.com/jobs/view/1", cv_scores=s)
-    make_job("LI2", url="https://www.linkedin.com/jobs/view/2", cv_scores=s)
+    make_job("LV1", url="https://jobs.lever.co/lv1/1", cv_scores=s)
+    make_job("LV2", url="https://jobs.lever.co/lv2/2", cv_scores=s)
     for _ in range(3):
         make_job("Zeta Co", cv_scores=s)
     await build_daily(RUN, score_fn=_no_score)
     items = _items(test_db)
-    assert sum(i.submitter == "linkedin" for i in items) == 1
+    assert sum(i.submitter == "lever" for i in items) == 1
     assert sum(i.company_key == "zeta" for i in items) == 2
+
+
+async def test_aggregators_never_queued_and_leftovers_dropped(test_db, three_resumes, make_job, aa_settings):
+    aa_settings(autoapply_extra_aggregators=["boardy.example"])
+    s = {"SDE": 95, "Cloud": 1, "DotNet": 1}
+    make_job("LI", url="https://www.linkedin.com/jobs/view/1", cv_scores=s)
+    make_job("ZR", url="https://www.ziprecruiter.com/c/x/Job/2", cv_scores=s)
+    make_job("Boardy", url="https://jobs.boardy.example/3", cv_scores=s)
+    make_job("Direct", cv_scores=s)
+    await build_daily(RUN, score_fn=_no_score)
+    items = _items(test_db)
+    assert [i.job.company for i in items] == ["Direct"]
+    # An item queued while LinkedIn was still allowed leaves the pipeline on the next build.
+    old = make_job("OldLI", url="https://www.linkedin.com/jobs/view/9", cv_scores=s)
+    test_db.add(AutoApplyItem(job_id=old.id, run_date=RUN, rank=99, score=95, submitter="linkedin", status="ready"))
+    test_db.commit()
+    r = await build_daily(RUN, score_fn=_no_score)
+    assert r["dropped_aggregators"] == 1
+    test_db.expire_all()
+    left = test_db.query(AutoApplyItem).filter(AutoApplyItem.job_id == old.id).one()
+    assert left.status == "skipped" and "aggregator" in left.error
 
 
 async def test_daily_cap_and_idempotent_top_up(test_db, three_resumes, make_job, aa_settings):

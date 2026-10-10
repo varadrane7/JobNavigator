@@ -346,6 +346,18 @@ async def dismiss_question(question_id: str, db: Session = Depends(get_db)):
     return {"status": "dismissed"}
 
 
+@router.get("/applier/status")
+async def applier_status(db: Session = Depends(get_db)):
+    """Is the applier service up, with a browser and a logged-in Claude Code?"""
+    from backend.autoapply import applier_client
+    cfg = aa_settings.get_all(db)
+    out = await applier_client.health(cfg["autoapply_applier_url"])
+    out["url"] = cfg["autoapply_applier_url"]
+    out["live_view_url"] = cfg["autoapply_live_view_url"]
+    out["engine"] = cfg["autoapply_engine"]
+    return out
+
+
 @router.get("/cdp/status")
 async def cdp_status(db: Session = Depends(get_db)):
     """Can the backend reach the user's Chrome, and is it logged in to LinkedIn / ZipRecruiter?"""

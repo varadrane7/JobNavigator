@@ -19,7 +19,8 @@ from backend.autoapply.submitters.registry import classify, site_host
 logger = logging.getLogger("jobnavigator.autoapply.runner")
 
 CLICKED_SUBMIT = "clicked submit"     # every submitter logs this step right after the submit click
-STALE_SUBMITTING = timedelta(minutes=20)
+STALE_SUBMITTING = timedelta(minutes=25)   # longer than one agent run
+RETRY_LATER_MIN = 30
 
 
 def submitter_for(name: str):
@@ -183,11 +184,17 @@ async def submit_item(item_id, browser_factory=None, planner=None, now=None) -> 
                     make_cover_letter=make_cover_letter, get_login=_get_login(cfg), save_login=_save_login(cfg))
     try:
         packet.ctx = planner.ctx if planner else load_context(snap["company"], snap["title"], snap["resume_json"])
-        plan = planner or Planner(packet.ctx)
-        factory = browser_factory or browser_for(snap["submitter"], cfg)
-        async with factory() as page:
-            out = await asyncio.wait_for(sub_cls().run(page, packet, plan),
-                                         timeout=int(cfg["autoapply_submit_timeout_s"]))
+        if cfg["autoapply_engine"] == "agent" and browser_factory is None and planner is None:
+            from backend.autoapply import applier_client
+            # The client enforces the agent's own deadline; this is the backstop.
+            out = await asyncio.wait_for(applier_client.run(packet, cfg),
+                                         timeout=int(cfg["autoapply_agent_timeout_s"]) + 300)
+        else:
+            plan = planner or Planner(packet.ctx)
+            factory = browser_factory or browser_for(snap["submitter"], cfg)
+            async with factory() as page:
+                out = await asyncio.wait_for(sub_cls().run(page, packet, plan),
+                                             timeout=int(cfg["autoapply_submit_timeout_s"]))
     except asyncio.TimeoutError:
         from backend.autoapply.submitters.base import Outcome
         out = Outcome(status="failed", error="timed out")
@@ -216,6 +223,11 @@ async def submit_item(item_id, browser_factory=None, planner=None, now=None) -> 
             it.status = "ready"
             it.error = None
             it.flags = list(it.flags or []) + [f"apply flow moved to {new_sub}"]
+        elif out.status == "retry":
+            # Applier busy, down, or Claude out of quota: not this job's fault, try it again later.
+            it.status = "ready"
+            it.error = out.error
+            it.next_attempt_at = datetime.now(timezone.utc) + timedelta(minutes=RETRY_LATER_MIN)
         elif out.status == "submitted":
             app = record_application(db, it.job_id, snap["base_name"], it.submitter, it.id)
             it.application_id = app.id

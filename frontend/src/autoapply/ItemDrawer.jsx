@@ -30,6 +30,14 @@ function Compare({ label, before, after }) {
   )
 }
 
+function Shot({ src, n }) {
+  return (
+    <a href={src} target="_blank" rel="noopener noreferrer" title={`screenshot ${n}`}>
+      <img src={src} alt={`screenshot ${n}`} loading="lazy" style={{ width: 160, maxHeight: 120, objectFit: 'cover', objectPosition: 'top', border: '1px solid var(--line)', borderRadius: 4 }} />
+    </a>
+  )
+}
+
 // One parked question: pick from the form's own options when it had any, else free text.
 function QuestionRow({ q, onAnswered, push }) {
   const [val, setVal] = useState('')
@@ -52,7 +60,7 @@ function QuestionRow({ q, onAnswered, push }) {
       <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
         {opts.length
           ? <Select value={val} onPick={setVal} placeholder="Choose…" options={opts.map((o) => [o, o])} width={360} />
-          : <Input value={val} onChange={(e) => setVal(e.target.value)} placeholder="Your answer" width={360} />}
+          : <Input value={val} onChange={setVal} placeholder="Your answer" width={360} />}
         <Button size="sm" onClick={save} busy={busy} disabled={!val.trim()}>Save</Button>
       </div>
     </div>
@@ -141,9 +149,17 @@ export default function ItemDrawer({ itemId, onClose, onChanged, push }) {
                     {a.screenshots > 0 && (
                       <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                         {Array.from({ length: a.screenshots }, (_, i) => (
-                          <Link key={i} href={`/api/autoapply/attempts/${a.id}/screenshot/${i}`} target="_blank">screenshot {i + 1}</Link>
+                          <Shot key={i} src={`/api/autoapply/attempts/${a.id}/screenshot/${i}`} n={i + 1} />
                         ))}
                       </div>
+                    )}
+                    {(a.step_log || []).length > 0 && (
+                      <details style={{ marginTop: 6 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: 'var(--t-12)', color: 'var(--muted)' }}>{a.step_log.length} steps</summary>
+                        <ol style={{ margin: '6px 0 0', paddingLeft: 22, fontSize: 'var(--t-12)', fontFamily: 'var(--font-mono)', maxHeight: 260, overflowY: 'auto' }}>
+                          {a.step_log.map((st, i) => <li key={i} style={{ wordBreak: 'break-word' }}>{st}</li>)}
+                        </ol>
+                      </details>
                     )}
                   </div>
                 ))}

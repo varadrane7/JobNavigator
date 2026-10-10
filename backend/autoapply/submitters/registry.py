@@ -4,13 +4,25 @@ from urllib.parse import urlparse
 
 from backend.scraper._shared.urls import host_matches
 
-# Boards we do not submit to at all: no stable apply form, or heavy bot walls.
-UNSUPPORTED = ("indeed.com", "glassdoor.com", "monster.com", "dice.com", "simplyhired.com",
-               "jobright.ai", "levels.fyi", "builtin.com", "wellfound.com")
+# Job boards and aggregators: they list other companies' jobs, gate applying behind their own login or
+# bounce to the real ATS. Jobs whose URL is on one of these never enter the queue; only postings a plain
+# Chromium can apply to directly (company ATS / careers pages) do. Extend with autoapply_extra_aggregators.
+AGGREGATORS = (
+    "linkedin.com", "ziprecruiter.com", "indeed.com", "glassdoor.com", "monster.com", "dice.com",
+    "simplyhired.com", "careerbuilder.com", "jobright.ai", "levels.fyi", "builtin.com", "wellfound.com",
+    "angel.co", "freehire.me", "hiring.cafe", "remoteok.com", "remoteok.io", "weworkremotely.com",
+    "remotive.com", "himalayas.app", "workingnomads.com", "jobgether.com", "simplify.jobs", "otta.com",
+    "welcometothejungle.com", "workatastartup.com", "ycombinator.com", "talent.com", "jooble.org",
+    "adzuna.com", "google.com", "handshake.com", "joinhandshake.com", "builtinnyc.com", "jobot.com",
+    "lensa.com", "snagajob.com", "flexjobs.com", "ladders.com",
+    "theladders.com", "hired.com", "upwork.com", "toptal.com", "mercor.com", "turing.com",
+)
+# Kept for imports elsewhere.
+UNSUPPORTED = AGGREGATORS
 
 
-def classify(url: str | None) -> str | None:
-    """Submitter name for a job URL, or None when nothing can apply there."""
+def classify(url: str | None, extra_aggregators=()) -> str | None:
+    """Submitter name for a job URL, or None when it is an aggregator or not a web URL."""
     if not url:
         return None
     try:
@@ -27,11 +39,7 @@ def classify(url: str | None) -> str | None:
         return "ashby"
     if host_matches(url, "myworkdayjobs.com", "myworkdaysite.com"):
         return "workday"
-    if host_matches(url, "linkedin.com"):
-        return "linkedin"
-    if host_matches(url, "ziprecruiter.com"):
-        return "ziprecruiter"
-    if host_matches(url, *UNSUPPORTED):
+    if host_matches(url, *AGGREGATORS) or (extra_aggregators and host_matches(url, *extra_aggregators)):
         return None
     # A company careers page that embeds a Greenhouse form carries its job id in gh_jid.
     if "gh_jid=" in url:

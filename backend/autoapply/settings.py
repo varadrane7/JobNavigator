@@ -7,10 +7,7 @@ from backend.models.db import Setting
 
 logger = logging.getLogger("jobnavigator.autoapply.settings")
 
-DEFAULT_SITE_CAPS = {
-    "linkedin": 15, "ziprecruiter": 10,
-    "greenhouse": 40, "lever": 40, "ashby": 40, "workday": 40, "generic": 40,
-}
+DEFAULT_SITE_CAPS = {"greenhouse": 40, "lever": 40, "ashby": 40, "workday": 40, "generic": 40}
 
 # Local model first for volume, subscriptions for quality; each tier falls back to the others.
 DEFAULT_CHEAP = [{"provider": "openai_local", "model": ""}, {"provider": "antigravity_cli", "model": ""},
@@ -54,8 +51,16 @@ SPEC = {
     "autoapply_company_blocklist": ("json", [], "Company names never auto-applied to (case-insensitive)"),
     "autoapply_title_blocklist": ("json", [], "Title substrings never auto-applied to (case-insensitive)"),
     "autoapply_enabled_submitters": (
-        "json", ["greenhouse", "lever", "ashby", "workday", "generic", "linkedin", "ziprecruiter"],
-        "Submitters allowed to receive jobs"),
+        "json", ["greenhouse", "lever", "ashby", "workday", "generic"],
+        "ATS kinds allowed to receive jobs (greenhouse, lever, ashby, workday, generic = any other company site)"),
+    "autoapply_extra_aggregators": ("json", [], "Extra job-board domains to leave out of the queue, on top of the built-in list (LinkedIn, ZipRecruiter, Indeed, ...)"),
+    "autoapply_engine": ("enum:agent|builtin", "agent", "agent = the applier service (Claude Code driving Chromium) fills every form; builtin = the old scripted fillers"),
+    "autoapply_applier_url": ("str", "http://applier:8080", "Where the applier service listens (docker-compose.autoapply.yml starts it)"),
+    "autoapply_agent_model": ("str", "", "Claude model for the applier (sonnet, opus, haiku or a full id); empty = the applier's APPLIER_MODEL"),
+    "autoapply_agent_timeout_s": ("int", 900, "Longest the agent may spend on one application"),
+    "autoapply_agent_max_turns": ("int", 150, "Most agent turns per application (each turn is one or more browser actions)"),
+    "autoapply_agent_instructions": ("str", "", "Extra instructions appended to every agent run (e.g. salary expectations, preferred start date)"),
+    "autoapply_live_view_url": ("str", "/applier/vnc.html?autoconnect=1&resize=scale&path=applier/websockify", "Link to watch the applier's browser (needs APPLIER_VNC_PASSWORD)"),
     "autoapply_queue_cron": ("cron", "15 6 * * *", "When the daily queue is built (5-field cron, server time)"),
     "autoapply_jitter_min_s": ("int", 45, "Shortest wait between two submits"),
     "autoapply_jitter_max_s": ("int", 180, "Longest wait between two submits"),

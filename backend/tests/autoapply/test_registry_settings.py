@@ -10,8 +10,10 @@ from backend.autoapply.submitters.registry import classify
     ("https://jobs.lever.co/acme/abc-def", "lever"),
     ("https://jobs.ashbyhq.com/acme/abc", "ashby"),
     ("https://acme.wd5.myworkdayjobs.com/en-US/ext/job/x", "workday"),
-    ("https://www.linkedin.com/jobs/view/123", "linkedin"),
-    ("https://www.ziprecruiter.com/c/Acme/Job/x", "ziprecruiter"),
+    ("https://www.linkedin.com/jobs/view/123", None),
+    ("https://www.ziprecruiter.com/c/Acme/Job/x", None),
+    ("https://freehire.me/jobs/42", None),
+    ("https://jobs.example-careers.com/apply/9", "generic"),
     ("https://www.indeed.com/viewjob?jk=1", None),
     ("https://careers.acme.com/jobs/1", "generic"),
     ("https://evil-greenhouse.io.example.com/x", "generic"),
@@ -29,7 +31,8 @@ def test_settings_seed_and_typed_read(test_db):
     assert cfg["autoapply_daily_cap"] == 100
     assert cfg["autoapply_mode"] == "review"
     assert cfg["autoapply_dry_run"] is True
-    assert cfg["autoapply_site_caps"]["linkedin"] == 15
+    assert cfg["autoapply_site_caps"]["greenhouse"] == 40 and "linkedin" not in cfg["autoapply_site_caps"]
+    assert cfg["autoapply_engine"] == "agent"
 
 
 def test_settings_seed_keeps_user_values(test_db):

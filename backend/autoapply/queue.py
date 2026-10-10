@@ -55,7 +55,7 @@ def _missing_names(cv_scores: dict | None, names) -> list:
 
 def _rule_ok(job, cfg: dict) -> str | None:
     """Submitter name if the job passes the static rules, else None."""
-    sub = classify(job.url)
+    sub = classify(job.url, cfg.get("autoapply_extra_aggregators") or ())
     if not sub or sub not in (cfg.get("autoapply_enabled_submitters") or []):
         return None
     blocked = {c.strip().lower() for c in (cfg.get("autoapply_company_blocklist") or []) if c and c.strip()}
@@ -79,6 +79,23 @@ def _candidates(db, cfg: dict, now: datetime):
          .filter(~already)
          .order_by(Job.discovered_at.desc()))
     return [j for j in q.all() if _rule_ok(j, cfg)]
+
+
+def drop_aggregator_items(db, cfg: dict) -> int:
+    """Items queued before a board joined the aggregator list leave the pipeline (they are not
+    deleted, so the history stays)."""
+    extra = cfg.get("autoapply_extra_aggregators") or ()
+    rows = (db.query(AutoApplyItem, Job.url).join(Job, Job.id == AutoApplyItem.job_id)
+            .filter(AutoApplyItem.status.in_(("queued", "approved", "ready"))).all())
+    n = 0
+    for it, url in rows:
+        if classify(it.apply_url or url, extra) is None:
+            it.status = "skipped"
+            it.error = "job board / aggregator: not auto-applied"
+            n += 1
+    if n:
+        db.commit()
+    return n
 
 
 async def _default_score(job_id: str, cv_ids: list) -> None:
@@ -124,6 +141,7 @@ async def build_daily(run_date: date | None = None, score_fn=None, now: datetime
     db = SessionLocal()
     try:
         cfg = aa_settings.get_all(db)
+        dropped = drop_aggregator_items(db, cfg)
         cands = _candidates(db, cfg, now)
         min_score = float(cfg["autoapply_min_score"])
         # A posting already queued under another board's copy must not come back.
@@ -158,7 +176,7 @@ async def build_daily(run_date: date | None = None, score_fn=None, now: datetime
                 if j.content_hash in seen_hash:
                     continue
                 seen_hash.add(j.content_hash)
-            sub = classify(j.url)
+            sub = classify(j.url, cfg.get("autoapply_extra_aggregators") or ())
             ck = company_key(j.company)
             if site_n.get(sub, 0) >= int(site_caps.get(sub, site_caps.get("generic", 0)) or 0):
                 capped += 1
@@ -176,7 +194,7 @@ async def build_daily(run_date: date | None = None, score_fn=None, now: datetime
             company_n[ck] = company_n.get(ck, 0) + 1
             added += 1
         db.commit()
-        result = {"queued": added, "scored": scored, "candidates": len(cands),
+        result = {"queued": added, "dropped_aggregators": dropped, "scored": scored, "candidates": len(cands),
                   "eligible": len(ranked), "capped": capped, "run_date": run_date.isoformat()}
     finally:
         db.close()
