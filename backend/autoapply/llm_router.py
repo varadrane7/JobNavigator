@@ -3,8 +3,9 @@ calls (form answers), the Claude Code / Antigravity subscriptions for quality ca
 cover letters). A provider that hits its quota or errors is left alone for a cooldown and the next
 one in the tier's chain is tried, so a run is never stuck behind one dead provider.
 
-Each tier is an ordered list of {"provider", "model"} in settings (autoapply_llm_cheap /
-autoapply_llm_quality). An empty model lets the provider use its own default."""
+Each tier is an ordered list of {"provider", "model", "effort"?} in settings (autoapply_llm_cheap /
+autoapply_llm_quality). An empty model lets the provider use its own default; an empty effort, the
+model's own."""
 import logging
 from datetime import date, datetime, timedelta, timezone
 
@@ -79,9 +80,9 @@ def _cool(db, cfg, provider: str, quota: bool) -> None:
     logger.warning(f"{provider} cooling down {minutes} min ({'quota' if quota else 'error'})")
 
 
-async def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int) -> dict:
+async def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int, effort: str = "") -> dict:
     from backend.analyzer import llm_client
-    return await llm_client._dispatch(provider, model, "", prompt, system, max_tokens)
+    return await llm_client._dispatch(provider, model, "", prompt, system, max_tokens, effort=effort)
 
 
 async def call(tier: str, prompt: str, system: str, max_tokens: int = 1200, purpose: str = "autoapply",
@@ -98,9 +99,9 @@ async def call(tier: str, prompt: str, system: str, max_tokens: int = 1200, purp
         cfg = settings.get_all(db)
         errors: list[str] = []
         for e in chain(cfg, tier):
-            provider, model = e["provider"], e.get("model") or ""
+            provider, model, effort = e["provider"], e.get("model") or "", e.get("effort") or ""
             try:
-                resp = await dispatch(provider, model, prompt, system, max_tokens)
+                resp = await dispatch(provider, model, prompt, system, max_tokens, **({"effort": effort} if effort else {}))
                 if not str((resp or {}).get("text") or "").strip():
                     raise RuntimeError("empty reply")
             except Exception as exc:

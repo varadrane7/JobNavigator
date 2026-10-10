@@ -15,6 +15,7 @@ export const itemAction = (action, ids) => api.post('/autoapply/items/action', {
 export const rebuildQueue = () => api.post('/autoapply/queue/rebuild').then((r) => r.data)
 export const getSettings = () => api.get('/autoapply/settings').then((r) => r.data)
 export const putSettings = (values) => api.put('/autoapply/settings', values).then((r) => r.data)
+export const getLlmUsage = (days) => api.get('/autoapply/llm/usage', { params: { days } }).then((r) => r.data)
 
 // FastAPI sends `detail` as a string, an array of {msg}, or (our settings 422) a {key: reason} map.
 export const errText = (e, fallback) => {

@@ -10,10 +10,21 @@ logger = logging.getLogger("jobnavigator.autoapply.settings")
 DEFAULT_SITE_CAPS = {"greenhouse": 40, "lever": 40, "ashby": 40, "workday": 40, "generic": 40}
 
 # Local model first for volume, subscriptions for quality; each tier falls back to the others.
-DEFAULT_CHEAP = [{"provider": "openai_local", "model": ""}, {"provider": "antigravity_cli", "model": ""},
-                 {"provider": "claude_code", "model": ""}]
-DEFAULT_QUALITY = [{"provider": "claude_code", "model": ""}, {"provider": "antigravity_cli", "model": ""},
+# Light models on purpose: an empty model lets Claude Code / Antigravity pick their own default, which
+# is a heavy one and burns the subscription's limit in a handful of applications.
+DEFAULT_CHEAP = [{"provider": "openai_local", "model": ""},
+                 {"provider": "antigravity_cli", "model": "gemini-3.8-flash-low"},
+                 {"provider": "claude_code", "model": "claude-haiku-4-5", "effort": "low"}]
+DEFAULT_QUALITY = [{"provider": "claude_code", "model": "claude-sonnet-5", "effort": "medium"},
+                   {"provider": "antigravity_cli", "model": "gemini-3.8-flash-medium"},
                    {"provider": "openai_local", "model": ""}]
+# What seed() wrote before the chains named models; a stored value still equal to it was never edited.
+_OLD_DEFAULTS = {
+    "autoapply_llm_cheap": [{"provider": "openai_local", "model": ""}, {"provider": "antigravity_cli", "model": ""},
+                            {"provider": "claude_code", "model": ""}],
+    "autoapply_llm_quality": [{"provider": "claude_code", "model": ""}, {"provider": "antigravity_cli", "model": ""},
+                              {"provider": "openai_local", "model": ""}],
+}
 
 TAILOR_PROMPT = """Tailor ONLY the summary and the skills of this resume to the job posting below.
 
@@ -76,8 +87,8 @@ SPEC = {
     "autoapply_paused_until": ("json", {}, "Sites paused after a checkpoint: {site: ISO time}"),
     # Under the ./backend bind mount, so files survive a container rebuild with no compose change.
     "autoapply_data_dir": ("str", "/app/backend/autoapply_data", "Where PDFs and screenshots are written"),
-    "autoapply_llm_cheap": ("json", DEFAULT_CHEAP, "Provider chain for high-volume calls (form answers): [{provider, model}], tried in order"),
-    "autoapply_llm_quality": ("json", DEFAULT_QUALITY, "Provider chain for quality calls (tailoring, cover letters, free-text answers)"),
+    "autoapply_llm_cheap": ("json", DEFAULT_CHEAP, "Form answers, many per application: pick light models. Priority 1 is tried first; the next takes over while one is at its limit or erroring. Stored as [{provider, model, effort?}]"),
+    "autoapply_llm_quality": ("json", DEFAULT_QUALITY, "Tailoring, cover letters and free-text answers, a few per application. Same fallback order as the cheap tier"),
     "autoapply_llm_quota_cooldown_min": ("int", 300, "How long a provider that hit its usage limit is skipped"),
     "autoapply_llm_error_cooldown_min": ("int", 5, "How long a provider that errored is skipped"),
     "autoapply_llm_cooldowns": ("json", {}, "Providers cooling down: {provider: ISO time}"),
@@ -173,8 +184,15 @@ def update(db, updates: dict) -> dict:
 
 def seed(db) -> None:
     """Insert missing defaults; never overwrites a value the user set."""
-    existing = {r.key for r in db.query(Setting).filter(Setting.key.in_(list(SPEC))).all()}
+    rows = {r.key: r for r in db.query(Setting).filter(Setting.key.in_(list(SPEC))).all()}
     for key, (kind, default, desc) in SPEC.items():
-        if key not in existing:
+        if key not in rows:
             db.add(Setting(key=key, value=_dump(kind, default), description=desc))
+        elif key in _OLD_DEFAULTS:
+            try:
+                untouched = _parse(kind, rows[key].value) == _OLD_DEFAULTS[key]
+            except (ValueError, TypeError):
+                untouched = False
+            if untouched:
+                rows[key].value = _dump(kind, default)
     db.commit()

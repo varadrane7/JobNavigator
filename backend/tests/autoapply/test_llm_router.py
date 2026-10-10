@@ -86,3 +86,30 @@ async def test_unknown_tier(router):
 def test_usage_route(api_client, router):
     r = api_client.get("/api/autoapply/llm/usage")
     assert r.status_code == 200 and r.json() == {"usage": [], "cooling": {}}
+
+
+async def test_effort_reaches_dispatch_only_when_set(router, aa_settings):
+    seen = []
+
+    async def d(provider, model, prompt, system, max_tokens, **kw):
+        seen.append((provider, model, kw))
+        return {"text": "ok"}
+    aa_settings(autoapply_llm_cheap=[{"provider": "claude_code", "model": "claude-haiku-4-5", "effort": "low"}],
+                autoapply_llm_quality=[{"provider": "openai_local", "model": ""}])
+    await router.call("cheap", "p", "s", dispatch=d)
+    await router.call("quality", "p", "s", dispatch=d)
+    assert seen == [("claude_code", "claude-haiku-4-5", {"effort": "low"}), ("openai_local", "", {})]
+
+
+def test_seed_names_models_in_untouched_chains_only(test_db):
+    from backend.autoapply import settings
+    from backend.models.db import Setting
+    edited = [{"provider": "claude_code", "model": ""}]
+    test_db.add(Setting(key="autoapply_llm_cheap", value=settings._dump("json", settings._OLD_DEFAULTS["autoapply_llm_cheap"])))
+    test_db.add(Setting(key="autoapply_llm_quality", value=settings._dump("json", edited)))
+    test_db.commit()
+    settings.seed(test_db)
+    cfg = settings.get_all(test_db)
+    assert cfg["autoapply_llm_cheap"] == settings.DEFAULT_CHEAP
+    assert all(e["model"] for e in cfg["autoapply_llm_cheap"] if e["provider"] != "openai_local")
+    assert cfg["autoapply_llm_quality"] == edited
