@@ -17,7 +17,7 @@ RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r /op
 
 COPY applier/app /opt/applier/app
 COPY applier/entrypoint.sh /opt/applier/entrypoint.sh
-RUN chmod +x /opt/applier/entrypoint.sh && mkdir -p /data /work && chown -R pwuser:pwuser /data /work
+RUN chmod +x /opt/applier/entrypoint.sh /opt/applier/app/start-chrome.sh && mkdir -p /data /work && chown -R pwuser:pwuser /data /work
 
 # Claude Code refuses some modes as root, and nothing here needs root.
 USER pwuser
