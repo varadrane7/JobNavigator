@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.models.db import get_db, Resume
 from backend.autoapply import settings as aa_settings
+from backend.autoapply import pacing
 from backend.autoapply.models import AutoApplyItem, AutoApplyAttempt, AutoApplyQuestion, STATUSES
 
 logger = logging.getLogger("jobnavigator.autoapply.routes")
@@ -117,7 +118,9 @@ def summary(run_date: Optional[str] = None, db: Session = Depends(get_db)):
     return {"run_date": d.isoformat(), "total": len(rows), "by_status": by_status,
             "by_submitter": by_submitter, "daily_cap": cfg["autoapply_daily_cap"],
             "site_caps": cfg["autoapply_site_caps"], "mode": cfg["autoapply_mode"],
-            "dry_run": cfg["autoapply_dry_run"], "enabled": cfg["autoapply_enabled"]}
+            "dry_run": cfg["autoapply_dry_run"], "enabled": cfg["autoapply_enabled"],
+            "paused_sites": {k: v for k, v in (cfg["autoapply_paused_until"] or {}).items()
+                             if k in pacing.paused_sites(cfg, datetime.now(timezone.utc))}}
 
 
 @router.post("/items/action")
@@ -333,3 +336,20 @@ async def dismiss_question(question_id: str, db: Session = Depends(get_db)):
     q.status = "dismissed"
     db.commit()
     return {"status": "dismissed"}
+
+
+@router.get("/cdp/status")
+async def cdp_status(db: Session = Depends(get_db)):
+    """Can the backend reach the user's Chrome, and is it logged in to LinkedIn / ZipRecruiter?"""
+    from backend.autoapply.cdp import status
+    url = aa_settings.get(db, "autoapply_cdp_url")
+    return await status(url)
+
+
+@router.post("/sites/{site}/resume")
+def resume_site(site: str, db: Session = Depends(get_db)):
+    """Lift a checkpoint pause early (after you have dealt with the check in your browser)."""
+    paused = dict(aa_settings.get(db, "autoapply_paused_until") or {})
+    paused.pop(site, None)
+    aa_settings.update(db, {"autoapply_paused_until": paused})
+    return {"paused_until": paused}

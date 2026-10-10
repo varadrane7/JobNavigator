@@ -57,6 +57,7 @@ class Outcome:
     confirmation_text: Optional[str] = None
     llm_calls: int = 0
     redirect_url: Optional[str] = None   # generic submitter landed on another ATS
+    pause_site: Optional[str] = None     # a site showed a checkpoint: stop using it for a while
 
 
 # A step button, never a submit, even when the form marks it type=submit.
@@ -74,6 +75,7 @@ async def _pause(lo=0.25, hi=0.9):
 
 class BaseSubmitter:
     name = "base"
+    form_root = None          # CSS selector to scope discovery (a modal), None = whole page
     submit_text = re.compile(r"^\s*(submit( your)?( application)?|send application|apply( now)?)\s*$", re.I)
     success_text = re.compile(r"thank(s| you) for (applying|your (application|interest))|application (has been |was )?(successfully )?(submitted|received)|we('ve| have) received your application", re.I)
     success_url = None
@@ -124,7 +126,7 @@ class BaseSubmitter:
     async def fill(self, page, packet: Packet, out: Outcome, planner: Planner) -> list:
         """Fill the current step; returns the required fields left unanswered."""
         await self.inject(page)
-        fields = await page.evaluate("() => __aa.discover()")
+        fields = await page.evaluate("sel => __aa.discover(sel)", self.form_root)
         out.steps.append(f"discovered {len(fields)} fields")
         missing = []
         files = [f for f in fields if f["kind"] == "file"]

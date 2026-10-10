@@ -58,7 +58,11 @@ SPEC = {
     "autoapply_submit_timeout_s": ("int", 420, "Longest one application may take before it is abandoned"),
     "autoapply_cover_letter": ("enum:off|if_field|always", "if_field", "When a cover letter is generated"),
     "autoapply_allow_new_skills": ("bool", False, "Let tailoring add skills that appear nowhere in the base résumé"),
-    "autoapply_cdp_url": ("str", "http://host.docker.internal:9222", "Chrome DevTools endpoint of your logged-in Chrome"),
+    "autoapply_cdp_url": ("str", "http://host.docker.internal:9223", "Chrome DevTools endpoint of your logged-in Chrome (see docs/AUTOAPPLY.md)"),
+    "autoapply_cdp_jitter_min_s": ("int", 90, "Shortest wait after a LinkedIn / ZipRecruiter submit"),
+    "autoapply_cdp_jitter_max_s": ("int", 300, "Longest wait after a LinkedIn / ZipRecruiter submit"),
+    "autoapply_site_pause_hours": ("int", 24, "How long a site is left alone after it shows a checkpoint"),
+    "autoapply_paused_until": ("json", {}, "Sites paused after a checkpoint: {site: ISO time}"),
     # Under the ./backend bind mount, so files survive a container rebuild with no compose change.
     "autoapply_data_dir": ("str", "/app/backend/autoapply_data", "Where PDFs and screenshots are written"),
     "autoapply_tailor_prompt": ("str", TAILOR_PROMPT, "Prompt for the summary + skills rewrite ({resume_text}, {sections_json}, {job_description})"),

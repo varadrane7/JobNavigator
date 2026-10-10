@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useToasts, ToastStack } from '../Toast'
-import { Button, Check, Helper, Input, Link, Mono, PageTitle, Segmented, Tag, scoreTone } from '../ui'
+import { Button, Check, Helper, Input, Link, Mono, Notice, PageTitle, Segmented, Tag, scoreTone } from '../ui'
 import '../theme.css'
-import { getItems, getSummary, itemAction, rebuildQueue, errText } from './api'
+import { getItems, getSummary, itemAction, rebuildQueue, cdpStatus, resumeSite, errText } from './api'
 import AutoApplySettings from './AutoApplySettings'
 import ItemDrawer from './ItemDrawer'
 
@@ -86,6 +86,21 @@ export default function AutoApplyQueue() {
     } finally { setBusy('') }
   }
 
+  const checkChrome = async () => {
+    setBusy('cdp')
+    try {
+      const st = await cdpStatus()
+      if (!st.reachable) push({ kind: 'error', msg: `Chrome not reachable at ${st.cdp_url}: ${st.error || 'no answer'}` })
+      else push({ kind: 'success', msg: `Chrome ${st.version} reachable · LinkedIn ${st.linkedin_logged_in ? 'logged in' : 'NOT logged in'} · ZipRecruiter cookies: ${st.ziprecruiter_cookies}` })
+    } catch (e) {
+      push({ kind: 'error', msg: errText(e, 'Status check failed') })
+    } finally { setBusy('') }
+  }
+
+  const unpause = async (site) => {
+    try { await resumeSite(site); await load() } catch (e) { push({ kind: 'error', msg: errText(e, 'Could not resume') }) }
+  }
+
   const toggle = (id) => setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
   const allOn = items.length > 0 && sel.size === items.length
   const counts = summary?.by_status || {}
@@ -107,8 +122,15 @@ export default function AutoApplyQueue() {
         <Input type="date" value={runDate} onChange={(e) => setRunDate(e.target.value || today())} width={150} ariaLabel="Run date" />
         <Check checked={allDays} onChange={setAllDays} label="All days" />
         <Button variant="secondary" onClick={rebuild} busy={busy === 'rebuild'}>Build today’s queue</Button>
+        <Button variant="ghost" onClick={checkChrome} busy={busy === 'cdp'}>Check Chrome</Button>
         <Button variant="ghost" onClick={() => setShowSettings(true)}>Settings</Button>
       </div>
+      {Object.entries(summary?.paused_sites || {}).map(([site, until]) => (
+        <Notice key={site} tone="warn" style={{ margin: '0 30px 10px' }}
+          action={<Link onClick={() => unpause(site)}>Resume now</Link>}>
+          {site} paused until {new Date(until).toLocaleString()} after a checkpoint. Clear the check in your Chrome first.
+        </Notice>
+      ))}
 
       <div style={{ padding: '0 30px 12px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <Segmented grow={false} value={tab} onChange={setTab} ariaLabel="Queue view"

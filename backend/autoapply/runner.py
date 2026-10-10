@@ -21,7 +21,17 @@ STALE_SUBMITTING = timedelta(minutes=20)
 def submitter_for(name: str):
     from backend.autoapply.submitters.ats import Greenhouse, Lever, Ashby
     from backend.autoapply.submitters.generic import Generic
-    return {"greenhouse": Greenhouse, "lever": Lever, "ashby": Ashby, "generic": Generic}.get(name)
+    from backend.autoapply.submitters.modal import LinkedInEasyApply, ZipRecruiter
+    return {"greenhouse": Greenhouse, "lever": Lever, "ashby": Ashby, "generic": Generic,
+            "linkedin": LinkedInEasyApply, "ziprecruiter": ZipRecruiter}.get(name)
+
+
+def browser_for(submitter: str, cfg: dict):
+    """Headless Chromium for hosted ATS forms; the user's own Chrome for sites that need their login."""
+    if submitter in pacing.CDP_SITES:
+        from backend.autoapply.cdp import CdpBrowser
+        return lambda: CdpBrowser(cfg["autoapply_cdp_url"])
+    return HeadlessBrowser
 
 
 class HeadlessBrowser:
@@ -74,6 +84,19 @@ def release_stale(db, now) -> int:
             n += 1
     db.commit()
     return n
+
+
+def _pause_site(db, cfg, site: str, now) -> None:
+    from backend.autoapply import settings as s
+    paused = dict(cfg.get("autoapply_paused_until") or {})
+    paused[site] = (now + timedelta(hours=int(cfg["autoapply_site_pause_hours"]))).isoformat()
+    s.update(db, {"autoapply_paused_until": paused})
+    logger.warning(f"AutoApply: {site} paused until {paused[site]}")
+    try:
+        from backend.activity import log_activity
+        log_activity("autoapply_pause", f"AutoApply paused {site} after a checkpoint", details={"until": paused[site]}, db=db)
+    except Exception:
+        pass
 
 
 async def submit_item(item_id, browser_factory=None, planner=None, now=None) -> str:
@@ -133,7 +156,7 @@ async def submit_item(item_id, browser_factory=None, planner=None, now=None) -> 
     try:
         packet.ctx = planner.ctx if planner else load_context(snap["company"], snap["title"], snap["resume_json"])
         plan = planner or Planner(packet.ctx)
-        factory = browser_factory or HeadlessBrowser
+        factory = browser_factory or browser_for(snap["submitter"], cfg)
         async with factory() as page:
             out = await asyncio.wait_for(sub_cls().run(page, packet, plan),
                                          timeout=int(cfg["autoapply_submit_timeout_s"]))
@@ -172,6 +195,8 @@ async def submit_item(item_id, browser_factory=None, planner=None, now=None) -> 
             it.submitted_at = datetime.now(timezone.utc)
         elif out.status == "dry_run_ok":
             it.status = "dry_run_ok"
+        elif out.status == "already":
+            it.status = "skipped"
         elif out.status == "needs_human":
             it.status = "needs_human"
             for q in out.questions:
@@ -184,6 +209,8 @@ async def submit_item(item_id, browser_factory=None, planner=None, now=None) -> 
                 it.next_attempt_at = datetime.now(timezone.utc) + timedelta(minutes=15 * it.attempts)
             else:
                 it.status = "failed"
+        if out.pause_site:
+            _pause_site(db, cfg, out.pause_site, now)
         db.commit()
         pacing.mark_done(cfg, it, now)
         return f"{snap['company']}: {out.status}" + (f" ({out.error})" if out.error else "")

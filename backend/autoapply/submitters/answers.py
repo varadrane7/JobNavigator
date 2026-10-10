@@ -265,8 +265,9 @@ class Planner:
                 d.action, d.shown, d.source = action, shown, "qa"
                 return d
 
-        # Only spend an LLM call on what the form actually requires.
-        if not f.get("required"):
+        # Only spend an LLM call on what the form actually requires, and never to replace a value
+        # the site already filled in (LinkedIn prefills from the profile).
+        if not f.get("required") or f.get("filled"):
             return d
         if kind in ("select", "radioGroup", "checkboxGroup"):
             real = [o for o in opts if norm(o) not in ("", "select", "select an option", "please select", "select one")]

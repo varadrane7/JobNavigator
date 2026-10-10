@@ -1,0 +1,7 @@
+# AutoApply overlay. Enable it by adding this line to .env (compose reads it):
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.autoapply.yml
+# Lets the backend reach your own Chrome's DevTools port on the host (LinkedIn / ZipRecruiter mode).
+services:
+  backend:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

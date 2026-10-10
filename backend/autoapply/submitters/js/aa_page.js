@@ -98,11 +98,34 @@
 
   let fields = [];
 
+  // Whether the site already put a value there (LinkedIn prefills from the profile).
+  function isFilled(el, f) {
+    const els = f._els || [el];
+    switch (f.kind) {
+      case 'text': case 'textarea': return !!(el.value || '').trim();
+      case 'select': return el.selectedIndex > 0 && el.value !== '';
+      case 'radioGroup': case 'checkboxGroup': return els.some((e) => e.checked);
+      case 'checkbox': return !!el.checked;
+      case 'combobox': {
+        const C = window.__autofillCombobox;
+        return !!(C && C.displayedValues(el).length);
+      }
+      case 'file': return !!(el.files && el.files.length);
+      default: return false;
+    }
+  }
+
   function discover(root) {
+    if (typeof root === 'string') root = document.querySelector(root);
     root = root || document;
     document.querySelectorAll(`[${IDX}]`).forEach((n) => n.removeAttribute(IDX));
     fields = [];
-    const push = (el, f) => { el.setAttribute(IDX, String(fields.length)); f.idx = fields.length; fields.push({ el, ...f }); };
+    const push = (el, f) => {
+      el.setAttribute(IDX, String(fields.length));
+      f.idx = fields.length;
+      try { f.filled = isFilled(el, f); } catch (e) { f.filled = false; }
+      fields.push({ el, ...f });
+    };
     const combo = window.__autofillCombobox;
     const seenRadio = new Set();
     const cbGroups = new Map();

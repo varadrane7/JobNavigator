@@ -8,7 +8,24 @@ from zoneinfo import ZoneInfo
 from backend.autoapply.models import AutoApplyItem
 
 # Submitters with a working implementation; others stay 'ready' until theirs lands.
-IMPLEMENTED = {"greenhouse", "lever", "ashby", "generic"}
+IMPLEMENTED = {"greenhouse", "lever", "ashby", "generic", "linkedin", "ziprecruiter"}
+# Driven in the user's own Chrome: slower pacing, pause on checkpoints.
+CDP_SITES = {"linkedin", "ziprecruiter"}
+
+
+def paused_sites(cfg, now: datetime) -> set:
+    out = set()
+    for site, until in (cfg.get("autoapply_paused_until") or {}).items():
+        try:
+            t = datetime.fromisoformat(str(until))
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if t > now:
+            out.add(site)
+    return out
+
 
 _state = {"next_at": None, "last_company": None}
 
@@ -66,9 +83,10 @@ def pick_next(db, cfg, now: datetime, implemented=None):
     rows = (db.query(AutoApplyItem)
             .filter(AutoApplyItem.status == "ready")
             .order_by(AutoApplyItem.run_date.desc(), AutoApplyItem.rank.asc()).all())
+    paused = paused_sites(cfg, now)
     fallback = None
     for it in rows:
-        if it.submitter not in implemented:
+        if it.submitter not in implemented or it.submitter in paused:
             continue
         na = it.next_attempt_at
         if na is not None:
@@ -88,6 +106,9 @@ def pick_next(db, cfg, now: datetime, implemented=None):
 
 
 def mark_done(cfg, item, now: datetime) -> None:
-    lo, hi = int(cfg["autoapply_jitter_min_s"]), int(cfg["autoapply_jitter_max_s"])
+    if item.submitter in CDP_SITES:
+        lo, hi = int(cfg["autoapply_cdp_jitter_min_s"]), int(cfg["autoapply_cdp_jitter_max_s"])
+    else:
+        lo, hi = int(cfg["autoapply_jitter_min_s"]), int(cfg["autoapply_jitter_max_s"])
     _state["next_at"] = now + timedelta(seconds=random.uniform(lo, max(lo, hi)))
     _state["last_company"] = item.company_key

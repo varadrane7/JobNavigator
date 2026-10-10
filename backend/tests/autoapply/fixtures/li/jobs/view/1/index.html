@@ -1,0 +1,50 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Engineer | Acme | LinkedIn</title></head><body>
+<h1>Software Engineer</h1><p>Acme · New York</p>
+<button id="ea" aria-label="Easy Apply to Software Engineer at Acme">Easy Apply</button>
+<div id="modal" class="jobs-easy-apply-modal" role="dialog" style="display:none">
+  <div class="step" data-step="1">
+    <h3>Contact info</h3>
+    <label for="em">Email address *</label>
+    <select id="em" required><option value="">Select an option</option><option selected>ada.profile@example.com</option></select>
+    <label for="ph">Mobile phone number *</label><input id="ph" required>
+    <button type="button" class="nx" aria-label="Continue to next step">Next</button>
+  </div>
+  <div class="step" data-step="2" style="display:none">
+    <h3>Resume</h3>
+    <label for="up">Upload resume</label><input id="up" type="file" style="display:none">
+    <div class="q"><label for="aws">How many years of work experience do you have with Amazon Web Services (AWS)? *</label><input id="aws" required>
+      <div class="artdeco-inline-feedback--error" style="display:none" id="aws-err">Enter a whole number between 0 and 99</div></div>
+    <fieldset><legend>Are you comfortable commuting to this job's location? *</legend>
+      <input type="radio" id="c1" name="commute" value="Yes" required><label for="c1">Yes</label>
+      <input type="radio" id="c2" name="commute" value="No"><label for="c2">No</label></fieldset>
+    <button type="button" class="nx" aria-label="Review your application">Review</button>
+  </div>
+  <div class="step" data-step="3" style="display:none">
+    <h3>Review your application</h3>
+    <input type="checkbox" id="follow-company-checkbox" checked><label for="follow-company-checkbox">Follow Acme to stay up to date with their page.</label>
+    <button type="button" id="sub" aria-label="Submit application">Submit application</button>
+  </div>
+</div>
+<div id="done" style="display:none" role="dialog"><h2>Your application was sent to Acme!</h2></div>
+<script>
+var step = 1;
+function show(n) { document.querySelectorAll('.step').forEach(function (s) { s.style.display = s.dataset.step == n ? 'block' : 'none'; }); step = n; }
+document.getElementById('ea').onclick = function () { document.getElementById('modal').style.display = 'block'; show(1); };
+document.querySelectorAll('.nx').forEach(function (b) { b.onclick = function () {
+  if (step === 2) {
+    var v = document.getElementById('aws').value;
+    if (!/^\d+$/.test(v)) { document.getElementById('aws-err').style.display = 'block'; document.getElementById('aws-err').setAttribute('role', 'alert'); return; }
+    if (!document.querySelector('input[name=commute]:checked')) return;
+  }
+  if (step === 1 && !document.getElementById('ph').value) return;
+  show(step + 1);
+}; });
+document.getElementById('sub').onclick = function () {
+  var data = { email: document.getElementById('em').value, phone: document.getElementById('ph').value,
+    aws: document.getElementById('aws').value, commute: document.querySelector('input[name=commute]:checked').value,
+    resume: (document.getElementById('up').files[0] || {}).name || null, follow: document.getElementById('follow-company-checkbox').checked };
+  localStorage.setItem('submitted', JSON.stringify(data));
+  document.getElementById('modal').style.display = 'none'; document.getElementById('done').style.display = 'block';
+};
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape') document.getElementById('modal').style.display = 'none'; });
+</script></body></html>
