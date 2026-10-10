@@ -346,6 +346,12 @@ async def cdp_status(db: Session = Depends(get_db)):
     return await status(url)
 
 
+@router.get("/stats")
+def stats(days: int = 14, db: Session = Depends(get_db)):
+    from backend.autoapply import stats as aa_stats
+    return aa_stats.compute(db, max(1, min(days, 90)))
+
+
 @router.get("/llm/usage")
 def llm_usage(days: int = 7, db: Session = Depends(get_db)):
     """Calls, failures and quota hits per provider, plus who is cooling down."""

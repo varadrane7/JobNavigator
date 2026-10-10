@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useToasts, ToastStack } from '../Toast'
 import { Button, Check, Helper, Input, Link, Mono, Notice, PageTitle, Segmented, Tag, scoreTone } from '../ui'
 import '../theme.css'
@@ -34,6 +35,7 @@ const today = () => new Date().toISOString().slice(0, 10)
 
 export default function AutoApplyQueue() {
   const { toasts, push, dismiss } = useToasts()
+  const navigate = useNavigate()
   const [runDate, setRunDate] = useState(today())
   const [allDays, setAllDays] = useState(false)
   const [tab, setTab] = useState('queue')
@@ -123,6 +125,7 @@ export default function AutoApplyQueue() {
         <Check checked={allDays} onChange={setAllDays} label="All days" />
         <Button variant="secondary" onClick={rebuild} busy={busy === 'rebuild'}>Build today’s queue</Button>
         <Button variant="ghost" onClick={checkChrome} busy={busy === 'cdp'}>Check Chrome</Button>
+        <Button variant="ghost" onClick={() => navigate('/autoapply/stats')}>Stats</Button>
         <Button variant="ghost" onClick={() => setShowSettings(true)}>Settings</Button>
       </div>
       {Object.entries(summary?.paused_sites || {}).map(([site, until]) => (
