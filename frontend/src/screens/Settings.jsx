@@ -14,6 +14,7 @@ const PROVIDERS = [
   ['codex_cli', 'Codex CLI (ChatGPT Subscription)'],
   ['antigravity_cli', 'Antigravity CLI (Google Subscription)'],
   ['openai', 'OpenAI'],
+  ['openai_local', 'OpenAI (Local)'],
   ['ollama', 'Ollama (Local)'],
   ['lmstudio', 'LM Studio (Local)'],
   ['openrouter', 'OpenRouter'],
@@ -23,6 +24,8 @@ const PROVIDER_LABEL = Object.fromEntries(PROVIDERS)
 const SEARCHABLE = ['openrouter', 'openai', 'claude_api', 'claude_code']
 // providers that need no key
 const KEYLESS = ['claude_code', 'codex_cli', 'antigravity_cli', 'ollama', 'lmstudio', '']
+// provider settings whose base_url field is llm_local_base_url — one shared setting, not per-section
+const LOCAL_PROVIDER_KEYS = ['llm_provider', 'llm_fallback_provider', 'scoring_llm_provider', 'cv_tailor_llm_provider', 'cover_letter_llm_provider', 'autofill_llm_provider', 'email_llm_provider']
 
 // The value rows' fields are `Input` now (adornment slot and all), so the box
 // lives in ui.jsx with every other field. What is left here is the type these
@@ -360,8 +363,10 @@ export default function Settings() {
       ['models', 'AI', 'Models', '', [
         { kind: 'pair', label: 'Primary provider · model', help: 'Every AI feature uses this pair unless overridden below.',
           pKey: 'llm_provider', mKey: 'llm_model',
-          info: "Providers: Claude API, Claude Code, Codex CLI (your ChatGPT subscription), OpenAI, Ollama (local), LM Studio (local), OpenRouter. The model list shows that provider's models, including any you added under Model catalog. OpenRouter covers every vendor with one key but has no prompt-cache discount. The two subscription CLIs are meant for attended use and have plan limits; a limit hit fails over to the fallback without retrying." },
+          info: "Providers: Claude API, Claude Code, Codex CLI (your ChatGPT subscription), Antigravity CLI (your Google subscription), OpenAI, OpenAI (Local), Ollama (local), LM Studio (local), OpenRouter. The model list shows that provider's models, including any you added under Model catalog. OpenAI (Local) is any OpenAI-compatible endpoint (LM Studio, vLLM, ...) — set its URL below. OpenRouter covers every vendor with one key but has no prompt-cache discount. The two subscription CLIs are meant for attended use and have plan limits; a limit hit fails over to the fallback without retrying." },
         B('API key', 'API key for the primary provider.', 'llm_api_key', { secret: true, mono: true, w: '340px', hide: () => KEYLESS.includes(val('llm_provider', 'claude_api')) }),
+        B('Local endpoint URL', "Base URL for OpenAI (Local) — your LM Studio / vLLM / text-generation-webui address. Shared by every section set to OpenAI (Local); no limit is placed on response length.", 'llm_local_base_url',
+          { mono: true, w: '340px', placeholder: 'http://localhost:1234/v1', hide: () => !LOCAL_PROVIDER_KEYS.some((k) => val(k) === 'openai_local') }),
         LLM('Scoring', 'Model that scores new jobs against your résumés.', 'scoring_llm'),
         LLM('Scoring fallback', 'Retries scoring once on error or rate limit — scoring only.', 'llm_fallback',
           { info: 'Used only when the scoring call fails or is rate-limited. One retry, then the job stays unscored until the next run. Choose a cheap model from a different provider than the primary.' }),

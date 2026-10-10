@@ -58,7 +58,7 @@ PRICING: dict[str, dict[str, dict]] = {
 }
 
 # Providers whose calls are covered by flat subscription / local compute — always $0.
-FREE_PROVIDERS: set[str] = {"claude_code", "codex_cli", "antigravity_cli", "ollama", "lmstudio"}
+FREE_PROVIDERS: set[str] = {"claude_code", "codex_cli", "antigravity_cli", "ollama", "lmstudio", "openai_local"}
 
 # ── OpenRouter live pricing ──────────────────────────────────────────────────
 _OR_PRICES: dict[str, dict] = {}   # slug -> per-Mtok pricing dict
@@ -115,7 +115,7 @@ def calc_cost(provider: str, model: str,
               output_tokens: int = 0,
               cache_read_tokens: int = 0,
               cache_write_tokens: int = 0) -> float:
-    """Calculate USD cost for a single LLM call; returns 0.0 for subscription/local providers or an unpriced (provider, model) combo."""
+    """Calculate USD cost for a single LLM call; returns 0.0 for subscription/local providers (see FREE_PROVIDERS) or an unpriced (provider, model) combo."""
     if provider in FREE_PROVIDERS:
         return 0.0
     p = get_pricing(provider, model)

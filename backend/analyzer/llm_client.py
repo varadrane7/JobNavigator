@@ -167,7 +167,7 @@ async def call_autofill_llm(prompt: str, system: str, max_tokens: int = 400,
 
 async def call_autofill_llm_stream(prompt: str, system: str, max_tokens: int = 400,
                                    cached_prefix: str | None = None):
-    """Streaming version of call_autofill_llm; claude_api and openai/openrouter stream natively, other providers fall back to a single full-answer chunk."""
+    """Streaming version of call_autofill_llm; claude_api and openai/openrouter/openai_local stream natively, other providers fall back to a single full-answer chunk."""
     cfg = resolve_llm_config("autofill")
     provider, model, api_key = cfg["provider"], cfg["model"], cfg["api_key"]
 
@@ -176,8 +176,8 @@ async def call_autofill_llm_stream(prompt: str, system: str, max_tokens: int = 4
             yield c
         return
     combined = f"{cached_prefix}\n\n{prompt}" if cached_prefix else prompt
-    if provider in ("openai", "openrouter"):
-        base = OPENROUTER_BASE_URL if provider == "openrouter" else None
+    if provider in ("openai", "openrouter", "openai_local"):
+        base = OPENROUTER_BASE_URL if provider == "openrouter" else (_local_base_url() if provider == "openai_local" else None)
         async for c in _stream_openai(combined, system, model, api_key, max_tokens, base):
             yield c
         return
@@ -213,6 +213,15 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_HEADERS = {"HTTP-Referer": "https://github.com/vesaias/JobNavigator", "X-Title": "JobNavigator"}
 
 
+def _local_base_url() -> str:
+    """base_url for the openai_local provider — one setting shared by every section, since it names where the local server lives, not a per-feature choice."""
+    db = SessionLocal()
+    try:
+        return _get_setting(db, "llm_local_base_url", "http://localhost:1234/v1")
+    finally:
+        db.close()
+
+
 def _openai_client(api_key: str, base_url: str | None):
     from openai import AsyncOpenAI
     headers = OPENROUTER_HEADERS if base_url == OPENROUTER_BASE_URL else None
@@ -246,6 +255,10 @@ async def _dispatch(provider: str, model: str, api_key: str,
         return await _call_antigravity_cli(combined, system, model, max_tokens)
     elif provider == "openai":
         return await _call_openai(combined, system, model, api_key, max_tokens)
+    elif provider == "openai_local":
+        # Same OpenAI-compatible call, pointed at a user-configured local server
+        # (LM Studio, vLLM, ...) instead of api.openai.com; no key required.
+        return await _call_openai(combined, system, model, api_key, max_tokens, base_url=_local_base_url())
     elif provider == "openrouter":
         # OpenRouter is OpenAI-API-compatible — same client, different base URL.
         # One key reaches every vendor's models (model slug is vendor-prefixed).
