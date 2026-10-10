@@ -17,6 +17,8 @@ const FIELDS = [
   ['autoapply_jitter_min_s', 'Jitter min (s)'],
   ['autoapply_jitter_max_s', 'Jitter max (s)'],
   ['autoapply_quiet_hours', 'Quiet hours (start-end)'],
+  ['autoapply_timezone', 'Time zone'],
+  ['autoapply_submit_timeout_s', 'Per-application timeout (s)'],
   ['autoapply_cover_letter', 'Cover letter'],
   ['autoapply_allow_new_skills', 'Allow new skills when tailoring'],
   ['autoapply_site_caps', 'Per-site caps (JSON)'],
@@ -25,6 +27,7 @@ const FIELDS = [
   ['autoapply_company_blocklist', 'Company blocklist (JSON)'],
   ['autoapply_title_blocklist', 'Title blocklist (JSON)'],
   ['autoapply_cdp_url', 'Chrome CDP URL'],
+  ['autoapply_tailor_prompt', 'Tailoring prompt (summary + skills only)'],
 ]
 
 export default function AutoApplySettings({ onClose, onSaved }) {

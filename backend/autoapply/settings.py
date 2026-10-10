@@ -54,6 +54,8 @@ SPEC = {
     "autoapply_jitter_min_s": ("int", 45, "Shortest wait between two submits"),
     "autoapply_jitter_max_s": ("int", 180, "Longest wait between two submits"),
     "autoapply_quiet_hours": ("str", "23-7", "Hours (start-end, local) with no submits; empty = none"),
+    "autoapply_timezone": ("str", "America/New_York", "Time zone for quiet hours and the daily submit count"),
+    "autoapply_submit_timeout_s": ("int", 420, "Longest one application may take before it is abandoned"),
     "autoapply_cover_letter": ("enum:off|if_field|always", "if_field", "When a cover letter is generated"),
     "autoapply_allow_new_skills": ("bool", False, "Let tailoring add skills that appear nowhere in the base résumé"),
     "autoapply_cdp_url": ("str", "http://host.docker.internal:9222", "Chrome DevTools endpoint of your logged-in Chrome"),

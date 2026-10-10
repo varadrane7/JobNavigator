@@ -19,12 +19,13 @@ const TABS = [
 const TAB_ACTIONS = {
   queue: ['approve', 'reject', 'skip'],
   flight: ['reject', 'skip'],
-  needs: ['approve', 'reject', 'skip'],
+  needs: ['submit', 'reject', 'skip'],
   submitted: [],
-  failed: ['approve', 'skip'],
+  failed: ['submit', 'approve', 'skip'],
   skipped: ['requeue'],
 }
-const ACTION_LABEL = { approve: 'Approve', reject: 'Reject', skip: 'Skip', requeue: 'Requeue' }
+// approve on a failed item rebuilds its documents; submit retries the form with the ones it has.
+const ACTION_LABEL = { approve: 'Approve', reject: 'Reject', skip: 'Skip', requeue: 'Requeue', submit: 'Retry submit' }
 const STATUS_TONE = {
   queued: 'neutral', approved: 'accent', preparing: 'accent', ready: 'accent', submitting: 'accent',
   submitted: 'good', dry_run_ok: 'warn', needs_human: 'warn', failed: 'bad', rejected: 'neutral', skipped: 'neutral',
@@ -114,7 +115,7 @@ export default function AutoApplyQueue() {
           options={TABS.map((t) => ({ value: t.value, label: `${t.label}${tabCount(t) ? ` ${tabCount(t)}` : ''}` }))} />
         <div style={{ flex: 1 }} />
         {TAB_ACTIONS[tab].map((a) => (
-          <Button key={a} size="sm" variant={a === 'approve' || a === 'requeue' ? 'primary' : 'secondary'}
+          <Button key={a} size="sm" variant={a === 'approve' || a === 'requeue' || a === 'submit' ? 'primary' : 'secondary'}
             disabled={!sel.size} busy={busy === a} onClick={() => act(a)}>
             {ACTION_LABEL[a]}{sel.size ? ` ${sel.size}` : ''}
           </Button>

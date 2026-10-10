@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Drawer, Heading, Helper, Label, Link, Mono, Notice, Tag } from '../ui'
-import { getItem, reprepareItem, errText } from './api'
+import { Button, Drawer, Heading, Helper, Input, Label, Link, Mono, Notice, Select, Tag } from '../ui'
+import { getItem, reprepareItem, getQuestions, answerQuestion, errText } from './api'
 
 const skillsText = (s) => {
   if (!s) return ''
@@ -30,14 +30,46 @@ function Compare({ label, before, after }) {
   )
 }
 
+// One parked question: pick from the form's own options when it had any, else free text.
+function QuestionRow({ q, onAnswered, push }) {
+  const [val, setVal] = useState('')
+  const [busy, setBusy] = useState(false)
+  const opts = (q.options || []).filter((o) => o && !/^select/i.test(o))
+  const save = async () => {
+    if (!val.trim()) return
+    setBusy(true)
+    try {
+      const r = await answerQuestion(q.id, val.trim())
+      push?.({ kind: 'success', msg: r.item_requeued ? 'Saved to Q&A bank — item queued to submit again' : 'Saved to Q&A bank' })
+      onAnswered()
+    } catch (e) {
+      push?.({ kind: 'error', msg: errText(e, 'Could not save answer') })
+    } finally { setBusy(false) }
+  }
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <Helper>{q.question}</Helper>
+      <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+        {opts.length
+          ? <Select value={val} onPick={setVal} placeholder="Choose…" options={opts.map((o) => [o, o])} width={360} />
+          : <Input value={val} onChange={(e) => setVal(e.target.value)} placeholder="Your answer" width={360} />}
+        <Button size="sm" onClick={save} busy={busy} disabled={!val.trim()}>Save</Button>
+      </div>
+    </div>
+  )
+}
+
 export default function ItemDrawer({ itemId, onClose, onChanged, push }) {
   const [d, setD] = useState(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [questions, setQuestions] = useState([])
 
+  const loadQuestions = () => getQuestions({ item_id: itemId }).then(setQuestions).catch(() => setQuestions([]))
   useEffect(() => {
     setD(null); setErr('')
     getItem(itemId).then(setD).catch((e) => setErr(errText(e, 'Could not load item')))
+    loadQuestions()
   }, [itemId])
 
   const reprepare = async () => {
@@ -66,6 +98,16 @@ export default function ItemDrawer({ itemId, onClose, onChanged, push }) {
             </div>
             {d.error && <Notice tone="bad" style={{ marginBottom: 12 }}>{d.error}</Notice>}
             {(d.flags || []).map((f) => <Notice key={f} tone="warn" style={{ marginBottom: 8 }}>{f}</Notice>)}
+
+            {questions.length > 0 && (
+              <div style={{ marginBottom: 18 }}>
+                <Label>Questions the form needs you to answer</Label>
+                <Helper size="sm" style={{ marginBottom: 8 }}>Answers are saved to your Persona Q&amp;A bank and reused on every later form.</Helper>
+                {questions.map((q) => (
+                  <QuestionRow key={q.id} q={q} push={push} onAnswered={() => { loadQuestions(); onChanged?.() }} />
+                ))}
+              </div>
+            )}
 
             <Compare label="Summary" before={d.base?.summary} after={d.tailored ? d.tailored.summary : null} />
             <Compare label="Skills" before={skillsText(d.base?.skills)} after={d.tailored ? skillsText(d.tailored.skills) : null} />

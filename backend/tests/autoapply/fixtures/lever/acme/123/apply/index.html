@@ -1,0 +1,33 @@
+<!doctype html><html><meta charset="utf-8"><head><meta charset="utf-8"></head><body>
+<form>
+  <div class="application-question"><div class="application-label">Resume/CV ✱</div><input type="file" name="resume" id="resume-upload-input" required></div>
+  <div class="application-question"><label>Full name ✱<input type="text" name="name" required></label></div>
+  <div class="application-question"><label>Email ✱<input type="email" name="email" required></label></div>
+  <div class="application-question"><label>Phone<input type="text" name="phone"></label></div>
+  <div class="application-question"><label>Current company<input type="text" name="org"></label></div>
+  <div class="application-question"><label>LinkedIn URL<input type="text" name="urls[LinkedIn]"></label></div>
+  <div class="application-question custom-question"><div class="application-label">How many years of C# experience do you have? *</div>
+    <ul><li><label><input type="radio" name="cards[abc][field0]" value="0-2" required>0-2</label></li>
+        <li><label><input type="radio" name="cards[abc][field0]" value="3-5">3-5</label></li>
+        <li><label><input type="radio" name="cards[abc][field0]" value="6+">6+</label></li></ul></div>
+  <p id="err"></p>
+  <button type="submit" id="btn-submit">Submit application</button>
+</form>
+
+<script>
+document.querySelector('form').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var bad = Array.from(document.querySelectorAll('[required]')).filter(function (el) {
+    if (el.type === 'file') return !el.files.length;
+    if (el.type === 'radio') return !document.querySelector('input[name="' + el.name + '"]:checked');
+    if (el.type === 'checkbox') return !el.checked;
+    return !el.value; });
+  var badCombo = Array.from(document.querySelectorAll('[data-combo]')).filter(function (w) { return w.querySelector('[aria-required]') && !w.dataset.value; });
+  if (bad.length || badCombo.length) { var p = document.getElementById('err'); p.textContent = 'Missing: ' + bad.map(function (b) { return b.name || b.id; }).concat(badCombo.map(function (w) { return w.querySelector('input').id; })).join(', '); p.setAttribute('role', 'alert'); return; }
+  var data = {}; Array.from(new FormData(e.target).entries()).forEach(function (kv) { data[kv[0]] = typeof kv[1] === 'string' ? kv[1] : kv[1].name; });
+  document.querySelectorAll('[data-combo]').forEach(function (w) { data[w.querySelector('input').id] = w.dataset.value; });
+  localStorage.setItem('submitted', JSON.stringify(data));
+  location.href = '/lever/acme/123/thanks/';
+});
+</script>
+</body></html>

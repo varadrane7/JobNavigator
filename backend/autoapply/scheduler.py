@@ -10,6 +10,16 @@ logger = logging.getLogger("jobnavigator.autoapply.scheduler")
 QUEUE_JOB_ID = "autoapply_queue"
 PREPARE_JOB_ID = "autoapply_prepare"
 PREPARE_EVERY_MIN = 2
+SUBMIT_JOB_ID = "autoapply_submit"
+
+
+async def run_submit_tick() -> str:
+    from backend.autoapply.runner import tick
+    try:
+        return await tick()
+    except Exception as e:
+        logger.error(f"AutoApply submit tick failed: {e}")
+        return f"error: {e}"
 
 
 async def run_prepare(trigger: str = "scheduler") -> str:
@@ -69,5 +79,8 @@ def register_jobs(scheduler) -> None:
                               id=QUEUE_JOB_ID, replace_existing=True)
         scheduler.add_job(run_prepare, IntervalTrigger(minutes=PREPARE_EVERY_MIN),
                           id=PREPARE_JOB_ID, replace_existing=True, max_instances=1, coalesce=True)
+        # One submission at a time; pacing decides whether this tick actually submits.
+        scheduler.add_job(run_submit_tick, IntervalTrigger(seconds=60),
+                          id=SUBMIT_JOB_ID, replace_existing=True, max_instances=1, coalesce=True)
     except Exception as e:
         logger.error(f"AutoApply scheduler registration failed: {e}")

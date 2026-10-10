@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.models.db import get_db, Resume
 from backend.autoapply import settings as aa_settings
-from backend.autoapply.models import AutoApplyItem, STATUSES
+from backend.autoapply.models import AutoApplyItem, AutoApplyAttempt, AutoApplyQuestion, STATUSES
 
 logger = logging.getLogger("jobnavigator.autoapply.routes")
 
@@ -18,10 +18,12 @@ router = APIRouter(prefix="/autoapply", tags=["autoapply"])
 
 # Review actions: action -> (statuses it may start from, status it sets).
 ACTIONS = {
-    "approve": (("queued", "needs_human", "failed", "dry_run_ok"), "approved"),
+    "approve": (("queued", "failed"), "approved"),
     "reject": (("queued", "approved", "ready", "needs_human", "failed", "dry_run_ok"), "rejected"),
     "skip": (("queued", "approved", "ready", "needs_human", "failed", "dry_run_ok"), "skipped"),
     "requeue": (("rejected", "skipped", "failed"), "queued"),
+    # Retry a parked or dry-run item through the submitter (documents are kept).
+    "submit": (("dry_run_ok", "needs_human", "failed"), "ready"),
 }
 
 
@@ -132,13 +134,20 @@ async def item_action(body: dict, db: Session = Depends(get_db)):
     changed, unchanged = [], []
     for it in db.query(AutoApplyItem).filter(AutoApplyItem.id.in_(ids)).all():
         if it.status in allowed_from:
-            it.status = to
-            it.error = None if to in ("approved", "queued") else it.error
+            if to == "ready" and not it.resume_pdf_path:
+                to_now = "approved"     # never prepared: build documents first
+            else:
+                to_now = to
+            it.status = to_now
+            if to_now == "ready":
+                it.attempts = 0
+                it.next_attempt_at = None
+            it.error = None if it.status in ("approved", "queued", "ready") else it.error
             changed.append(str(it.id))
         else:
             unchanged.append({"id": str(it.id), "status": it.status})
     db.commit()
-    if action == "approve" and changed:
+    if changed and any(i.status == "approved" for i in db.query(AutoApplyItem).filter(AutoApplyItem.id.in_(ids)).all()):
         _kick_prepare()
     return {"changed": changed, "unchanged": unchanged}
 
@@ -230,3 +239,97 @@ async def rebuild_queue():
     except JobAlreadyRunningError:
         return JSONResponse(status_code=409, content={"detail": "queue build already running"})
     return {"run_id": str(run_id)}
+
+
+@router.get("/attempts/{attempt_id}/screenshot/{n}")
+def get_screenshot(attempt_id: str, n: int, db: Session = Depends(get_db)):
+    import os
+    try:
+        aid = uuid.UUID(attempt_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="attempt not found")
+    at = db.query(AutoApplyAttempt).filter(AutoApplyAttempt.id == aid).first()
+    shots = (at.screenshots or []) if at else []
+    if not (0 <= n < len(shots)):
+        raise HTTPException(status_code=404, detail="no such screenshot")
+    data_dir = os.path.realpath(aa_settings.get(db, "autoapply_data_dir"))
+    real = os.path.realpath(shots[n])
+    if not real.startswith(data_dir + os.sep) or not os.path.isfile(real):
+        raise HTTPException(status_code=404, detail="file missing")
+    return FileResponse(real, media_type="image/png")
+
+
+def _question_to_dict(q: AutoApplyQuestion) -> dict:
+    it = q.item
+    return {"id": str(q.id), "item_id": str(q.item_id) if q.item_id else None, "question": q.question,
+            "field_type": q.field_type, "options": q.options or [], "suggested_answer": q.suggested_answer,
+            "answer": q.answer, "status": q.status,
+            "company": it.job.company if it and it.job else None, "title": it.job.title if it and it.job else None}
+
+
+@router.get("/questions")
+def list_questions(status: str = "open", item_id: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(AutoApplyQuestion).filter(AutoApplyQuestion.status == status)
+    if item_id:
+        try:
+            q = q.filter(AutoApplyQuestion.item_id == uuid.UUID(item_id))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="bad item_id")
+    rows = (q
+            .order_by(AutoApplyQuestion.created_at.desc()).limit(500).all())
+    return [_question_to_dict(q) for q in rows]
+
+
+@router.post("/questions/{question_id}/answer")
+async def answer_question(question_id: str, body: dict, db: Session = Depends(get_db)):
+    """Answer a parked question. The answer is saved to the Persona Q&A bank (so every later form,
+    and the extension, reuses it), and an item whose questions are all answered goes back to ready."""
+    from backend.models.db import Persona
+    from sqlalchemy.orm.attributes import flag_modified
+    try:
+        qid = uuid.UUID(question_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="question not found")
+    q = db.query(AutoApplyQuestion).filter(AutoApplyQuestion.id == qid).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="question not found")
+    answer = str((body or {}).get("answer") or "").strip()
+    if not answer:
+        raise HTTPException(status_code=422, detail="answer is required")
+    q.answer, q.status = answer, "answered"
+    q.answered_at = datetime.now(timezone.utc)
+    if (body or {}).get("save_to_bank", True):
+        p = db.query(Persona).filter(Persona.id == 1).first()
+        if p is None:
+            p = Persona(id=1)
+            db.add(p)
+        bank = [e for e in (p.qa_bank or []) if not (isinstance(e, dict) and e.get("question") == q.question)]
+        bank.append({"question": q.question, "answer": answer})
+        p.qa_bank = bank
+        flag_modified(p, "qa_bank")
+    db.flush()
+    requeued = False
+    if q.item_id:
+        open_left = db.query(AutoApplyQuestion).filter(AutoApplyQuestion.item_id == q.item_id,
+                                                       AutoApplyQuestion.status == "open").count()
+        it = db.query(AutoApplyItem).filter(AutoApplyItem.id == q.item_id).first()
+        if not open_left and it and it.status == "needs_human":
+            it.status = "ready" if it.resume_pdf_path else "approved"
+            it.error = None
+            requeued = True
+    db.commit()
+    return {"status": "answered", "item_requeued": requeued}
+
+
+@router.post("/questions/{question_id}/dismiss")
+async def dismiss_question(question_id: str, db: Session = Depends(get_db)):
+    try:
+        qid = uuid.UUID(question_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="question not found")
+    q = db.query(AutoApplyQuestion).filter(AutoApplyQuestion.id == qid).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="question not found")
+    q.status = "dismissed"
+    db.commit()
+    return {"status": "dismissed"}

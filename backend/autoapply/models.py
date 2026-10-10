@@ -42,6 +42,8 @@ class AutoApplyItem(Base):
     base_resume_name = Column(String, nullable=True)
     submitter = Column(String, nullable=False)   # greenhouse|lever|ashby|workday|generic|linkedin|ziprecruiter
     site_host = Column(String, nullable=True)
+    # Where the form actually lives when it differs from Job.url (a careers page that hands off to an ATS).
+    apply_url = Column(String, nullable=True)
     company_key = Column(String, nullable=True, index=True)
     status = Column(String, nullable=False, default="queued", index=True)
 
@@ -100,6 +102,8 @@ class AutoApplyQuestion(Base):
     status = Column(String, default="open", index=True)   # open | answered | dismissed
     created_at = Column(DateTime(timezone=True), default=utcnow)
     answered_at = Column(DateTime(timezone=True), nullable=True)
+
+    item = relationship("AutoApplyItem")
 
 
 Index("ix_autoapply_items_date_status", AutoApplyItem.run_date, AutoApplyItem.status)
