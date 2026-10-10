@@ -23,6 +23,7 @@ from backend.api.routes_cover_letters import router as cover_letters_router
 from backend.api.routes_linkedin import router as linkedin_router
 from backend.api.routes_autofill import router as autofill_router
 from backend.api.routes_llm import router as llm_router
+from backend.autoapply.routes import router as autoapply_router  # AutoApply hook (also registers autoapply_* tables)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("jobnavigator")
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting JobNavigator backend...")
     create_tables()
     run_seeds()
+    from backend.autoapply.seed import run as _autoapply_seed; _autoapply_seed()  # AutoApply hook
 
     # Set initial API key if dashboard_api_key is empty
     db = SessionLocal()
@@ -326,6 +328,7 @@ app.include_router(cover_letters_router, prefix="/api")
 app.include_router(linkedin_router, prefix="/api")
 app.include_router(autofill_router, prefix="/api")
 app.include_router(llm_router, prefix="/api")
+app.include_router(autoapply_router, prefix="/api")  # AutoApply hook
 
 
 # A malformed UUID in a path (/api/jobs/abc) makes Postgres raise DataError deep in

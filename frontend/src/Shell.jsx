@@ -21,6 +21,7 @@ const GROUPS = [
   ]},
   { label: 'Apply', items: [
     { to: '/applications', label: 'Applications', ready: true, countKey: 'apps', Icon: Send },
+    { to: '/autoapply', label: 'AutoApply', ready: true, Icon: Send },  // AutoApply hook
     { to: '/resumes', label: 'Résumés', ready: true, countKey: 'resumes', Icon: FileUser },
     { to: '/cover-letters', label: 'Cover Letters', ready: true, countKey: 'letters', Icon: Mail },
   ]},

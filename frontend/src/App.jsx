@@ -27,6 +27,7 @@ import CoverLetterEditor from './screens/CoverLetterEditor'
 import Settings from './screens/Settings'
 import Persona from './screens/Persona'
 import Stats from './screens/Stats'
+import { autoApplyRoutes } from './autoapply/routes'  // AutoApply hook
 import axios from 'axios'
 import { useTheme } from './theme'
 import { TitleSync } from './useTitle'
@@ -243,6 +244,7 @@ function App() {
           <Route path="settings" element={<Settings />} />
           <Route path="persona" element={<Persona />} />
           <Route path="stats" element={<Stats />} />
+          {autoApplyRoutes() /* AutoApply hook */}
         </Route>
         {/* labRoute returns null when design-base/ is absent; React skips a null child. */}
         {labRoute('ToastLab', '/toasts')}

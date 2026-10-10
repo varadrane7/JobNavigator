@@ -100,6 +100,7 @@ def configure_scheduler():
         f"Scheduler configured: scrape every {scrape_interval}m, "
         f"email every {email_interval}m, {len(scheduler.get_jobs())} total jobs"
     )
+    from backend.autoapply.scheduler import register_jobs; register_jobs(scheduler)  # AutoApply hook: after remove_all_jobs()
 
 
 # ── Run summaries ───────────────────────────────────────────────────────────
