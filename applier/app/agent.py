@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 
 logger = logging.getLogger("applier.agent")
@@ -19,20 +20,24 @@ RESULT_RE = re.compile(r"^\s*RESULT:\s*(\{.*\})\s*$", re.M)
 SUBMIT_WORD = re.compile(r"\b(submit|send application|apply)\b", re.I)
 
 
-def mcp_config(workdir: str) -> dict:
-    return {"mcpServers": {"playwright": {
+def mcp_config(workdir: str, draft_env: dict | None = None) -> dict:
+    servers = {"playwright": {
         "command": "playwright-mcp",
         "args": ["--cdp-endpoint=http://127.0.0.1:9222", f"--output-dir={workdir}/out",
                  "--viewport-size=1366x900", "--timeout-action=10000", "--image-responses=omit"],
-    }}}
+    }}
+    if draft_env:
+        servers["jn"] = {"command": sys.executable, "args": ["-m", "app.jn_tools"], "env": draft_env}
+    return {"mcpServers": servers}
 
 
-def command(model: str, workdir: str, max_turns: int) -> list[str]:
+def command(model: str, workdir: str, max_turns: int, draft_env: dict | None = None) -> list[str]:
     path = os.path.join(workdir, ".mcp.json")
     with open(path, "w") as f:
-        json.dump(mcp_config(workdir), f)
+        json.dump(mcp_config(workdir, draft_env), f)
+    allowed = "mcp__playwright,mcp__jn" if draft_env else "mcp__playwright"
     cmd = ["claude", "-p", "--mcp-config", path, "--strict-mcp-config",
-           "--allowedTools", "mcp__playwright", "--disallowedTools", ",".join(DENY),
+           "--allowedTools", allowed, "--disallowedTools", ",".join(DENY),
            "--output-format", "stream-json", "--verbose", "--no-session-persistence",
            "--max-turns", str(max_turns)]
     if model:
@@ -69,11 +74,11 @@ def parse_result(text: str) -> dict | None:
     return None
 
 
-async def run(run, prompt: str, model: str, timeout_s: int, max_turns: int) -> None:
+async def run(run, prompt: str, model: str, timeout_s: int, max_turns: int, draft_env: dict | None = None) -> None:
     """Fills run.steps / run.transcript / run.usage while it goes; sets run.result at the end."""
     env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
     proc = await asyncio.create_subprocess_exec(
-        *command(model, run.workdir, max_turns), cwd=run.workdir, env=env,
+        *command(model, run.workdir, max_turns, draft_env), cwd=run.workdir, env=env,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
         limit=32 * 2**20)
     run.proc = proc

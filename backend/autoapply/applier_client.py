@@ -40,6 +40,21 @@ async def health(base_url: str) -> dict:
         return {"reachable": False, "error": str(e) or type(e).__name__}
 
 
+def _dashboard_key() -> str:
+    """The key the extension and draft_answer send as X-API-Key (same one the dashboard checks)."""
+    try:
+        from backend.config import INITIAL_API_KEY
+        from backend.models.db import SessionLocal, Setting
+        db = SessionLocal()
+        try:
+            row = db.query(Setting).filter(Setting.key == "dashboard_api_key").first()
+            return (row.value if row and row.value else INITIAL_API_KEY) or ""
+        finally:
+            db.close()
+    except Exception:
+        return ""
+
+
 def request_body(packet: Packet, cfg: dict) -> dict:
     ctx = packet.ctx
     files = [f for f in (_file("resume", packet.resume_pdf), _file("cover_letter", packet.cover_letter_pdf)) if f]
@@ -50,8 +65,11 @@ def request_body(packet: Packet, cfg: dict) -> dict:
         "decline_self_id": bool(ctx.decline_self_id), "files": files,
         "extra_instructions": cfg.get("autoapply_agent_instructions") or "",
         "model": cfg.get("autoapply_agent_model") or "",
-        "timeout_s": int(cfg.get("autoapply_agent_timeout_s") or 900),
-        "max_turns": int(cfg.get("autoapply_agent_max_turns") or 150),
+        "timeout_s": int(cfg.get("autoapply_agent_timeout_s") or 600),
+        "max_turns": int(cfg.get("autoapply_agent_max_turns") or 60),
+        "autofill": ({"server_url": cfg.get("autoapply_agent_backend_url") or "http://backend:8000",
+                      "api_key": _dashboard_key()}
+                     if cfg.get("autoapply_agent_autofill", True) else None),
     }
 
 

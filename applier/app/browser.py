@@ -72,3 +72,30 @@ async def screenshot() -> tuple[str | None, str]:
 def b64(path: str) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
+
+
+async def configure_extension(server_url: str, api_key: str) -> bool:
+    """Point the bundled Navigator extension at the dashboard and turn on auto structured fill.
+    Done through its service worker; the values persist in the profile, but are rewritten each run so a
+    changed key or URL takes effect. False if the worker never showed up (extension not loaded)."""
+    payload = {"serverUrl": server_url, "apiKey": api_key, "structuredAutofillEnabled": True,
+               "structuredAutofillTrigger": "auto", "previewUnblock": False}
+    expr = f"chrome.storage.sync.set({json.dumps(payload)}).then(() => 'ok')"
+    for _ in range(20):
+        try:
+            async with httpx.AsyncClient(timeout=5) as c:
+                targets = (await c.get(f"{CDP}/json/list")).json()
+            sw = next((t for t in targets if t.get("type") == "service_worker"
+                       and t.get("url", "").startswith("chrome-extension://")), None)
+            if sw:
+                async with websockets.connect(sw["webSocketDebuggerUrl"]) as ws:
+                    await ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
+                                              "params": {"expression": expr, "awaitPromise": True}}))
+                    while True:
+                        msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+                        if msg.get("id") == 1:
+                            return (msg.get("result") or {}).get("result", {}).get("value") == "ok"
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+    return False

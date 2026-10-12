@@ -54,8 +54,9 @@ class RunRequest(BaseModel):
     extra_instructions: str = ""
     files: list[FileIn] = Field(default_factory=list)
     model: str = ""
-    timeout_s: int = 900
-    max_turns: int = 150
+    timeout_s: int = 600
+    max_turns: int = 60
+    autofill: Optional[dict] = None     # {server_url, api_key}: extension autofill + draft_answer tool
 
 
 class Run:
@@ -72,6 +73,7 @@ class Run:
         self.clicked_submit_like = False
         self.screenshots: list[dict] = []
         self.proc = None
+        self.autofill = False
         self.task: asyncio.Task | None = None
 
     def view(self, full: bool) -> dict:
@@ -113,8 +115,16 @@ async def _go(run: Run) -> None:
             run.result = {"status": "failed", "reason": "browser did not start"}
             return
         await browser.reset_tabs()
-        text = prompt.build(run.req, files)
-        await agent.run(run, text, run.req.model or DEFAULT_MODEL, run.req.timeout_s, run.req.max_turns)
+        af = run.req.autofill or {}
+        draft_env = None
+        if af.get("server_url"):
+            ext_ok = await browser.configure_extension(af["server_url"], af.get("api_key", ""))
+            run.steps.append("autofill extension " + ("ready" if ext_ok else "not available"))
+            draft_env = {"JN_URL": af["server_url"], "JN_KEY": af.get("api_key", ""),
+                         "JN_COMPANY": run.req.company, "JN_TITLE": run.req.title}
+            run.autofill = ext_ok
+        text = prompt.build(run.req, files, extension=bool(run.autofill), draft=bool(draft_env))
+        await agent.run(run, text, run.req.model or DEFAULT_MODEL, run.req.timeout_s, run.req.max_turns, draft_env)
     except asyncio.CancelledError:
         run.result = {"status": "failed", "reason": "cancelled", "submit_clicked": run.clicked_submit_like}
     except Exception as e:

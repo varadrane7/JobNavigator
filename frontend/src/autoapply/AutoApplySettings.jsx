@@ -42,6 +42,8 @@ const SECTIONS = [
     ['autoapply_agent_model', 'Claude model', 'agentModel'],
     ['autoapply_agent_timeout_s', 'Time limit per application (s)'],
     ['autoapply_agent_max_turns', 'Max agent turns'],
+    ['autoapply_agent_autofill', 'Use the Navigator extension + draft_answer (saves model turns)'],
+    ['autoapply_agent_backend_url', 'Backend URL as seen from the applier'],
     ['autoapply_agent_instructions', 'Extra instructions for every application', 'long'],
     ['autoapply_live_view_url', 'Live view link'],
   ]],

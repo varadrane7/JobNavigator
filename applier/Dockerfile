@@ -16,6 +16,8 @@ COPY applier/requirements.txt /opt/applier/requirements.txt
 RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r /opt/applier/requirements.txt
 
 COPY applier/app /opt/applier/app
+# The same Navigator extension the dashboard ships: structured autofill runs inside every page the agent opens.
+COPY extension /opt/applier/extension
 COPY applier/entrypoint.sh /opt/applier/entrypoint.sh
 RUN chmod +x /opt/applier/entrypoint.sh /opt/applier/app/start-chrome.sh && mkdir -p /data /work && chown -R pwuser:pwuser /data /work
 

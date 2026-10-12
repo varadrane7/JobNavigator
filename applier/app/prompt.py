@@ -30,7 +30,7 @@ Application URL: {url}
 == RESUME (the source of truth for experience, dates, employers, skills) ==
 {resume}
 {cover_letter}
-{extra}
+{extra}{helpers}
 == HOW TO WORK ==
 1. browser_navigate to the application URL. Take a browser_snapshot and read it before acting.
 2. If the page is a job description, find and click the Apply / Apply for this job / I'm interested button.
@@ -51,6 +51,7 @@ Application URL: {url}
    - Dates: use the format the field shows.
 9. A required question you cannot answer truthfully from the data above (e.g. a specific certification, security clearance, a yes/no fact not given): do NOT invent an answer. Collect it and report "needs_human" with the exact question text, the field type and the options, after filling everything else.
 10. Multi-page forms: after each page, check for validation errors in the snapshot, fix them, then continue.
+10b. Be economical: one browser_snapshot per page, fill many fields with a single browser_fill_form call, never re-snapshot just to admire your work, no screenshots.
 11. Before the final submit, take a browser_snapshot and verify every required field is filled correctly.
 12. {submit_rule}
 13. After submitting, wait for the confirmation (a thank-you message, a "submitted" page, or a confirmation URL). If an email verification code is asked for, report "needs_human" with that as the question.
@@ -76,7 +77,22 @@ def _block(v) -> str:
     return json.dumps(v, indent=1, ensure_ascii=False)
 
 
-def build(req, files: list[tuple[str, str]]) -> str:
+EXTENSION_NOTE = """
+== AUTOFILL EXTENSION ==
+A browser extension fills standard fields (name, email, phone, links, work authorization, sponsorship, EEO)
+by itself a moment after a form appears; it shows a small "N fields filled" pill. Do NOT retype what it filled.
+After the form renders, take ONE browser_snapshot, read which fields already have values, and only act on
+empty or wrong ones. If nothing is filled after a snapshot, fill them yourself.
+"""
+DRAFT_NOTE = """
+== draft_answer TOOL ==
+For every free-text question (why this company, tell us about..., describe..., cover note) call the
+draft_answer tool with the exact question (and max_chars if the field shows a limit) and paste the text it
+returns. Do not write those answers yourself. If it errors, write a short truthful answer from the resume.
+"""
+
+
+def build(req, files: list[tuple[str, str]], extension: bool = False, draft: bool = False) -> str:
     """`req` is the RunRequest; `files` is [(kind, filename in the working dir)]."""
     if req.dry_run:
         mode = "DRY RUN. Fill the whole form but do NOT click the final submit button."
@@ -96,5 +112,6 @@ def build(req, files: list[tuple[str, str]]) -> str:
         qa_bank=_block([{"q": q.get("question"), "a": q.get("answer")} for q in (req.qa_bank or [])
                         if isinstance(q, dict) and q.get("answer")]),
         resume=_block(req.resume_text), cover_letter=cl, extra=extra, self_id=self_id,
+        helpers=(EXTENSION_NOTE if extension else "") + (DRAFT_NOTE if draft else ""),
         submit_rule=submit_rule, statuses=", ".join(STATUSES),
     )
