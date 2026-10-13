@@ -1,6 +1,6 @@
 # Daily curator
 
-Every morning (default **04:00 America/New_York**) the curator turns the day's few
+Every morning (default **04:30 America/New_York**, after the Claude/Antigravity limits reset) the curator turns the day's few
 hundred new jobs into a ranked list of 50 worth applying to today, saves them,
 and finds 15–20 people to contact about them. Results are on the **Today**
 screen, and a summary goes to Telegram.
@@ -36,6 +36,14 @@ Each pick gets an **apply window**:
 - **today**: the rest.
 
 It also gets a one-line reason, e.g. `fit 86 (SDE) · posted 5h ago · H-1B 320 LCAs · Series C '25 · ~$140k base (posted)`.
+
+## Which model does what
+
+| Work | Model | Why |
+|---|---|---|
+| Fit scoring of unscored shortlist jobs | the **Scoring** model (your local one) | per job, there are many |
+| Embedding pre-filter | `curate_embed_model` on the local server | seconds for hundreds of JDs |
+| Company research, outreach drafts | `curator_llm` → `curator_fallback_llm` → local | defaults: Antigravity `gemini-3.8-flash-medium`, then Claude Code `claude-sonnet-5`, then the local model. A model that fails or hits its limit is skipped for the rest of the run. `curate_concurrency` (4) calls run in parallel |
 
 ## People to contact
 
@@ -84,7 +92,7 @@ Find these in Settings → Pipeline → Daily curator:
 
 - `curate_cron`, `curate_count`, `curate_window_hours`, `curate_llm_pool`, `curate_auto_ignore`
 - `target_base_min`, `target_base_max`, `curate_title_exclude`, `curate_weights`, `curate_embed_model`
-- `curator_llm_*`
+- `curator_llm_*`, `curator_fallback_llm_*`, `curate_concurrency`
 - `outreach_count`, `linkedin_people_daily_cap`, `searxng_url`
 
 **Run now** (on the Today screen or in Settings) does the same thing as the cron run. `POST /api/curator/run` takes the flags `outreach=false` and `send=false`.

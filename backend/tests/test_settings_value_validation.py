@@ -47,6 +47,7 @@ def test_int_keys_match_the_nine_rows_settings_marks_int():
         "target_base_max",
         "outreach_count",
         "linkedin_people_daily_cap",
+        "curate_concurrency",
     }
 
 

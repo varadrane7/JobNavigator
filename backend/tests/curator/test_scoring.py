@@ -32,6 +32,20 @@ def test_min_years_required(jd, yrs):
     assert s.min_years_required(jd) == yrs
 
 
+@pytest.mark.parametrize("jd,hit", [
+    ("Applicants must be U.S. citizens due to contract requirements.", True),
+    ("Requires an active Secret clearance.", True),
+    ("We are unable to sponsor visas for this role.", True),
+    ("This position does not offer visa sponsorship.", True),
+    ("Candidates must be authorized to work without sponsorship.", True),
+    ("Subject to ITAR.", True),
+    ("We sponsor H-1B visas and support green card applications.", False),
+    ("Build services in Go.", False),
+])
+def test_jd_blocker(jd, hit):
+    assert (s.jd_blocker(jd) is not None) == hit
+
+
 def test_freshness_curve():
     assert s.freshness(1) == 1.0
     assert 0.4 < s.freshness(24) < 0.5
@@ -51,6 +65,7 @@ def test_comp_estimate_prefers_posted_then_lca_then_web():
     assert s.comp_estimate(None, None, 150000, 1, 2) == (150000, "lca")
     assert s.comp_estimate(None, None, None, 130000, 150000) == (140000, "web")
     assert s.comp_estimate(None, None) == (None, "")
+    assert s.comp_estimate(0, 45, 150000) == (150000, "lca")          # hourly / placeholder figures ignored
 
 
 def test_comp_score_band():

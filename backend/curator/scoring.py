@@ -15,6 +15,15 @@ STAGE_STABILITY = {
 FRIENDLY_ATS = ("greenhouse.io", "ashbyhq.com", "lever.co", "workable.com", "rippling.com")
 SLOW_ATS = ("myworkdayjobs.com", "taleo.net", "icims.com", "successfactors", "oraclecloud.com", "brassring")
 
+# Postings a STEM-OPT candidate who will need H-1B cannot take, whatever the
+# company's sponsorship record says.
+_BLOCKERS = re.compile(
+    r"\b(u\.?s\.? citizen(s|ship)?|united states citizen(s|ship)?|citizens only|must be a citizen|"
+    r"(active|current|secret|top secret|ts/sci|dod|public trust) (security )?clearance|clearance required|"
+    r"able to obtain (a |an )?(security )?clearance|green card holders?( only)?|permanent residents? only|"
+    r"(not|unable to|cannot|can't|won't|will not|do not|does not) (provide |offer )?(visa )?sponsor(ship)?|"
+    r"no (visa )?sponsorship|without (the need for )?(visa )?sponsorship|"
+    r"not eligible for (visa )?sponsorship|itar|export control(led)? (regulations|laws))\b", re.I)
 _YOE = re.compile(r"(\d{1,2})\s*\+?\s*(?:-|–|to)?\s*(?:\d{1,2}\s*)?\+?\s*years?(?:\s+of)?(?:\s+\w+){0,4}?\s+experience", re.I)
 
 
@@ -36,6 +45,12 @@ def title_excluded(title: str, words: list[str]) -> str | None:
         elif re.search(rf"\b{re.escape(w)}\b", t):
             return w
     return None
+
+
+def jd_blocker(description: str) -> str | None:
+    """The phrase that rules the job out for a visa holder (citizenship, clearance, no sponsorship), or None."""
+    m = _BLOCKERS.search(description or "")
+    return m.group(0).lower() if m else None
 
 
 def min_years_required(description: str) -> int | None:
@@ -76,7 +91,9 @@ def sponsor_score(lca_count: int | None, approval_rate: float | None, jd_flag: b
 
 def comp_estimate(salary_min, salary_max, lca_median=None, intel_min=None, intel_max=None) -> tuple[int | None, str]:
     """(estimated base, where it came from)."""
-    lo, hi = salary_min or 0, salary_max or 0
+    # under $20k is an hourly/monthly figure or a placeholder, not an annual base
+    lo = salary_min if salary_min and salary_min >= 20000 else 0
+    hi = salary_max if salary_max and salary_max >= 20000 else 0
     if lo and hi:
         return (lo + hi) // 2, "posted"
     if lo or hi:

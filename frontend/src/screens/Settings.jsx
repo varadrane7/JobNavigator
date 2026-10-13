@@ -25,7 +25,7 @@ const SEARCHABLE = ['openrouter', 'openai', 'claude_api', 'claude_code']
 // providers that need no key
 const KEYLESS = ['claude_code', 'codex_cli', 'antigravity_cli', 'ollama', 'lmstudio', 'openai_local', '']
 // provider settings whose base_url field is llm_local_base_url — one shared setting, not per-section
-const LOCAL_PROVIDER_KEYS = ['llm_provider', 'llm_fallback_provider', 'scoring_llm_provider', 'cv_tailor_llm_provider', 'cover_letter_llm_provider', 'autofill_llm_provider', 'email_llm_provider', 'curator_llm_provider']
+const LOCAL_PROVIDER_KEYS = ['llm_provider', 'llm_fallback_provider', 'scoring_llm_provider', 'cv_tailor_llm_provider', 'cover_letter_llm_provider', 'autofill_llm_provider', 'email_llm_provider', 'curator_llm_provider', 'curator_fallback_llm_provider']
 
 // The value rows' fields are `Input` now (adornment slot and all), so the box
 // lives in ui.jsx with every other field. What is left here is the type these
@@ -211,7 +211,7 @@ export default function Settings() {
       setS(s.data || {}); setDefaults(d.data || {}); setEfforts(e.data?.efforts || {})
       // an override row starts open when it actually has a provider or an effort set
       const o = {}
-      for (const k of ['scoring_llm', 'llm_fallback', 'cv_tailor_llm', 'cover_letter_llm', 'autofill_llm', 'email_llm']) {
+      for (const k of ['scoring_llm', 'llm_fallback', 'cv_tailor_llm', 'cover_letter_llm', 'autofill_llm', 'email_llm', 'curator_llm', 'curator_fallback_llm']) {
         o[k] = !!((s.data || {})[`${k}_provider`] || (s.data || {})[`${k}_effort`])
       }
       setOvr(o)
@@ -441,7 +441,7 @@ export default function Settings() {
         B('Job cleanup · cron', 'Purges expired postings.', 'cleanup_cron', { mono: true, cron: true, w: '135px' }),        
       ]],
       ['curator', '', 'Daily curator', 'ranks the day\u2019s new jobs and saves the best · Today screen', [
-        B('Curate · cron', 'When the Top list is built (app time zone). Run it after the night\u2019s scrapes.', 'curate_cron', { mono: true, cron: true, w: '135px' }),
+        B('Curate · cron', 'When the Top list is built (app time zone) — 4:30 by default, after the CLI limits reset.', 'curate_cron', { mono: true, cron: true, w: '135px' }),
         B('Jobs per day', 'How many jobs are saved and ranked.', 'curate_count', { mono: true, int: true, w: '135px' }),
         B('Window · hours', 'Only jobs posted or first seen this recently are considered.', 'curate_window_hours', { mono: true, int: true, w: '135px' }),
         B('LLM pool', 'Jobs scored by the LLM after the embedding pre-filter.', 'curate_llm_pool', { mono: true, int: true, w: '135px' }),
@@ -451,7 +451,9 @@ export default function Settings() {
         E('Title excludes', 'Titles containing these words are never picked.', 'curate_title_exclude', { list: true, sub: 'one word per line · case-insensitive' }),
         E('Weights', 'How the composite score is built.', 'curate_weights', { json: true, sub: 'JSON — fit, fresh, visa_comp, reply, stability' }),
         B('Embedding model', 'Model on the OpenAI (Local) endpoint used for the résumé-similarity pre-filter. Empty = skip.', 'curate_embed_model', { mono: true, w: '340px' }),
-        LLM('Curator model', 'Company research and outreach drafts.', 'curator_llm'),
+        LLM('Curator model', 'Company research and outreach drafts. Fit scoring stays on the Scoring model.', 'curator_llm'),
+        LLM('Curator fallback', 'Used when the curator model fails or hits its limit; the local model is the last resort.', 'curator_fallback_llm'),
+        B('Curator parallel calls', 'Company research and drafts in parallel.', 'curate_concurrency', { mono: true, int: true, w: '135px' }),
         B('People per day', 'Founders, hiring managers and recruiters found for the top companies.', 'outreach_count', { mono: true, int: true, w: '135px' }),
         B('LinkedIn searches · cap', 'People searches per day (mock account first, then personal).', 'linkedin_people_daily_cap', { mono: true, int: true, w: '135px' }),
         B('SearXNG URL', 'Search service the curator uses.', 'searxng_url', { mono: true, w: '340px' }),

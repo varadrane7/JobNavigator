@@ -95,11 +95,16 @@ def load_pool(window_hours: int) -> tuple[list[dict], list]:
 
 
 def hard_drop(job: dict, title_exclude: list) -> str | None:
+    if not job["company"].strip():
+        return "no company"
     w = scoring.title_excluded(job["title"], title_exclude)
     if w:
         return f"title: {w}"
     if job["jd_flag"]:
         return "no sponsorship"
+    blocker = scoring.jd_blocker(job["description"])
+    if blocker:
+        return f"jd: {blocker}"
     yrs = scoring.min_years_required(job["description"])
     if yrs is not None and yrs >= 6:
         return f"{yrs}+ years"
@@ -315,6 +320,8 @@ def _count(values) -> dict:
 
 async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: bool = False) -> dict:
     """dry_run: rank and return the Top list without saving/ignoring jobs, finding people or messaging."""
+    from backend.curator.llm import reset_run
+    reset_run()
     cfg = _settings()
     now = datetime.now(timezone.utc)
     pool, pool_ids = await asyncio.to_thread(load_pool, cfg["window_hours"])
