@@ -810,6 +810,7 @@ END $$;""",
         "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS curation JSONB",
         "CREATE INDEX IF NOT EXISTS ix_jobs_curated_on ON jobs(curated_on)",
         "CREATE INDEX IF NOT EXISTS ix_jobs_discovered_at ON jobs(discovered_at)",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS location VARCHAR",
         # AutoApply was removed; drop its tables and settings (no-ops once gone).
         "DROP TABLE IF EXISTS autoapply_attempts, autoapply_questions, autoapply_items, "
         "autoapply_llm_usage, autoapply_ats_credentials CASCADE",

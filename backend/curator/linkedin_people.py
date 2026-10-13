@@ -51,6 +51,34 @@ def parse_card(text: str) -> tuple[str, str]:
     return name, headline
 
 
+def card_details(text: str, headline: str) -> dict:
+    """{location, country, current_text, past_text} from a people-search card: the location line
+    under the headline, and the "Current: ..." / "Past: ..." lines LinkedIn adds when the keywords
+    matched a position."""
+    from backend.analyzer.location import parse as parse_location
+    lines = [l.strip(" •·") for l in (text or "").splitlines() if l.strip(" •·")]
+    out = {"location": None, "country": None, "current_text": None, "past_text": None}
+    for l in lines:
+        low = l.lower()
+        if low.startswith("current:"):
+            out["current_text"] = l.split(":", 1)[1].strip()
+        elif low.startswith("past:"):
+            out["past_text"] = l.split(":", 1)[1].strip()
+    after = lines[lines.index(headline) + 1:] if headline in lines else []
+    for l in after[:3]:
+        if l.lower().startswith(("current:", "past:", "summary:")) or l.lower() in _NOISE:
+            continue
+        country = parse_location(l).get("country")
+        if country:
+            out["location"], out["country"] = l, country
+            break
+    return out
+
+
+# LinkedIn geo ids for the people-search location filter
+_GEO_URN = {"US": "103644278", "CA": "101174742", "GB": "101165590", "IN": "102713980", "DE": "101282230"}
+
+
 def _cap() -> int:
     db = SessionLocal()
     try:
@@ -146,8 +174,10 @@ class LinkedInPeople:
             self.dead = True
             return False
 
-    async def search(self, keywords: str) -> list[dict]:
-        """[{name, headline, url, source}] for one people search; [] when capped or unusable."""
+    async def search(self, keywords: str, country: str | None = None) -> list[dict]:
+        """[{name, headline, url, source, location, country, current, past_text}] for one people
+        search, filtered to `country` when LinkedIn has a geo id for it; [] when capped or unusable.
+        `current` is True/False when the card's Current:/Past: line settles it, else None."""
         from backend.scraper.sources import linkedin_personal as lp
         today = local_today()
         if _USED.get(today, 0) >= _cap():
@@ -158,6 +188,9 @@ class LinkedInPeople:
             await asyncio.sleep(random.uniform(20, 60))
         _USED[today] = _USED.get(today, 0) + 1
         url = f"https://www.linkedin.com/search/results/people/?keywords={quote(keywords)}&origin=GLOBAL_SEARCH_HEADER"
+        geo = _GEO_URN.get(country or "")
+        if geo:
+            url += "&geoUrn=" + quote(f'["{geo}"]')
         for attempt in range(2):
             try:
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -172,8 +205,11 @@ class LinkedInPeople:
                 for c in cards:
                     name, headline = parse_card(c.get("text", ""))
                     if name and "linkedin member" not in name.lower():
+                        d = card_details(c.get("text", ""), headline)
                         out.append({"name": name, "headline": headline, "url": c["url"],
-                                    "source": f"linkedin_{self.account}"})
+                                    "source": f"linkedin_{self.account}", "location": d["location"],
+                                    "country": d["country"] or (country if geo else None),
+                                    "current_text": d["current_text"], "past_text": d["past_text"]})
                 return out
             except Exception as e:
                 logger.warning(f"LinkedIn people search failed ({keywords!r}): {e}")

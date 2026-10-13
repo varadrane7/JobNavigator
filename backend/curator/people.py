@@ -1,5 +1,9 @@
 """Find people to contact about a curated job: founders, hiring managers, recruiters.
 
+Only people who still work at the company (their profile's current employer) and
+sit in the job's country are kept; hiring managers for the role's area and
+technical / early-career recruiters rank first.
+
 Public search first (SearXNG `site:linkedin.com/in`), LinkedIn's own people search
 only when that finds nobody useful, then a best-guess work email from the company's
 known email format, and a short LinkedIn note + cold email drafted by the LLM.
@@ -7,6 +11,10 @@ known email format, and a short LinkedIn note + cold email drafted by the LLM.
 import logging
 import re
 
+from urllib.parse import urlparse
+
+from backend.analyzer.location import fold
+from backend.analyzer.location import parse as parse_location
 from backend.curator.intel import make_email
 from backend.curator.linkedin_people import LinkedInPeople
 from backend.curator.llm import ask_json
@@ -38,20 +46,81 @@ def split_name(name: str) -> tuple[str, str]:
     return parts[0], (parts[-1] if len(parts) > 1 else "")
 
 
+# ── where they are, and whether they still work there ──────────────────────
+# Public profile snippets read "Engineering Manager at Ramp · Experience: Ramp ·
+# Location: New York City Metropolitan Area". The Experience line is the current
+# employer; the profile's country shows in the Location line or, failing that, in
+# the LinkedIn subdomain (in.linkedin.com, ch.linkedin.com; www is mostly the US).
+_LOCATION = re.compile(r"\b(?:Location|Lokalizacja|Ubicación|Localização|Standort|Lieu|Locatie|Località|Plats)\s*:\s*([^·\n]+)", re.I)
+_EXPERIENCE = re.compile(r"\b(?:Experience|Doświadczenie|Experiencia|Experiência|Berufserfahrung|Expérience|Ervaring|Esperienza|Erfarenhet)\s*:\s*([^·\n]+)", re.I)
+_LI_SUBDOMAIN = {"uk": "GB"}
+_ZIP = re.compile(r"^\d{5}(?:-\d{4})?$")
+_FORMER = re.compile(r"\b(?:ex|former(?:ly)?|previously|prev|past|alum\w*|retired)\b[^|·,;/]*$", re.I)
+_CO_SUFFIX = {"inc", "llc", "ltd", "limited", "corp", "corporation", "co", "company", "technologies", "technology",
+              "labs", "software", "systems", "group", "holdings", "platforms", "hq", "the", "us", "usa", "pbc"}
+
+
+def _co_words(name: str) -> list[str]:
+    words = re.findall(r"[a-z0-9]+", fold(name).replace("&", " and "))
+    return [w for w in words if w not in _CO_SUFFIX] or words
+
+
+def same_company(a: str, b: str) -> bool:
+    """"Stripe, Inc." == "Stripe"; "Ramp Network" != "Ramp"."""
+    return bool(a and b) and _co_words(a) == _co_words(b)
+
+
+def names_company(text: str, company: str) -> bool:
+    """True when `text` names `company` as a current employer, not "ex-Ramp" or "formerly at Ramp"."""
+    words = _co_words(company)
+    if not words or not text:
+        return False
+    folded = fold(text)
+    for m in re.finditer(r"(?<![a-z0-9])" + r"[^a-z0-9]+".join(map(re.escape, words)) + r"(?![a-z0-9])", folded):
+        if not _FORMER.search(folded[max(0, m.start() - 30):m.start()]):
+            return True
+    return False
+
+
+def profile_country(url: str, location: str | None) -> str | None:
+    """ISO country of a profile from its Location text, else its LinkedIn subdomain; None when unknown."""
+    loc = (location or "").strip()
+    if loc:
+        if _ZIP.match(loc):
+            return "US"
+        country = parse_location(loc).get("country")
+        if country:
+            return country
+    host = (urlparse(url).hostname or "").lower()
+    sub = host.split(".")[0] if host.endswith("linkedin.com") else ""
+    if len(sub) == 2:
+        return _LI_SUBDOMAIN.get(sub, sub.upper())
+    return None
+
+
 def parse_linkedin_hit(r: dict, company: str) -> dict | None:
-    """{name, headline, url} from a SearXNG result for a linkedin.com/in profile at `company`."""
+    """{name, headline, url, location, country, current} from a SearXNG result for a linkedin.com/in
+    profile that mentions `company`. `current` is False when the profile shows they left (or never
+    worked there: the hit only matched on the snippet)."""
     url = (r.get("url") or "").split("?")[0]
     if "linkedin.com/in/" not in url:
         return None
     title = re.sub(r"\s*\|\s*LinkedIn.*$", "", r.get("title") or "").strip()
     parts = re.split(r"\s+[-–—|]\s+", title, maxsplit=1)
     name, headline = parts[0], (parts[1] if len(parts) > 1 else "")
-    headline = headline or (r.get("snippet") or "")[:140]
-    blob = f"{title} {r.get('snippet', '')}".lower()
-    ckey = company.lower().split()[0] if company else ""
-    if not name or not ckey or ckey not in blob:
+    snippet = r.get("snippet") or ""
+    headline = headline or snippet[:140]
+    if not name or not company or not names_company(f"{title} {snippet}", company):
         return None
-    return {"name": name.strip(), "headline": headline.strip(), "url": url}
+    exp = _EXPERIENCE.search(snippet)
+    loc = _LOCATION.search(snippet)
+    location = loc.group(1).strip(" .…") if loc else None
+    if exp:
+        current = same_company(exp.group(1).strip(" .…"), company)
+    else:
+        current = names_company(headline, company)
+    return {"name": name.strip(), "headline": headline.strip(), "url": url, "location": location,
+            "country": profile_country(url, location), "current": current}
 
 
 def priority(kind: str | None, small_company: bool) -> int:
@@ -64,43 +133,123 @@ def priority(kind: str | None, small_company: bool) -> int:
     return 0
 
 
+# ── what team the role sits on ──────────────────────────────────────────────
+# (area, pattern on a job title or a headline, SearXNG query terms, LinkedIn search word)
+_AREAS = [
+    ("ml", r"machine learning|\bml\b|\bai\b|applied scien|deep learning|\bllm|\bnlp\b|computer vision|perception",
+     '("machine learning" OR AI OR ML)', "machine learning"),
+    ("data", r"\bdata\b|analytics", "data", "data"),
+    ("mobile", r"\bios\b|android|mobile", "(mobile OR iOS OR Android)", "mobile"),
+    ("frontend", r"front[- ]?end|\bui\b|\bweb\b", "(frontend OR web)", "frontend"),
+    ("infra", r"infra|platform|devops|\bsre\b|site reliability|\bcloud\b|distributed|kubernetes",
+     "(infrastructure OR platform)", "infrastructure"),
+    ("security", r"secur", "security", "security"),
+    ("backend", r"back[- ]?end|\bapi\b|server|payments", "(backend OR platform)", "backend"),
+    ("fullstack", r"full[- ]?stack", "", ""),
+]
+_EARLY = re.compile(r"new grad|graduate|university|entry|junior|early career|\bassociate\b|\b(?:i|1)\b\s*$", re.I)
+
+
+def job_areas(title: str) -> list[str]:
+    return [a for a, rx, _, _ in _AREAS if re.search(rx, title or "", re.I)]
+
+
+def _area_terms(areas: list[str], li: bool = False) -> str:
+    return next((row[3 if li else 2] for row in _AREAS if row[0] in areas and row[2]), "")
+
+
+def relevance(c: dict, areas: list[str], small_company: bool, job_region: str | None, early: bool) -> int:
+    """Ordering score: who they are first, then how close they sit to this role."""
+    h = c.get("headline") or ""
+    score = priority(c["kind"], small_company) * 10
+    if areas and any(re.search(rx, h, re.I) for a, rx, _, _ in _AREAS if a in areas):
+        score += 4                                  # manages / hires for this kind of role
+    if c["kind"] == "recruiter":
+        if re.search(r"technical|tech\b|engineering|software", h, re.I):
+            score += 3
+        if early and re.search(r"university|campus|early career|emerging talent|new grad", h, re.I):
+            score += 3
+    if c.get("country"):
+        score += 1                                  # confirmed location beats an assumed one
+    if job_region and c.get("region") == job_region:
+        score += 2
+    return score
+
+
 async def find_people(company: str, job_title: str, small_company: bool, li: LinkedInPeople | None,
-                      want: int = 2) -> list[dict]:
-    """Up to `want` people at `company`, best first."""
+                      want: int = 2, country: str = "US", region: str | None = None,
+                      city: str | None = None) -> list[dict]:
+    """Up to `want` people who work at `company` now, in the job's `country`, best first:
+    hiring managers for the role's area, then technical recruiters, founders at small companies."""
+    areas = job_areas(job_title)
+    early = bool(_EARLY.search(job_title or ""))
+    q_co = f'"{company}"'
+    queries = []
+    if areas and _area_terms(areas):
+        queries.append(f'site:linkedin.com/in {q_co} ("engineering manager" OR "head of engineering" OR director) {_area_terms(areas)}')
+    queries.append(f'site:linkedin.com/in {q_co} ("engineering manager" OR "head of engineering" OR founder OR CTO)')
+    queries.append(f'site:linkedin.com/in {q_co} ("technical recruiter" OR recruiter OR "talent acquisition"'
+                   + (' OR "university recruiter" OR "early career"' if early else "") + ")")
+    if city:
+        queries.append(f'site:linkedin.com/in {q_co} ("engineering manager" OR recruiter) "{city}"')
+
     cands: dict[str, dict] = {}
-    queries = [
-        f'site:linkedin.com/in {company} ("engineering manager" OR "head of engineering" OR founder OR CTO)',
-        f'site:linkedin.com/in {company} (recruiter OR "technical recruiter" OR "talent acquisition")',
-    ]
-    for q in queries:
-        try:
-            for r in await search(q, n=10):
-                hit = parse_linkedin_hit(r, company)
-                if hit:
-                    hit["source"] = "searxng"
-                    cands.setdefault(hit["url"], hit)
-        except SearchError as e:
-            logger.warning(f"people search for {company} failed: {e}")
-            break
+    rejected = {"left": 0, "country": 0}
+
+    def keep(hit: dict) -> bool:
+        if not hit.get("current"):
+            rejected["left"] += 1
+            return False
+        pc = hit.get("country")
+        if (pc and pc != country) or (pc is None and country != "US"):
+            rejected["country"] += 1
+            return False
+        if hit.get("location") and pc:
+            hit["region"] = parse_location(hit["location"]).get("region")
+        return True
 
     def ranked():
         out = []
         for c in cands.values():
             kind = classify(c["headline"])
             if kind and kind != "engineer":
-                out.append({**c, "kind": kind, "_p": priority(kind, small_company)})
-        return sorted(out, key=lambda c: -c["_p"])
+                c = {**c, "kind": kind}
+                out.append({**c, "_p": priority(kind, small_company),
+                            "_r": relevance(c, areas, small_company, region, early)})
+        return sorted(out, key=lambda c: -c["_r"])
+
+    for q in queries:
+        try:
+            for r in await search(q, n=10):
+                hit = parse_linkedin_hit(r, company)
+                if hit and keep(hit):
+                    hit["source"] = "searxng"
+                    cands.setdefault(hit["url"], hit)
+        except SearchError as e:
+            logger.warning(f"people search for {company} failed: {e}")
+            break
+        if len([c for c in ranked() if c["_p"] >= 2]) >= want + 2:
+            break
 
     best = ranked()
     if (not best or best[0]["_p"] < 2) and li is not None:
-        for kw in (f"{company} engineering manager", f"{company} technical recruiter"):
-            for hit in await li.search(kw):
-                if company.lower().split()[0] in (hit["headline"] or "").lower():
+        for kw in (f"{company} engineering manager {_area_terms(areas, li=True)}".strip(), f"{company} technical recruiter"):
+            for hit in await li.search(kw, country=country):
+                if hit.get("current_text"):
+                    hit["current"] = names_company(hit["current_text"], company)
+                elif hit.get("past_text") and names_company(hit["past_text"], company):
+                    hit["current"] = False
+                else:
+                    hit["current"] = names_company(hit["headline"], company)
+                if keep(hit):
                     cands.setdefault(hit["url"], hit)
             best = ranked()
             if best and best[0]["_p"] >= 2:
                 break
-    return [{k: v for k, v in c.items() if k != "_p"} for c in best[:want]]
+    if rejected["left"] or rejected["country"]:
+        logger.info(f"people at {company}: dropped {rejected['left']} no longer there, "
+                    f"{rejected['country']} outside {country}")
+    return [{k: v for k, v in c.items() if not k.startswith("_")} for c in best[:want]]
 
 
 _DRAFT_SYSTEM = ("You write short, specific, human outreach for a job seeker. No flattery, no buzzwords, "

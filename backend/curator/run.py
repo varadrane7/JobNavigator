@@ -71,7 +71,8 @@ def _job_dict(j: Job) -> dict:
         "best_cv_score": j.best_cv_score, "best_cv": j.best_cv,
         "lca": j.h1b_company_lca_count, "approval": j.h1b_company_approval_rate,
         "jd_flag": bool(j.h1b_jd_flag), "salary_min": j.salary_min, "salary_max": j.salary_max,
-        "source": j.source,
+        "source": j.source, "loc_country": j.loc_country, "loc_region": j.loc_region,
+        "loc_city": j.loc_city, "location": j.location or "",
     }
 
 
@@ -257,12 +258,15 @@ async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[d
             seen_companies.add(k)
             it = intel.get(k) or {}
             small = (it.get("headcount") or 10**6) < 300 or (it.get("funding_stage") or "") in ("seed", "pre_seed", "series_a", "series_b")
-            people = await find_people(j["company"], j["title"], small, li, want=1 if want_total - len(found) <= len(top) else 2)
+            city = (j.get("loc_city") or "").title() or None
+            people = await find_people(j["company"], j["title"], small, li, want=1 if want_total - len(found) <= len(top) else 2,
+                                       country=j.get("loc_country") or "US", region=j.get("loc_region"), city=city)
             for p in people:
                 email, conf = guess_email(p["name"], it)
                 d = await draft(p, j["company"], j, me, profile)
                 found.append({"job_id": j["id"], "company": j["company"], "name": p["name"],
                               "title": p.get("headline"), "kind": p.get("kind"), "linkedin_url": p["url"],
+                              "location": p.get("location"),
                               "email": email, "email_confidence": conf, "source": p.get("source"),
                               "note": d.get("note"), "email_draft": d.get("email_draft"), "found_on": today})
     db = SessionLocal()

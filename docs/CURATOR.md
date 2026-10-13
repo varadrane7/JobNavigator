@@ -54,6 +54,10 @@ For each top company (best-ranked first) until `outreach_count` people are found
    - It uses the **mock account** session first (the one Settings → LinkedIn refreshes).
    - It falls back to the **personal** account only if the mock session is dead or rate-limited.
    - It makes at most `linkedin_people_daily_cap` searches a day, spaced 20–60 s apart.
+   Every hit is checked before it is kept:
+   - **Still there.** The profile's current employer (the `Experience:` line in the search snippet, or LinkedIn's `Current:`/`Past:` line) must be the company. Headlines like "ex-Ramp" or "formerly at Ramp", and hits where only the bio mentions the company, are dropped.
+   - **Same country as the job.** Read from the profile's `Location:` (a bare ZIP counts as US), else the LinkedIn subdomain (`in.linkedin.com`, `ch.linkedin.com`). LinkedIn's own search adds its location filter. A `www` profile with no location passes for US jobs only.
+   - **Close to the role.** The job title's area (ML, data, mobile, frontend, infra, security, backend) is added to the hiring-manager query and boosts managers whose headline matches. Technical recruiters beat general ones, and university / early-career recruiters rank up for new-grad roles. Someone in the job's state ranks above someone elsewhere in the country.
 3. An email address is guessed from the company's email format, which comes from RocketReach/LeadIQ snippets via SearXNG (e.g. `flast@ramp.com`). It is marked *(guess)*. Nothing is sent or verified.
 4. The curator LLM drafts a LinkedIn note (≤ 280 chars) and a short cold email. Both can be copied from the Today screen.
 

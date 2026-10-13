@@ -195,6 +195,7 @@ class Contact(Base):
     email = Column(String, nullable=True)
     email_confidence = Column(Float, nullable=True)      # 0..1, from the company's known email pattern
     source = Column(String, nullable=True)               # searxng | linkedin_mock | linkedin_personal
+    location = Column(String, nullable=True)             # as the profile shows it ("New York City Metropolitan Area")
     note = Column(Text, nullable=True)                   # draft LinkedIn note (<300 chars)
     email_draft = Column(Text, nullable=True)            # draft cold email
     status = Column(String, default="new")               # new | contacted | replied | skip

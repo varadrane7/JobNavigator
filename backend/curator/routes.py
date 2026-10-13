@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.job_monitor import JobAlreadyRunningError, launch_background
-from backend.models.db import Contact, Job, get_db
+from backend.models.db import Contact, Job, Resume, get_db
 from backend.tz import APP_TZ_NAME, local_today
 
 logger = logging.getLogger("jobnavigator.curator.api")
@@ -34,13 +34,14 @@ async def run_now(outreach: bool = True, send: bool = True):
         return JSONResponse(status_code=409, content={"detail": f"{e.job_type} is already running"})
 
 
-def _job_out(j: Job) -> dict:
+def _job_out(j: Job, resume_ids: dict | None = None) -> dict:
     c = j.curation or {}
     return {
         "id": str(j.id), "short_id": j.short_id, "rank": j.curated_rank, "title": j.title, "company": j.company,
         "url": j.url, "location": j.location, "status": j.status, "source": j.source,
         "posted_at": (j.posted_at or j.discovered_at).isoformat() if (j.posted_at or j.discovered_at) else None,
         "best_score": j.best_cv_score, "best_cv": j.best_cv,
+        "best_cv_id": (resume_ids or {}).get(j.best_cv) if j.best_cv else None,
         "salary_min": j.salary_min, "salary_max": j.salary_max,
         "h1b_verdict": j.h1b_verdict, "h1b_lca_count": j.h1b_company_lca_count,
         "score": c.get("score"), "parts": c.get("parts"), "reason": c.get("reason"),
@@ -52,7 +53,7 @@ def _contact_out(c: Contact) -> dict:
     return {
         "id": str(c.id), "job_id": str(c.job_id) if c.job_id else None, "company": c.company, "name": c.name,
         "title": c.title, "kind": c.kind, "linkedin_url": c.linkedin_url, "email": c.email,
-        "email_confidence": c.email_confidence, "source": c.source, "note": c.note,
+        "email_confidence": c.email_confidence, "source": c.source, "location": c.location, "note": c.note,
         "email_draft": c.email_draft, "status": c.status,
         "found_on": c.found_on.isoformat() if c.found_on else None,
     }
@@ -64,10 +65,14 @@ def today(day: Optional[date] = None, db: Session = Depends(get_db)):
     jobs = (db.query(Job).filter(Job.curated_on == d, Job.curated_rank.isnot(None))
             .order_by(Job.curated_rank).all())
     contacts = db.query(Contact).filter(Contact.found_on == d).order_by(Contact.created_at).all()
+    # best_cv holds the résumé's name; the cover-letter deep link needs its id
+    resume_ids = {"Persona": "persona"}
+    for rid, name, _ in db.query(Resume.id, Resume.name, Resume.is_base).order_by(Resume.is_base).all():
+        resume_ids[name] = str(rid)      # base résumés last, so they win a name clash
     days = [r[0].isoformat() for r in db.query(Job.curated_on).filter(Job.curated_on.isnot(None))
             .distinct().order_by(Job.curated_on.desc()).limit(30).all()]
     return {"date": d.isoformat(), "timezone": APP_TZ_NAME, "days": days,
-            "jobs": [_job_out(j) for j in jobs], "contacts": [_contact_out(c) for c in contacts]}
+            "jobs": [_job_out(j, resume_ids) for j in jobs], "contacts": [_contact_out(c) for c in contacts]}
 
 
 class ContactPatch(BaseModel):
