@@ -53,11 +53,6 @@
         reverse_proxy backend:8000
     }
 
-    # AutoApply live view (noVNC of the applier's browser; only up when APPLIER_VNC_PASSWORD is set)
-    handle_path /applier/* {
-        reverse_proxy applier:6080
-    }
-
     # Everything else to frontend
     handle {
         reverse_proxy frontend:80

@@ -769,6 +769,10 @@ END $$;""",
         # applies to later inserts only, so the two statements are safe in this order.
         _ADD_COUNTRY_COLUMN,
         "ALTER TABLE searches ALTER COLUMN country SET DEFAULT 'usa'",
+        # AutoApply was removed; drop its tables and settings (no-ops once gone).
+        "DROP TABLE IF EXISTS autoapply_attempts, autoapply_questions, autoapply_items, "
+        "autoapply_llm_usage, autoapply_ats_credentials CASCADE",
+        "DELETE FROM settings WHERE key LIKE 'autoapply\\_%'",
     ]
     failed = run_migration_statements(db, migrations)
 
