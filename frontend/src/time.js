@@ -1,4 +1,38 @@
 // One clock for every v2 screen, so the list and the editor never disagree about the same timestamp.
+// APP_TZ is the zone the backend runs its crons and day buckets in (backend/tz.py);
+// every absolute date or time the UI shows is read in it, whatever the viewer's zone.
+export const APP_TZ = import.meta.env?.VITE_APP_TZ || 'America/New_York'
+
+// Wall-clock fields of an instant in APP_TZ: { y, mo (1-12), d, h, mi, dow (0=Sun) }.
+const _partsFmt = new Intl.DateTimeFormat('en-US', {
+  timeZone: APP_TZ, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric',
+  hour: 'numeric', minute: 'numeric', weekday: 'short',
+})
+const _DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
+export const tzParts = (date) => {
+  const o = {}
+  for (const p of _partsFmt.formatToParts(date)) o[p.type] = p.value
+  return { y: +o.year, mo: +o.month, d: +o.day, h: +o.hour % 24, mi: +o.minute, dow: _DOW[o.weekday] }
+}
+// YYYY-MM-DD of an instant in APP_TZ (default now) — the key the backend's day buckets use.
+export const tzDateKey = (date = new Date()) => {
+  const p = tzParts(date)
+  return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`
+}
+// The instant at which APP_TZ's wall clock reads y-mo-d h:mi.
+export const zonedInstant = (y, mo, d, h = 0, mi = 0) => {
+  const want = Date.UTC(y, mo - 1, d, h, mi)
+  let t = want
+  for (let i = 0; i < 2; i++) {
+    const p = tzParts(new Date(t))
+    t += want - Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi)
+  }
+  return new Date(t)
+}
+export const TZ_SHORT = (() => {
+  try { return new Intl.DateTimeFormat('en-US', { timeZone: APP_TZ, timeZoneName: 'short' }).formatToParts(new Date()).find((x) => x.type === 'timeZoneName')?.value || APP_TZ }
+  catch { return APP_TZ }
+})()
 const mins = (iso) => (iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 60000) : null)
 export const ago = (iso) => {
   const m = mins(iso); if (m == null) return ''
@@ -23,9 +57,9 @@ export const agoShort = (iso) => {
 // cron field. Pure, no dependency. Two backend-verified departures from standard
 // cron: weekday numbers are APScheduler's, not vixie cron's (0=Monday — `0 8 * * 1`
 // fires Tuesday in the container), and day-of-month/day-of-week are ANDed, not
-// ORed (`next` follows APScheduler). `next` is computed in UTC (the scheduler has
-// no timezone) and returned as a Date; callers render it in the reader's own
-// zone via `whenShort`. Returns `{ text, next }`, or null if unreadable;
+// ORed (`next` follows APScheduler). `next` is computed on APP_TZ's wall clock (the
+// scheduler runs in APP_TZ) and returned as a Date; callers render it via `whenShort`,
+// which also reads APP_TZ. Returns `{ text, next }`, or null if unreadable;
 // a five-field APScheduler-only extension (`last`, `fri#3`) this parser doesn't
 // evaluate is echoed as `{ text: <raw line>, unparsed: true }` rather than called
 // invalid — see CRON_DAY_EXTRA for exactly which ones, and why the rest are not.
@@ -38,8 +72,8 @@ const MON_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'
 const pad2 = (n) => String(n).padStart(2, '0')
 export const whenShort = (d) => {
   if (!(d instanceof Date) || Number.isNaN(d.getTime())) return ''
-  // local getters on purpose: the Date is a UTC instant, read in the viewer's zone
-  return `${DOW_SHORT[(d.getDay() + 6) % 7]} ${pad2(d.getDate())} ${MON_SHORT[d.getMonth()]} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+  const p = tzParts(d)
+  return `${DOW_SHORT[(p.dow + 6) % 7]} ${pad2(p.d)} ${MON_SHORT[p.mo - 1]} ${pad2(p.h)}:${pad2(p.mi)}`
 }
 const ord = (n) => {
   const s = ['th', 'st', 'nd', 'rd']; const v = n % 100
@@ -150,16 +184,16 @@ function cronNext(M, H, D, MO, W, from) {
   const base = from instanceof Date ? from : new Date()
   if (Number.isNaN(base.getTime())) return null
   const floor = Math.floor(base.getTime() / 60000) * 60000 + 60000   // the next whole minute
-  const s = new Date(floor)
-  const y = s.getUTCFullYear(); const mo = s.getUTCMonth(); const d0 = s.getUTCDate()
+  // walk APP_TZ calendar days; the UTC Date below only carries the y/m/d arithmetic
+  const s = tzParts(new Date(floor))
   for (let i = 0; i < 3000; i++) {
-    const day = new Date(Date.UTC(y, mo, d0 + i))
+    const day = new Date(Date.UTC(s.y, s.mo - 1, s.d + i))
     if (!MO.set.has(day.getUTCMonth() + 1)) continue
     if (!D.set.has(day.getUTCDate())) continue
     if (!W.set.has((day.getUTCDay() + 6) % 7)) continue             // JS 0=Sun → APScheduler 0=Mon
     for (const h of H.list) {
       for (const m of M.list) {
-        const t = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), h, m)
+        const t = zonedInstant(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), h, m).getTime()
         if (t >= floor) return new Date(t)
       }
     }
@@ -218,44 +252,5 @@ export const CRON_PRESETS = [
 ]
 
 // ── describeCron, checked ───────────────────────────────────────────────────
-// There is no test runner for the frontend, so this table is run by hand and its
-// output pasted back. It is a real run, not a desk check — copy this file to
-// `time.mjs`, then (node ≥ 18):
-//
-//   import { describeCron } from './time.mjs'
-//   const FROM = new Date('2026-09-05T12:00:00Z')          // Fri 12:00 UTC, pinned
-//   for (const e of TABLE) { const r = describeCron(e, { from: FROM })
-//     console.log(e, '|', r ? r.text : 'NULL', '|', r && r.next ? r.next.toISOString() : '—') }
-//
-// `next` below is the UTC instant the Date holds; the Settings row prints it
-// through `whenShort`, i.e. in the reader's own zone. Rows 6/7, 8/16 and 11 are
-// the weekday-numbering evidence: the same schedule written with a NAME and with
-// a DIGIT lands on different days, and the digits agree with what APScheduler
-// 3.10.4 actually returned in the container (`0 8 * * 1` → Tue 08 Sep).
-//
-//  #  expression              text                                                    next (UTC)
-//  1  */30 * * * *            every 30 minutes                                        2026-09-05 12:30
-//  2  0 * * * *               hourly at :00                                           2026-09-05 13:00
-//  3  15 * * * *              hourly at :15                                           2026-09-05 12:15
-//  4  0 */6 * * *             every 6 hours                                           2026-09-05 18:00
-//  5  0 3 * * *               daily at 03:00                                          2026-09-06 03:00
-//  6  0 9 * * mon-fri         weekdays at 09:00                                       2026-09-07 09:00
-//  7  0 9 * * 1-5             every Tue, Wed, Thu, Fri, Sat at 09:00                  2026-09-08 09:00
-//  8  0 8 * * mon             every Monday at 08:00                                   2026-09-07 08:00
-//  9  0 8 1 * *               monthly on the 1st at 08:00                             2026-10-01 08:00
-// 10  0 3 1,15 * *            at 03:00 on days 1,15 of every month                    2026-09-15 03:00
-// 11  0 2 * * 0               every Monday at 02:00        (the seeded h1b_cron)      2026-09-07 02:00
-// 12  30 4 * jan,jul mon      at 04:30 in Jan, Jul on Mon                             2027-01-04 04:30
-// 13  * * * * *               every minute                                            2026-09-05 12:01
-// 14  0 0 30 2 *              at 00:00 on day 30 in Feb                               null — never fires
-// 15  0 3 * *                 NULL (four fields)                                      —
-// 16  0 8 * * 1               every Tuesday at 08:00                                  2026-09-08 08:00
-// 17  0,30 9-17 * * mon-fri   at minute 0,30 of hour 9-17 on Mon, Tue, Wed, Thu, Fri  2026-09-07 09:00
-// 18  5 4 * * sun             every Sunday at 04:05                                   2026-09-06 04:05
-// 19  0 3 last * *            0 3 last * *                 (extension, echoed)        null
-// 20  99 3 * * *              NULL (minute out of range)                              —
-// 21  0 3 lastw * *           0 3 lastw * *                (extension, echoed)        null
-// 22  0 3 * * fri#3           0 3 * * fri#3                (extension, echoed)        null
-// 23  0 3 ? * *               NULL (from_crontab refuses "?")                          —
-// 24  0 3 * * last            NULL ("last" is day-of-month, not a weekday)             —
-// 25  0 3 * * last sun        NULL (six fields; from_crontab wants five)               —
+// The table is asserted in src/__tests__/time.test.js. `next` there is APP_TZ
+// (New York) wall-clock time; the scheduler runs in the same zone (backend/tz.py).

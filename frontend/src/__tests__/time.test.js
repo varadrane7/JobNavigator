@@ -6,17 +6,22 @@
 // the same pinned FROM. If a row here ever disagrees with the comment, the
 // comment is the thing that drifted.
 //
-// TZ: `whenShort` uses LOCAL getters on purpose (a UTC instant read in the
-// viewer's zone), so its expectations are only stable with the process pinned to
-// UTC. vitest.config.js sets process.env.TZ and fe-test.sh passes -e TZ=UTC.
+// TZ: cron times and `whenShort` read APP_TZ (America/New_York — the zone the
+// backend scheduler runs in), whatever the process zone. Expected `next` values
+// below are written as New York wall-clock times ('YYYY-MM-DD HH:MM') and
+// converted with zonedInstant; FROM is Sat 2026-09-05 08:00 EDT.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { ago, agoShort, whenShort, describeCron, CRON_PRESETS } from '../time'
+import { ago, agoShort, whenShort, describeCron, CRON_PRESETS, zonedInstant, tzDateKey } from '../time'
 
-const FROM = new Date('2026-09-05T12:00:00Z')   // Fri 12:00 UTC, pinned
+const FROM = new Date('2026-09-05T12:00:00Z')   // Sat 08:00 EDT, pinned
+// 'YYYY-MM-DD HH:MM' New York wall clock -> ISO instant
+const et = (s) => { const [d, t] = s.split(' '); const [y, mo, da] = d.split('-').map(Number); const [h, mi] = t.split(':').map(Number); return zonedInstant(y, mo, da, h, mi).toISOString() }
 
 describe('environment', () => {
-  it('runs in UTC (whenShort reads local getters)', () => {
-    expect(new Date('2026-09-05T12:00:00Z').getHours()).toBe(12)
+  it('APP_TZ is New York: day keys and zoned instants follow it, DST included', () => {
+    expect(tzDateKey(new Date('2026-09-06T03:30:00Z'))).toBe('2026-09-05')     // 23:30 EDT
+    expect(zonedInstant(2026, 11, 1, 4, 0).toISOString()).toBe('2026-11-01T09:00:00.000Z')   // after fall-back: EST
+    expect(zonedInstant(2026, 3, 8, 4, 0).toISOString()).toBe('2026-03-08T08:00:00.000Z')    // after spring-forward: EDT
   })
 })
 
@@ -26,21 +31,21 @@ const TABLE = [
   ['*/30 * * * *', 'every 30 minutes', '2026-09-05T12:30:00.000Z'],
   ['0 * * * *', 'hourly at :00', '2026-09-05T13:00:00.000Z'],
   ['15 * * * *', 'hourly at :15', '2026-09-05T12:15:00.000Z'],
-  ['0 */6 * * *', 'every 6 hours', '2026-09-05T18:00:00.000Z'],
-  ['0 3 * * *', 'daily at 03:00', '2026-09-06T03:00:00.000Z'],
-  ['0 9 * * mon-fri', 'weekdays at 09:00', '2026-09-07T09:00:00.000Z'],
-  ['0 9 * * 1-5', 'every Tue, Wed, Thu, Fri, Sat at 09:00', '2026-09-08T09:00:00.000Z'],
-  ['0 8 * * mon', 'every Monday at 08:00', '2026-09-07T08:00:00.000Z'],
-  ['0 8 1 * *', 'monthly on the 1st at 08:00', '2026-10-01T08:00:00.000Z'],
-  ['0 3 1,15 * *', 'at 03:00 on days 1,15 of every month', '2026-09-15T03:00:00.000Z'],
-  ['0 2 * * 0', 'every Monday at 02:00', '2026-09-07T02:00:00.000Z'],           // seeded h1b_cron
-  ['30 4 * jan,jul mon', 'at 04:30 in Jan, Jul on Mon', '2027-01-04T04:30:00.000Z'],
+  ['0 */6 * * *', 'every 6 hours', et('2026-09-05 12:00')],
+  ['0 3 * * *', 'daily at 03:00', et('2026-09-06 03:00')],
+  ['0 9 * * mon-fri', 'weekdays at 09:00', et('2026-09-07 09:00')],
+  ['0 9 * * 1-5', 'every Tue, Wed, Thu, Fri, Sat at 09:00', et('2026-09-05 09:00')],   // Sat 08:00 ET -> Sat 09:00
+  ['0 8 * * mon', 'every Monday at 08:00', et('2026-09-07 08:00')],
+  ['0 8 1 * *', 'monthly on the 1st at 08:00', et('2026-10-01 08:00')],
+  ['0 3 1,15 * *', 'at 03:00 on days 1,15 of every month', et('2026-09-15 03:00')],
+  ['0 2 * * 0', 'every Monday at 02:00', et('2026-09-07 02:00')],           // seeded h1b_cron
+  ['30 4 * jan,jul mon', 'at 04:30 in Jan, Jul on Mon', et('2027-01-04 04:30')],   // EST in January
   ['* * * * *', 'every minute', '2026-09-05T12:01:00.000Z'],
   ['0 0 30 2 *', 'at 00:00 on day 30 in Feb', null],                            // never fires
   ['0 3 * *', null, null],                                                      // four fields
-  ['0 8 * * 1', 'every Tuesday at 08:00', '2026-09-08T08:00:00.000Z'],
-  ['0,30 9-17 * * mon-fri', 'at minute 0,30 of hour 9-17 on Mon, Tue, Wed, Thu, Fri', '2026-09-07T09:00:00.000Z'],
-  ['5 4 * * sun', 'every Sunday at 04:05', '2026-09-06T04:05:00.000Z'],
+  ['0 8 * * 1', 'every Tuesday at 08:00', et('2026-09-08 08:00')],
+  ['0,30 9-17 * * mon-fri', 'at minute 0,30 of hour 9-17 on Mon, Tue, Wed, Thu, Fri', et('2026-09-07 09:00')],
+  ['5 4 * * sun', 'every Sunday at 04:05', et('2026-09-06 04:05')],
   ['0 3 last * *', '0 3 last * *', null],                                       // APScheduler extension, echoed
   ['99 3 * * *', null, null],                                                   // minute out of range
   ['0 3 lastw * *', '0 3 lastw * *', null],                                     // extension, echoed
@@ -119,7 +124,7 @@ describe('describeCron — shape and guards', () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(FROM)
-      expect(describeCron('0 3 * * *').next.toISOString()).toBe('2026-09-06T03:00:00.000Z')
+      expect(describeCron('0 3 * * *').next.toISOString()).toBe(et('2026-09-06 03:00'))
     } finally { vi.useRealTimers() }
   })
   it('ignores an Invalid Date `from` by returning a null next', () => {
@@ -131,7 +136,7 @@ describe('describeCron — shape and guards', () => {
     // 2026-09-15 is a Tuesday; `1,15` AND `tue` skips the 1st entirely
     const r = describeCron('0 3 1,15 * tue', { from: FROM })
     expect(r.text).toBe('at 03:00 on days 1,15 of every month and on Tue')
-    expect(r.next.toISOString()).toBe('2026-09-15T03:00:00.000Z')
+    expect(r.next.toISOString()).toBe(et('2026-09-15 03:00'))
   })
   it('collapses a long expansion back to the raw field past eight values', () => {
     // 12 minutes -> the raw `*/5` says more than 0,5,10,… does; 8 hours still expand
@@ -144,14 +149,14 @@ describe('describeCron — shape and guards', () => {
 
 // ── whenShort ───────────────────────────────────────────────────────────────
 describe('whenShort', () => {
-  it('renders "Ddd DD Mon HH:MM" (UTC-pinned process)', () => {
-    expect(whenShort(new Date('2026-09-05T12:30:00Z'))).toBe('Sat 05 Sep 12:30')
-    expect(whenShort(new Date('2026-09-06T04:05:00Z'))).toBe('Sun 06 Sep 04:05')
-    expect(whenShort(new Date('2026-09-07T08:00:00Z'))).toBe('Mon 07 Sep 08:00')
-    expect(whenShort(new Date('2027-01-04T04:30:00Z'))).toBe('Mon 04 Jan 04:30')
+  it('renders "Ddd DD Mon HH:MM" in APP_TZ (New York)', () => {
+    expect(whenShort(new Date('2026-09-05T12:30:00Z'))).toBe('Sat 05 Sep 08:30')
+    expect(whenShort(new Date('2026-09-06T08:05:00Z'))).toBe('Sun 06 Sep 04:05')
+    expect(whenShort(new Date('2026-09-07T12:00:00Z'))).toBe('Mon 07 Sep 08:00')
+    expect(whenShort(new Date('2027-01-04T09:30:00Z'))).toBe('Mon 04 Jan 04:30')
   })
   it('zero-pads day, hour and minute', () => {
-    expect(whenShort(new Date('2026-01-02T03:04:00Z'))).toBe('Fri 02 Jan 03:04')
+    expect(whenShort(new Date('2026-01-02T08:04:00Z'))).toBe('Fri 02 Jan 03:04')
   })
   it('guards non-Date input with an empty string', () => {
     for (const v of [null, undefined, '', 0, '2026-09-05T12:00:00Z', 1757073600000, {}, []]) {

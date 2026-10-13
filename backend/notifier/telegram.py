@@ -247,9 +247,9 @@ async def send_digest():
 
     db = SessionLocal()
     try:
-        today = datetime.now(timezone.utc).date()
-        yesterday = today - timedelta(days=1)
-        yesterday_start = datetime.combine(yesterday, datetime.min.time()).replace(tzinfo=timezone.utc)
+        from backend.tz import day_start, local_today
+        today = local_today()
+        yesterday_start = day_start(today - timedelta(days=1))
 
         # Count genuinely-new jobs: discovered in the window AND still untriaged
         # (status='new') — excludes ones already saved/skipped/applied.

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import api from '../api'
+import { APP_TZ } from '../time'
 import InfoTip from './InfoTip'
 import { RefreshCw, Play, Loader2 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Cell, Sankey } from 'recharts'
@@ -68,7 +69,7 @@ const STATUS_COLORS = {
 const formatCET = (iso) => {
   if (!iso) return '-'
   try {
-    return new Date(iso).toLocaleString('en-GB', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'short' })
+    return new Date(iso).toLocaleString('en-GB', { timeZone: APP_TZ, dateStyle: 'short', timeStyle: 'short' })
   } catch { return new Date(iso).toLocaleString() }
 }
 

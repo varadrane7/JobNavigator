@@ -2,7 +2,7 @@
 import json
 import logging
 import uuid as _uuid
-from datetime import date
+from backend.tz import local_today
 from pathlib import Path
 from typing import Optional
 
@@ -458,7 +458,7 @@ async def _generate_inner(resume_id, job_id, voice, length, template, page_forma
 
     # Assemble json_data: header from resume, recipient/date from job/company
     header = resume_data.get("header", {})
-    today = date.today().strftime("%B %d, %Y")
+    today = local_today().strftime("%B %d, %Y")
     json_data = {
         "header": {"name": header.get("name", ""), "contact_items": header.get("contact_items", [])},
         "recipient": {"company": job_company or "", "manager": "", "address": ""},
