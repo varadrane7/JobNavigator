@@ -6,10 +6,11 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 
 from backend.models.db import SessionLocal, Setting
+from backend.tz import APP_TZ
 
 logger = logging.getLogger("jobnavigator.scheduler")
 
-scheduler = AsyncIOScheduler()
+scheduler = AsyncIOScheduler(timezone=APP_TZ)
 
 
 def get_setting(db, key, default=None):
@@ -49,6 +50,7 @@ def configure_scheduler():
         h1b_cron = str(get_setting(db, "h1b_cron", "") or "").strip()
         cleanup_cron = str(get_setting(db, "cleanup_cron", "") or "").strip()
         reject_cron = str(get_setting(db, "reject_cron", "") or "").strip()
+        curate_cron = str(get_setting(db, "curate_cron", "") or "").strip()
     finally:
         db.close()
 
@@ -61,7 +63,7 @@ def configure_scheduler():
             if len(parts) == 5:
                 scheduler.add_job(
                     func,
-                    CronTrigger(minute=parts[0], hour=parts[1], day=parts[2], month=parts[3], day_of_week=parts[4]),
+                    CronTrigger(minute=parts[0], hour=parts[1], day=parts[2], month=parts[3], day_of_week=parts[4], timezone=APP_TZ),
                     id=job_id,
                     replace_existing=True,
                 )
@@ -95,6 +97,7 @@ def configure_scheduler():
     _add_cron_job(refresh_h1b_data, "h1b_refresh", h1b_cron)
     _add_cron_job(run_job_cleanup_auto, "job_cleanup", cleanup_cron)
     _add_cron_job(run_auto_reject, "auto_reject", reject_cron)
+    _add_cron_job(run_curation, "curate", curate_cron)
 
     logger.info(
         f"Scheduler configured: scrape every {scrape_interval}m, "
@@ -232,6 +235,20 @@ async def refresh_h1b_data():
                 _db.close()
     except JobAlreadyRunningError as e:
         logger.warning(f"Scheduler skipped: {e}")
+
+
+async def run_curation():
+    """Daily Top-N curation + outreach (backend/curator/run.py)."""
+    from backend.job_monitor import tracked_run, JobAlreadyRunningError
+    from backend.curator.routes import _summary_text
+    from backend.curator.run import run_daily_curation
+    try:
+        async with tracked_run("curate", "scheduler") as run:
+            run.summary = _summary_text(await run_daily_curation())
+    except JobAlreadyRunningError:
+        logger.info("Curation already running, skipping")
+    except Exception as e:
+        logger.exception(f"Curation failed: {e}")
 
 
 async def run_auto_reject():

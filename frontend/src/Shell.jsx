@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
-  Newspaper, Search, Building2, Send, FileUser, Mail,
+  Newspaper, Search, Building2, Send, FileUser, Mail, Target,
   Fingerprint, ChartLine, Settings as SettingsIcon,
 } from 'lucide-react'
 import api from './api'
@@ -15,6 +15,7 @@ import './theme.css'
 // amber dot beside the icon since the label/count are gone.
 const GROUPS = [
   { label: 'Find', items: [
+    { to: '/today', label: 'Today', ready: true, Icon: Target },
     { to: '/feed', label: 'Jobs', ready: true, countKey: 'jobs', Icon: Newspaper },
     { to: '/searches', label: 'Searches', ready: true, countKey: 'searches', Icon: Search, warnKey: 'searches' },
     { to: '/companies', label: 'Companies', ready: true, countKey: 'companies', Icon: Building2, warnKey: 'companies' },

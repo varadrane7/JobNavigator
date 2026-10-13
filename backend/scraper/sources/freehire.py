@@ -11,6 +11,7 @@ from urllib.parse import urlparse, parse_qsl
 import httpx
 from sqlalchemy.exc import IntegrityError
 
+from backend.scraper._shared.posted import parse_posted
 from backend.models.db import (
     SessionLocal, Job, Search, Setting, get_existing_external_ids,
     get_global_title_exclude, find_company_by_name,
@@ -188,6 +189,7 @@ async def run(search: Search) -> dict:
                     status="new",
                     seen=False,
                     saved=False,
+                    posted_at=parse_posted(j.get("posted")),
                 )
 
                 # Structured salary from freehire enrichment (annual only) — set before analyze_inline so the JD extractor doesn't override it.

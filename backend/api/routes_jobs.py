@@ -110,7 +110,7 @@ def list_jobs(
     title_search: Optional[str] = None,
     min_salary: Optional[int] = None,
     max_salary: Optional[int] = None,
-    sort_by: Optional[str] = Query("date", pattern="^(date|score|salary|company)$"),
+    sort_by: Optional[str] = Query("date", pattern="^(date|score|salary|company|rank)$"),
     # ge=0: without a lower bound a negative limit reaches Postgres as LIMIT -5,
     # which is a DataError the id handler then reports as a 500 (R4-T1-07).
     limit: Annotated[int, Query(ge=0, le=200)] = 50,
@@ -161,7 +161,10 @@ def list_jobs(
 
     total = q.count()
 
-    if sort_by == "score":
+    if sort_by == "rank":   # the curator's picks first: newest curation day, then its rank
+        q = q.order_by(desc(Job.curated_on).nullslast(), asc(Job.curated_rank).nullslast(),
+                       desc(Job.best_cv_score).nullslast(), Job.id)
+    elif sort_by == "score":
         q = q.order_by(desc(Job.best_cv_score).nullslast(), Job.id)
     elif sort_by == "salary":
         q = q.order_by(desc(Job.salary_max).nullslast(), Job.id)
@@ -340,9 +343,9 @@ def _apply_common_filters(q, status=None, company=None, source=None, h1b_verdict
 @router.get("/feed-stats")
 def feed_stats(db: Session = Depends(get_db)):
     """Global counts for the v2 feed header — arrived today + not-yet-scored — since the paged /jobs response only sees the current page."""
-    from datetime import datetime, timezone
     from sqlalchemy import func, text
-    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    from backend.tz import day_start
+    start = day_start()
     arrived_today = db.query(func.count(Job.id)).filter(Job.discovered_at >= start).scalar() or 0
     unscored = db.execute(text(
         "select count(*) from jobs where status in ('new','saved') "
@@ -1250,6 +1253,10 @@ def _job_to_dict(j: Job, tailored_resume_id=None, in_flight: list[str] | None = 
         "saved": j.saved,
         "status": j.status,
         "discovered_at": j.discovered_at.isoformat() if j.discovered_at else None,
+        "posted_at": j.posted_at.isoformat() if j.posted_at else None,
+        "curated_on": j.curated_on.isoformat() if j.curated_on else None,
+        "curated_rank": j.curated_rank,
+        "curation": j.curation if j.curated_rank else None,
         "has_tailored_resume": tailored_resume_id is not None,
         "tailored_resume_id": str(tailored_resume_id) if tailored_resume_id else None,
         "in_flight": in_flight or [],

@@ -3,7 +3,7 @@ import ConfirmDialog, { PromptDialog } from '../ConfirmDialog'
 import { useEscape, useSettled, useSingleOpen, NBSP } from '../hooks'
 import { Button, FooterRow, GlyphBadge, Heading, HeaderRow, Helper, IconButton, Input, Label, Link, Menu, MenuHead, MenuItem, ModalPanel, Mono, PageTitle, Pill, Select, Spinner, Surface, Switch, Textarea, ToolbarTrigger } from '../ui'
 import { useTheme, MODE_OPTIONS, themeOptions } from '../theme'
-import { describeCron, whenShort, CRON_PRESETS } from '../time'
+import { describeCron, whenShort, CRON_PRESETS, TZ_SHORT } from '../time'
 import api from '../api'
 import '../theme.css'
 
@@ -25,7 +25,7 @@ const SEARCHABLE = ['openrouter', 'openai', 'claude_api', 'claude_code']
 // providers that need no key
 const KEYLESS = ['claude_code', 'codex_cli', 'antigravity_cli', 'ollama', 'lmstudio', 'openai_local', '']
 // provider settings whose base_url field is llm_local_base_url — one shared setting, not per-section
-const LOCAL_PROVIDER_KEYS = ['llm_provider', 'llm_fallback_provider', 'scoring_llm_provider', 'cv_tailor_llm_provider', 'cover_letter_llm_provider', 'autofill_llm_provider', 'email_llm_provider']
+const LOCAL_PROVIDER_KEYS = ['llm_provider', 'llm_fallback_provider', 'scoring_llm_provider', 'cv_tailor_llm_provider', 'cover_letter_llm_provider', 'autofill_llm_provider', 'email_llm_provider', 'curator_llm_provider']
 
 // The value rows' fields are `Input` now (adornment slot and all), so the box
 // lives in ui.jsx with every other field. What is left here is the type these
@@ -128,7 +128,7 @@ function CronBox({ value, onSave, width, ariaLabel, onInvalid }) {
     : bad ? 'invalid expression'
       // No `next` means either an expression that can never fire (31 February) — a warning — or one describeCron
       // declined to evaluate (an APScheduler extension it echoes back), which is not.
-      : `${parsed.text} UTC${parsed.next ? ` · next ${whenShort(parsed.next)} (your time)`
+      : `${parsed.text} ${TZ_SHORT}${parsed.next ? ` · next ${whenShort(parsed.next)}`
         : (parsed.unparsed ? '' : ' · never fires')}`
 
   return (
@@ -439,6 +439,24 @@ export default function Settings() {
         B('Telegram digest · cron', 'Summary of new high-fit jobs.', 'digest_cron', { mono: true, cron: true, w: '135px' }),
         B('H-1B refresh · cron', 'Re-imports and re-scans the sponsorship dataset.', 'h1b_cron', { mono: true, cron: true, w: '135px' }),
         B('Job cleanup · cron', 'Purges expired postings.', 'cleanup_cron', { mono: true, cron: true, w: '135px' }),        
+      ]],
+      ['curator', '', 'Daily curator', 'ranks the day\u2019s new jobs and saves the best · Today screen', [
+        B('Curate · cron', 'When the Top list is built (app time zone). Run it after the night\u2019s scrapes.', 'curate_cron', { mono: true, cron: true, w: '135px' }),
+        B('Jobs per day', 'How many jobs are saved and ranked.', 'curate_count', { mono: true, int: true, w: '135px' }),
+        B('Window · hours', 'Only jobs posted or first seen this recently are considered.', 'curate_window_hours', { mono: true, int: true, w: '135px' }),
+        B('LLM pool', 'Jobs scored by the LLM after the embedding pre-filter.', 'curate_llm_pool', { mono: true, int: true, w: '135px' }),
+        SW('Ignore the rest', 'Other new jobs from the window are marked ignored, so the feed stays short.', 'Off — the rest stay in the feed as new.', 'curate_auto_ignore', { dflt: true }),
+        B('Target base · min', 'Pay below this (minus $25k) scores zero on pay; well-funded and sponsoring companies are not held to it.', 'target_base_min', { mono: true, int: true, w: '135px' }),
+        B('Target base · max', 'Pay at or above this scores full marks.', 'target_base_max', { mono: true, int: true, w: '135px' }),
+        E('Title excludes', 'Titles containing these words are never picked.', 'curate_title_exclude', { list: true, sub: 'one word per line · case-insensitive' }),
+        E('Weights', 'How the composite score is built.', 'curate_weights', { json: true, sub: 'JSON — fit, fresh, visa_comp, reply, stability' }),
+        B('Embedding model', 'Model on the OpenAI (Local) endpoint used for the résumé-similarity pre-filter. Empty = skip.', 'curate_embed_model', { mono: true, w: '340px' }),
+        LLM('Curator model', 'Company research and outreach drafts.', 'curator_llm'),
+        B('People per day', 'Founders, hiring managers and recruiters found for the top companies.', 'outreach_count', { mono: true, int: true, w: '135px' }),
+        B('LinkedIn searches · cap', 'People searches per day (mock account first, then personal).', 'linkedin_people_daily_cap', { mono: true, int: true, w: '135px' }),
+        B('SearXNG URL', 'Search service the curator uses.', 'searxng_url', { mono: true, w: '340px' }),
+        BT('Test search', 'Runs one query through SearXNG.', 'Test', async () => { const { data } = await api.get('/search/test'); flash(`Search OK · ${data.count} results`) }),
+        BT('Run now', 'Builds today\u2019s list now (a few minutes).', 'Run curator', () => api.post('/curator/run')),
       ]],
       ['exclude', '', 'Global exclude', '', [
         E('Body phrases', 'Skip postings whose description contains any of these phrases.', 'body_exclusion_phrases', { list: true, sub: 'one phrase per line · case-insensitive' }),

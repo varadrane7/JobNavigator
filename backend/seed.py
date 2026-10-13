@@ -40,6 +40,22 @@ DEFAULT_SETTINGS = {
     # Accounts tab needs a plain timestamp to say how long it is still good for.
     "jobright_session_obtained_at": ("", "UTC ISO timestamp of the last successful Jobright login. Read-only; set by the scraper."),
     "reject_cron": ("0 4 * * *", "Auto-reject cron (min hour day month dow). Empty = disabled"),
+    # ── Daily curator (backend/curator) ──
+    "searxng_url": ("http://searxng:8080", "SearXNG base URL the curator searches with (the compose service by default)"),
+    "curate_cron": ("0 4 * * *", "Daily Top-N curation cron (min hour day month dow, app time zone). Empty = disabled"),
+    "curate_count": ("50", "How many jobs the curator saves each day"),
+    "curate_window_hours": ("36", "Only jobs posted (or first seen) within this many hours are considered"),
+    "curate_llm_pool": ("150", "How many jobs (after the embedding pre-filter) get LLM-scored and ranked"),
+    "curate_auto_ignore": ("true", "Mark the day's other candidates ignored so the feed only shows the Top-N"),
+    "curate_title_exclude": (json.dumps(["senior", "sr.", "sr ", "staff", "principal", "lead", "manager", "director", "head of", "architect", "vp", "intern", "clearance"]),
+                             "Title words that drop a job from curation (seniority beyond ~3 years, clearance)"),
+    "curate_weights": (json.dumps({"fit": 0.40, "fresh": 0.20, "visa_comp": 0.20, "reply": 0.12, "stability": 0.08}),
+                       "Weights of the curator's composite score"),
+    "target_base_min": ("115000", "Target base salary floor (USD) for companies that are not well funded or sponsoring"),
+    "target_base_max": ("150000", "Target base salary that scores full marks"),
+    "curate_embed_model": ("text-embedding-nomic-embed-text-v1.5", "Embedding model on the OpenAI (Local) server used to pre-filter by résumé similarity. Empty = skip"),
+    "outreach_count": ("20", "How many people to find each day for the curated jobs (founders, hiring managers, recruiters)"),
+    "linkedin_people_daily_cap": ("25", "Max LinkedIn people searches per day (mock account first, then personal)"),
     "backup_cron": ("0 3 * * *", "Backup cron schedule (min hour day month dow). Empty = disabled"),
     "scoring_rubric": ("Score each resume using these criteria (each 0-20, sum to 0-100):\n1. SKILLS MATCH (weight: 20): How many required technical skills/tools does the candidate have?\n2. EXPERIENCE LEVEL (weight: 20): Does seniority/years match? (entry-level resume for senior role = low)\n3. DOMAIN FIT (weight: 20): Has the candidate worked in the same industry/domain?\n4. ROLE ALIGNMENT (weight: 20): Does the candidate's career trajectory match this role type?\n5. REQUIREMENTS MET (weight: 20): Does the candidate meet stated requirements (education, certs, clearance)?\n\nUse the FULL 0-100 range. 90+ = perfect match. 50-70 = decent with gaps. Below 30 = poor match.\nAvoid clustering scores — differentiate meaningfully between resumes and jobs.", "Editable resume scoring rubric"),
     "scoring_output_light": ('Return ONLY this JSON:\n{\n  "scores": {CV_NAMES_HERE: 0-100},\n  "best_cv": "CV_NAME"\n}', "Light scoring output schema"),
@@ -53,6 +69,10 @@ DEFAULT_SETTINGS = {
     "llm_fallback_model": ("", "Fallback model name"),
     "llm_fallback_api_key": ("", "API key for fallback provider (OpenAI)"),
     "llm_fallback_effort": ("", "Reasoning effort for the fallback model (empty = the model's default; values depend on the provider)"),
+    "curator_llm_provider": ("", "Daily curator provider override (company research, contact drafts). Empty = use Primary"),
+    "curator_llm_model": ("", "Daily curator model override (empty = use Primary)"),
+    "curator_llm_api_key": ("", "API key for the curator provider override"),
+    "curator_llm_effort": ("", "Reasoning effort for the curator override"),
     "scoring_llm_provider": ("", "Resume scoring provider override (empty = use Primary)"),
     "scoring_llm_model": ("", "Resume scoring model override (empty = use Primary)"),
     "scoring_llm_api_key": ("", "API key for the scoring provider override"),
@@ -411,6 +431,7 @@ ENUM_SETTING_VALUES = {
     "llm_provider": _LLM_PROVIDERS,
     "llm_fallback_provider": _LLM_PROVIDERS,
     "scoring_llm_provider": _LLM_PROVIDERS,
+    "curator_llm_provider": _LLM_PROVIDERS,
     "email_llm_provider": _LLM_PROVIDERS,
     "cv_tailor_llm_provider": _LLM_PROVIDERS,
     "cover_letter_llm_provider": _LLM_PROVIDERS,
@@ -418,6 +439,7 @@ ENUM_SETTING_VALUES = {
     "llm_effort": _EFFORTS,
     "llm_fallback_effort": _EFFORTS,
     "scoring_llm_effort": _EFFORTS,
+    "curator_llm_effort": _EFFORTS,
     "email_llm_effort": _EFFORTS,
     "cv_tailor_llm_effort": _EFFORTS,
     "cover_letter_llm_effort": _EFFORTS,
@@ -426,6 +448,7 @@ ENUM_SETTING_VALUES = {
     "on_save_action": {"off"} | _DEPTHS,
     "tailor_auto_quick_score": {"off", "false", "no", "0", "true", "yes", "1", ""} | _DEPTHS,
     "tracer_links_url_style": {"path", "param", "path_jobid", "param_jobid"},
+    "curate_auto_ignore": {"true", "false"},
 }
 
 
@@ -769,6 +792,13 @@ END $$;""",
         # applies to later inserts only, so the two statements are safe in this order.
         _ADD_COUNTRY_COLUMN,
         "ALTER TABLE searches ALTER COLUMN country SET DEFAULT 'usa'",
+        # Daily curator columns (backend/curator)
+        "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ",
+        "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS curated_on DATE",
+        "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS curated_rank INTEGER",
+        "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS curation JSONB",
+        "CREATE INDEX IF NOT EXISTS ix_jobs_curated_on ON jobs(curated_on)",
+        "CREATE INDEX IF NOT EXISTS ix_jobs_discovered_at ON jobs(discovered_at)",
         # AutoApply was removed; drop its tables and settings (no-ops once gone).
         "DROP TABLE IF EXISTS autoapply_attempts, autoapply_questions, autoapply_items, "
         "autoapply_llm_usage, autoapply_ats_credentials CASCADE",

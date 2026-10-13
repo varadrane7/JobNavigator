@@ -1,0 +1,48 @@
+# SearXNG for JobNavigator's curator and for LM Studio (via mcp-searxng).
+# Private instance: bound to 127.0.0.1 on the host and the compose network only.
+use_default_settings: true
+
+general:
+  instance_name: "jobnavigator-search"
+
+server:
+  # secret_key comes from SEARXNG_SECRET in the environment
+  limiter: false          # no bot limiter: the only clients are the backend and LM Studio
+  image_proxy: false
+  public_instance: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json                # the backend and mcp-searxng read JSON
+
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 12.0
+  pool_connections: 50
+
+# Google, DuckDuckGo, Brave and Qwant answer this host with CAPTCHAs or bans, so they
+# only add latency; Bing, Yahoo, Presearch and Mojeek honour site: queries from here.
+engines:
+  - name: bing
+    disabled: false
+  - name: yahoo
+    disabled: false
+  - name: presearch
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: startpage
+    disabled: false
+  - name: google
+    disabled: true
+  - name: duckduckgo
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: qwant
+    disabled: true
+  - name: wikipedia
+    disabled: true

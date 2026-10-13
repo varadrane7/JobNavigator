@@ -32,6 +32,19 @@ _engine_kwargs = {"pool_pre_ping": True}
 if not DATABASE_URL.startswith("sqlite"):
     _engine_kwargs.update(pool_size=20, max_overflow=10, pool_timeout=5, pool_recycle=1800)
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
+
+if not DATABASE_URL.startswith("sqlite"):
+    from sqlalchemy import event
+    from backend.tz import APP_TZ_NAME
+
+    @event.listens_for(engine, "connect")
+    def _set_session_timezone(dbapi_conn, _record):
+        # cast(timestamptz AS date) and date_trunc bucket by the session zone;
+        # make that the app's zone so "a day" in SQL is the same day the UI shows.
+        cur = dbapi_conn.cursor()
+        cur.execute("SET TIME ZONE %s", (APP_TZ_NAME,))
+        cur.close()
+        dbapi_conn.commit()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -148,6 +161,49 @@ class VisaCache(Base):
     __table_args__ = (UniqueConstraint("name_key", "country", name="uq_visa_cache_name_country"),)
 
 
+class CompanyIntel(Base):
+    """What the curator learned about a company from the web (SearXNG + LLM), cached ~30 days."""
+    __tablename__ = "company_intel"
+
+    name_key = Column(String, primary_key=True)          # lowercased company name
+    display_name = Column(String, nullable=True)
+    domain = Column(String, nullable=True)               # email domain, e.g. ramp.com
+    email_pattern = Column(String, nullable=True)        # first.last | flast | first | firstlast | ...
+    funding_stage = Column(String, nullable=True)        # seed | series_a .. series_f | public | bootstrapped | unknown
+    last_raise_year = Column(Integer, nullable=True)
+    headcount = Column(Integer, nullable=True)
+    recent_layoffs = Column(Boolean, nullable=True)
+    reply_reputation = Column(Float, nullable=True)      # 0..1, how often candidates hear back
+    est_base_min = Column(Integer, nullable=True)        # USD base for a ~3 YOE engineer
+    est_base_max = Column(Integer, nullable=True)
+    notes = Column(Text, nullable=True)
+    sources = Column(JSON, nullable=True)
+    fetched_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class Contact(Base):
+    """A person to reach out to about a curated job (founder, hiring manager, recruiter)."""
+    __tablename__ = "contacts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+    company = Column(String, nullable=True)
+    name = Column(String, nullable=False)
+    title = Column(String, nullable=True)
+    kind = Column(String, nullable=True)                 # founder | hiring_manager | recruiter | engineer
+    linkedin_url = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    email_confidence = Column(Float, nullable=True)      # 0..1, from the company's known email pattern
+    source = Column(String, nullable=True)               # searxng | linkedin_mock | linkedin_personal
+    note = Column(Text, nullable=True)                   # draft LinkedIn note (<300 chars)
+    email_draft = Column(Text, nullable=True)            # draft cold email
+    status = Column(String, default="new")               # new | contacted | replied | skip
+    found_on = Column(Date, nullable=True, index=True)   # APP_TZ date
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company", "linkedin_url", name="uq_contact_company_url"),)
+
+
 # ── Jobs ─────────────────────────────────────────────────────────────────────
 class Job(Base):
     __tablename__ = "jobs"
@@ -202,6 +258,14 @@ class Job(Base):
     saved = Column(Boolean, default=False)
     status = Column(String, default="new")  # new | saved | applied | skip
     discovered_at = Column(DateTime(timezone=True), default=utcnow)
+    # When the board says the job went up (falls back to discovered_at when unknown).
+    posted_at = Column(DateTime(timezone=True), nullable=True)
+    # Daily curator (backend/curator): the APP_TZ date a job made the Top list, its
+    # rank that day, and {score, parts, reason, apply_window} or {out: true} when
+    # the curator auto-ignored it.
+    curated_on = Column(Date, nullable=True, index=True)
+    curated_rank = Column(Integer, nullable=True)
+    curation = Column(JSON, nullable=True)
 
     # Computed in SQL without loading the deferred blob columns; .columns[0] reaches
     # the raw Column since .isnot on the deferred() property itself yields NotImplemented.

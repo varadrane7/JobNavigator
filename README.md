@@ -97,6 +97,7 @@ Scrape career pages and aggregators, score jobs against your résumés with an L
 
 | Feature | Description |
 |---------|-------------|
+| **Daily curator** | Every morning ranks the day's new jobs (résumé fit, freshness, H-1B / pay, reply odds, company stability), saves the top 50 in apply order, ignores the rest, and finds founders / hiring managers / recruiters to contact. Self-hosted SearXNG search, also exposed to LM Studio over MCP. See [docs/CURATOR.md](docs/CURATOR.md) |
 | **Discovery** | Career pages (Playwright + 11 ATS handlers), JobSpy (LinkedIn, Indeed, ZipRecruiter, Google), LinkedIn collections, Levels.fyi, Jobright.ai, freehire.me, the Chrome extension |
 | **Scoring** | Claude, OpenAI, OpenRouter, Ollama, Claude Code, Codex CLI or Antigravity CLI; live model search, a model per feature; Light (score) or Full (report, keyword coverage, requirement mapping) against every base résumé; prompt caching on Anthropic |
 | **Résumés** | Structured base résumés, tailoring per job with a review step, 8 PDF templates (drop in your own), tracked links that record opens |

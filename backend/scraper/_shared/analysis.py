@@ -24,7 +24,7 @@ async def analyze_inline(job, db=None, h1b_median=None, arrangement=None) -> Non
         h1b_median = getattr(job, "_h1b_median", None)
 
     try:
-        apply_salary_to_job(job, h1b_median=h1b_median)
+        apply_salary_to_job(job, company_h1b_median=h1b_median)
     except Exception as e:
         logger.warning(
             "analyze_inline: salary extraction failed for %s: %s",

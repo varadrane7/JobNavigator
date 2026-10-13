@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from backend.scraper._shared.posted import parse_posted
 from backend.countries import DEFAULT_COUNTRY, compose_location
 from backend.models.db import SessionLocal, Search, Job, Setting, get_existing_external_ids
 from backend.scraper._shared.dedup import make_external_id, make_content_hash
@@ -413,6 +414,7 @@ def _run_sync(search, proxy_url: str = None) -> dict:
                     status="new",
                     seen=False,
                     saved=False,
+                    posted_at=parse_posted(row.get("date_posted")),
                 )
 
                 # Extract salary if present in JobSpy results

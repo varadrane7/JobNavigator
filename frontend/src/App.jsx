@@ -27,6 +27,7 @@ import CoverLetterEditor from './screens/CoverLetterEditor'
 import Settings from './screens/Settings'
 import Persona from './screens/Persona'
 import Stats from './screens/Stats'
+import Today from './screens/Today'
 import axios from 'axios'
 import { useTheme } from './theme'
 import { TitleSync } from './useTitle'
@@ -231,7 +232,8 @@ function App() {
       <Routes>
         {/* the app */}
         <Route path="/" element={<Shell />}>
-          <Route index element={<Navigate to="feed" replace />} />
+          <Route index element={<Navigate to="today" replace />} />
+          <Route path="today" element={<Today />} />
           <Route path="feed" element={<JobFeed />} />
           <Route path="resumes" element={<Resumes />} />
           <Route path="resumes/:id" element={<ResumeEditor />} />

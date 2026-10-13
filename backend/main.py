@@ -23,6 +23,7 @@ from backend.api.routes_cover_letters import router as cover_letters_router
 from backend.api.routes_linkedin import router as linkedin_router
 from backend.api.routes_autofill import router as autofill_router
 from backend.api.routes_llm import router as llm_router
+from backend.curator.routes import router as curator_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("jobnavigator")
@@ -326,6 +327,7 @@ app.include_router(cover_letters_router, prefix="/api")
 app.include_router(linkedin_router, prefix="/api")
 app.include_router(autofill_router, prefix="/api")
 app.include_router(llm_router, prefix="/api")
+app.include_router(curator_router, prefix="/api")
 
 
 # A malformed UUID in a path (/api/jobs/abc) makes Postgres raise DataError deep in
@@ -940,6 +942,7 @@ def get_scheduler_jobs():
         "db_backup": ("/db/backup", "db_backup"),
         "job_cleanup": ("/db/cleanup", "job_cleanup"),
         "auto_reject": ("/auto-reject/run", "auto_reject"),
+        "curate": ("/curator/run", "curate"),
     }
 
     # Human-friendly display names for the core scheduler jobs.
@@ -951,6 +954,7 @@ def get_scheduler_jobs():
         "db_backup": "Back up database (pg_dump)",
         "job_cleanup": "Clean up stale skipped jobs",
         "auto_reject": "Auto-reject ghosted applications",
+        "curate": "Curate today's Top jobs + contacts",
     }
 
     jobs = scheduler.get_jobs()

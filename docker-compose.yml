@@ -11,6 +11,8 @@ services:
       POSTGRES_USER: jobnavigator
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: jobnavigator
+      TZ: ${TZ:-America/New_York}
+      PGTZ: ${TZ:-America/New_York}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
@@ -38,6 +40,8 @@ services:
     environment:
       DATABASE_URL: postgresql://jobnavigator:${POSTGRES_PASSWORD:-password}@db:5432/jobnavigator
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # One zone for crons, day buckets and the DB session (backend/tz.py)
+      TZ: ${TZ:-America/New_York}
     ports:
       - "127.0.0.1:8000:8000"   # everything external goes through Caddy on :80; the raw API stays on loopback
     depends_on:
@@ -50,6 +54,34 @@ services:
       - codex_auth:/root/.codex
       # agy keeps its OAuth token in a file here; no keyring in this image.
       - antigravity_auth:/root/.gemini
+
+  searxng:
+    image: searxng/searxng:2026.10.4-d48c4b555
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://localhost:8888/
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-change-me-jobnavigator-searxng}
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    # Host-only: LM Studio (mcp-searxng) on this machine uses http://127.0.0.1:8888.
+    # The backend reaches it as http://searxng:8080 on the compose network.
+    ports:
+      - "127.0.0.1:8888:8080"
+
+  # MCP bridge so LM Studio (or any MCP client on this host) can search through SearXNG:
+  # LM Studio mcp.json -> {"mcpServers": {"searxng": {"url": "http://127.0.0.1:3010/mcp"}}}
+  mcp-searxng:
+    image: isokoliuk/mcp-searxng:2.5.1
+    restart: unless-stopped
+    environment:
+      SEARXNG_URL: http://searxng:8080
+      MCP_HTTP_PORT: "3000"
+      MCP_HTTP_HOST: 0.0.0.0
+      MCP_HTTP_ALLOWED_HOSTS: 127.0.0.1:3010,localhost:3010
+    ports:
+      - "127.0.0.1:3010:3000"
+    depends_on:
+      - searxng
 
   frontend:
     image: ghcr.io/vesaias/jobnavigator-frontend:${JN_IMAGE_TAG:-latest}

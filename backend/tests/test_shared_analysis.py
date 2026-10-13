@@ -11,7 +11,7 @@ async def test_analyze_inline_calls_both_h1b_and_salary(monkeypatch):
     async def fake_h1b(job, db=None):
         called["h1b"] = getattr(job, "id", None)
 
-    def fake_salary(job, h1b_median=None):
+    def fake_salary(job, company_h1b_median=None):
         called["salary"] = getattr(job, "id", None)
 
     monkeypatch.setattr("backend.scraper._shared.analysis.check_job_h1b", fake_h1b)
@@ -37,7 +37,7 @@ async def test_analyze_inline_tolerates_h1b_exception(monkeypatch):
     async def broken_h1b(job, db=None):
         raise RuntimeError("h1b boom")
 
-    def ok_salary(job, h1b_median=None):
+    def ok_salary(job, company_h1b_median=None):
         salary_called.append(True)
 
     monkeypatch.setattr("backend.scraper._shared.analysis.check_job_h1b", broken_h1b)
@@ -59,7 +59,7 @@ async def test_analyze_inline_tolerates_salary_exception(monkeypatch):
     async def ok_h1b(job, db=None):
         pass
 
-    def broken_salary(job, h1b_median=None):
+    def broken_salary(job, company_h1b_median=None):
         raise RuntimeError("salary broken")
 
     monkeypatch.setattr("backend.scraper._shared.analysis.check_job_h1b", ok_h1b)
@@ -81,8 +81,8 @@ async def test_analyze_inline_forwards_db_and_h1b_median(monkeypatch):
     async def fake_h1b(job, db=None):
         captured["h1b_db"] = db
 
-    def fake_salary(job, h1b_median=None):
-        captured["salary_median"] = h1b_median
+    def fake_salary(job, company_h1b_median=None):
+        captured["salary_median"] = company_h1b_median
 
     monkeypatch.setattr("backend.scraper._shared.analysis.check_job_h1b", fake_h1b)
     monkeypatch.setattr("backend.scraper._shared.analysis.apply_salary_to_job", fake_salary)

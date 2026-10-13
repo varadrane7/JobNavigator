@@ -10,6 +10,7 @@ import httpx
 
 from sqlalchemy.exc import IntegrityError
 
+from backend.scraper._shared.posted import parse_posted
 from backend.models.db import SessionLocal, Job, Search, Setting, get_existing_external_ids
 from backend.scraper._shared.dedup import make_external_id, make_content_hash
 
@@ -441,6 +442,7 @@ async def run(search: Search) -> dict:
                     status="new",
                     seen=False,
                     saved=False,
+                    posted_at=parse_posted(j.get("posted")),
                 )
 
                 # Salary from API
