@@ -7,8 +7,9 @@ import { agoShort, tzDateKey, TZ_SHORT } from '../time'
 import { fetchRunOutcome, runFailed, runFailureReason } from '../hooks'
 import '../theme.css'
 
-// Today: the daily curator's ranked Top list (backend/curator) and the people to
-// contact about it. Rank is the order to apply in; the window says how soon.
+// Today: the daily curator's ranked Top list (backend/curator), the people to
+// contact about it, and "people to know": decision makers at good companies with
+// no posting for the user today. Rank is the order to apply in; the window says how soon.
 
 const WINDOW = {
   now: ['good', 'Apply now'],
@@ -50,6 +51,7 @@ function JobCard({ j, onStatus, onCoverLetter }) {
         </div>
         {j.best_score != null && <Tag tone={scoreTone(j.best_score)} title={`Résumé fit (${j.best_cv || 'best'})`}>{Math.round(j.best_score)}</Tag>}
         {j.h1b_lca_count ? <Tag tone="accent" title="H-1B LCAs filed by this company">H-1B {j.h1b_lca_count}</Tag> : null}
+        {(j.parts || {}).tracked ? <Tag tone="accent" title="On your Companies list">Your list</Tag> : null}
         {it.funding_stage && it.funding_stage !== 'unknown' && <Tag tone="neutral">{it.funding_stage.replace('_', ' ')}</Tag>}
         {done
           ? <Tag tone={j.status === 'applied' ? 'good' : 'neutral'}>{j.status}</Tag>
@@ -87,6 +89,7 @@ function ContactCard({ c, job, onStatus, push }) {
           <Link href={c.linkedin_url} target="_blank" rel="noreferrer">{c.name}</Link>
           <Helper size="xs" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.title || ''} · {c.company}{c.location ? ` · ${c.location}` : ''}</Helper>
           {job && <Helper size="xs" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>re #{job.rank} {job.title}</Helper>}
+          {c.company_note && <Helper size="xs" title={c.company_note} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.company_note}</Helper>}
         </div>
         {job && <Tag tone={tone}>{label}</Tag>}
         {c.kind && <Tag tone={c.kind === 'hiring_manager' || c.kind === 'founder' ? 'accent' : 'neutral'}>{KIND[c.kind] || c.kind}</Tag>}
@@ -174,6 +177,11 @@ export default function Today() {
 
   const allJobs = data?.jobs || []
   const allContacts = data?.contacts || []
+  const jobContacts = useMemo(() => allContacts.filter((c) => c.purpose !== 'network'), [allContacts])
+  const network = useMemo(() => allContacts.filter((c) => c.purpose === 'network')
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => (CONTACT_DONE.has(a.c.status) - CONTACT_DONE.has(b.c.status)) || a.i - b.i)
+    .map(({ c }) => c), [allContacts])
   const applied = allJobs.filter((j) => j.status === 'applied').length
   const jobById = useMemo(() => Object.fromEntries(allJobs.map((j) => [j.id, j])), [allJobs])
   const inWin = (j) => win === 'all' || (j?.apply_window || 'today') === win
@@ -183,13 +191,13 @@ export default function Today() {
   // people follow the job list's order; contacted / skipped ones sink to the bottom
   const contacts = useMemo(() => {
     const pos = Object.fromEntries(jobs.map((j, i) => [j.id, i]))
-    return allContacts.filter((c) => win === 'all' || inWin(jobById[c.job_id]))
+    return jobContacts.filter((c) => win === 'all' || inWin(jobById[c.job_id]))
       .map((c, i) => ({ c, i }))
       .sort((a, b) => (CONTACT_DONE.has(a.c.status) - CONTACT_DONE.has(b.c.status))
         || ((pos[a.c.job_id] ?? 1e9) - (pos[b.c.job_id] ?? 1e9)) || a.i - b.i)
       .map(({ c }) => c)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allContacts, jobs, jobById, win])
+  }, [jobContacts, jobs, jobById, win])
   const winOpts = useMemo(() => [['all', 'All'], ...Object.entries(WINDOW).map(([k, [, l]]) => [k, l])].map(([value, l]) => {
     const n = value === 'all' ? allJobs.length : allJobs.filter((j) => (j.apply_window || 'today') === value).length
     return { value, label: `${l} · ${n}` }
@@ -234,9 +242,16 @@ export default function Today() {
             </section>
             <section style={{ flex: '1 1 340px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <Heading strong={600} size={16}>People to contact</Heading>
-              {allContacts.length === 0 && <Helper>Nobody found for {day} yet.</Helper>}
-              {allContacts.length > 0 && contacts.length === 0 && <Helper>Nobody for the jobs in this window.</Helper>}
+              {jobContacts.length === 0 && <Helper>Nobody found for {day} yet.</Helper>}
+              {jobContacts.length > 0 && contacts.length === 0 && <Helper>Nobody for the jobs in this window.</Helper>}
               {contacts.map((c) => <ContactCard key={c.id} c={c} job={jobById[c.job_id]} onStatus={setContactStatus} push={push} />)}
+              {network.length > 0 && (
+                <>
+                  <Heading strong={600} size={16} style={{ marginTop: 14 }}>People to know</Heading>
+                  <Helper size="xs">Engineering leaders at good companies, open role or not. Ask for a chat, and a referral when a role opens.</Helper>
+                  {network.map((c) => <ContactCard key={c.id} c={c} onStatus={setContactStatus} push={push} />)}
+                </>
+              )}
             </section>
           </>
         )}

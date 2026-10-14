@@ -611,7 +611,8 @@ async def trigger_job_cleanup():
             if archive_days <= 0:
                 return "Disabled (job_archive_after_days = 0)"
             cutoff = dt.now(tz.utc) - timedelta(days=archive_days)
-            old_skipped = db.query(Job).filter(Job.status == "skip", Job.discovered_at < cutoff).all()
+            old_skipped = db.query(Job).filter(Job.status == "skip", Job.discovered_at < cutoff,
+                                               ~Job.applications.any()).all()
             count = len(old_skipped)
             for job in old_skipped:
                 db.delete(job)

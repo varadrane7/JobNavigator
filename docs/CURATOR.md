@@ -1,22 +1,23 @@
 # Daily curator
 
 Every morning (default **04:30 America/New_York**, after the Claude/Antigravity limits reset) the curator turns the day's few
-hundred new jobs into a ranked list of 50 worth applying to today, saves them,
-and finds 15–20 people to contact about them. Results are on the **Today**
-screen, and a summary goes to Telegram.
+hundred new jobs into a ranked list (`curate_count`) worth applying to today, saves them,
+finds people to contact about them, and finds a few engineering leaders worth knowing at good
+companies whether or not they are hiring. Results are on the **Today** screen. Telegram gets one
+line of counts ("Curated list generated · X jobs to apply · Y unique companies · Z people to connect").
 
 ## How a job gets picked
 
 | Step | What happens | Cost |
 |---|---|---|
-| Pool | `status = new`, posted (or first seen) within `curate_window_hours` (36), US or unknown country, no application to that company in the last 30 days | SQL |
-| Hard drops | title words in `curate_title_exclude` (senior, staff, lead, manager…), JD says no sponsorship, JD asks for 6+ years | regex |
+| Pool | `status = new`, posted (or first seen) within `curate_window_hours` (36; **7 days** for companies on the Companies list), US or unknown country, no application to that company in the last 30 days | SQL |
+| Hard drops | companies in `curate_company_exclude` (staffing agencies, body shops, AI-training gigs) and gig titles ("AI code evaluation", "annotation"), title words in `curate_title_exclude` (staff, lead, manager…; senior titles stay in), JD says no sponsorship, JD asks for 6+ years | regex |
 | Embedding pre-filter | résumé-vs-JD cosine similarity on the local embedding model (`curate_embed_model`) | seconds |
 | LLM fit | the top `curate_llm_pool` (150) get the usual light fit score, if they have none | local LLM |
 | Company intel | for the companies that could make the cut: funding stage, last raise, layoffs, how often candidates hear back, pay band for ~3 YOE, email format. 5 SearXNG queries + 1 LLM extraction, cached 30 days in `company_intel` | search + local LLM |
-| Rank | composite of the parts below, at most 2 jobs per company | none |
+| Rank | composite of the parts below, at most 2 jobs per company, one copy of a posting seen on two boards (same first company word + same title) | none |
 | Write | top 50 → `saved` with `curated_rank`; the rest of the window → `ignored` (`curation.out = true`, reversible) | SQL |
-| Outreach | people for the top companies, email guess, drafted note + email | search + LinkedIn + LLM |
+| Outreach | people for the top companies, then people to know (below), email guess, drafted note + email | search + LinkedIn + LLM |
 
 Composite score (`curate_weights`):
 
@@ -28,6 +29,7 @@ Composite score (`curate_weights`):
   - "well funded" (Series C+, public, a recent Series B, or 50+ LCAs), which is never held to the band.
 - **reply 0.12**: your own reply rate at that company once you have 3+ applications there, else its interview-review reputation. Greenhouse/Ashby/Lever postings get a small bump; Workday/Taleo/iCIMS a small dip.
 - **stability 0.08**: funding stage, a raise in the last year, no layoffs.
+- **tracked 0.05**: 1 for a company on your Companies list. A saved `curate_weights` without this key still gets it.
 
 Each pick gets an **apply window**:
 
@@ -59,7 +61,25 @@ For each top company (best-ranked first) until `outreach_count` people are found
    - **Same country as the job.** Read from the profile's `Location:` (a bare ZIP counts as US), else the LinkedIn subdomain (`in.linkedin.com`, `ch.linkedin.com`). LinkedIn's own search adds its location filter. A `www` profile with no location passes for US jobs only.
    - **Close to the role.** The job title's area (ML, data, mobile, frontend, infra, security, backend) is added to the hiring-manager query and boosts managers whose headline matches. Technical recruiters beat general ones, and university / early-career recruiters rank up for new-grad roles. Someone in the job's state ranks above someone elsewhere in the country.
 3. An email address is guessed from the company's email format, which comes from RocketReach/LeadIQ snippets via SearXNG (e.g. `flast@ramp.com`). It is marked *(guess)*. Nothing is sent or verified.
-4. The curator LLM drafts a LinkedIn note (≤ 280 chars) and a short cold email. Both can be copied from the Today screen.
+4. The curator LLM drafts a LinkedIn note (≤ 290 chars, a Premium note) and a short cold email. Both can be copied from the Today screen.
+   The drafts get a structured profile from the default résumé: summary, recent roles, skills, and **every project
+   with its stack, one line and link**. The LLM names the one project closest to the role.
+
+## People to know
+
+After the job-linked people, the curator finds `outreach_network_count` (10) engineering leaders at good companies,
+whether or not those companies have a posting for you today. Job slots nobody filled (`outreach_count` minus people found) are added to this.
+
+- **Which companies, best first:**
+  1. your Companies list (tier 1, then 2);
+  2. companies that ranked just below today's cut;
+  3. well-funded companies already in `company_intel`.
+  Left out: any company with a contact in the last 45 days, and anything in `curate_company_exclude`.
+- **Who:** engineering managers, directors / heads / VPs of engineering, plus founders and CTOs at small companies. Recruiters are skipped because they work open requisitions. The team areas come from your résumé (backend, platform, AI…), and people in your Persona city rank first.
+- **Drafts:** no "I applied". One line on why the company (from its research note), the closest project with its link, then the ask: a 15-minute chat, and a referral when a backend or AI role opens.
+- They are saved as `contacts.purpose = 'network'` with no job, and appear under **People to know** on the Today screen.
+
+LinkedIn allows roughly 100–200 invitations a week even with Premium. At 35 people a day, send the rest by email.
 
 ## Search: SearXNG
 
@@ -97,7 +117,7 @@ Find these in Settings → Pipeline → Daily curator:
 - `curate_cron`, `curate_count`, `curate_window_hours`, `curate_llm_pool`, `curate_auto_ignore`
 - `target_base_min`, `target_base_max`, `curate_title_exclude`, `curate_weights`, `curate_embed_model`
 - `curator_llm_*`, `curator_fallback_llm_*`, `curate_concurrency`
-- `outreach_count`, `linkedin_people_daily_cap`, `searxng_url`
+- `outreach_count`, `outreach_network_count`, `curate_company_exclude`, `linkedin_people_daily_cap`, `searxng_url`
 
 **Run now** (on the Today screen or in Settings) does the same thing as the cron run. `POST /api/curator/run` takes the flags `outreach=false` and `send=false`.
 

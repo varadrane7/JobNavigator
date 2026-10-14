@@ -300,7 +300,9 @@ async def run_job_cleanup_auto():
 
                 from backend.models.db import Job
                 cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-                old_jobs = db.query(Job).filter(Job.status == "skip", Job.discovered_at < cutoff).all()
+                # A skipped job that was applied to keeps its application history (and the job it points at).
+                old_jobs = db.query(Job).filter(Job.status == "skip", Job.discovered_at < cutoff,
+                                                ~Job.applications.any()).all()
                 count = len(old_jobs)
                 for j in old_jobs:
                     db.delete(j)

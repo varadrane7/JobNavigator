@@ -5,7 +5,10 @@ Each part is 0..1; the composite is their weighted sum (weights in `curate_weigh
 import re
 from datetime import datetime, timezone
 
-DEFAULT_WEIGHTS = {"fit": 0.40, "fresh": 0.20, "visa_comp": 0.20, "reply": 0.12, "stability": 0.08}
+from backend.analyzer.location import fold
+
+# `tracked` is 1 for a company on the Companies list (picked by hand), else 0.
+DEFAULT_WEIGHTS = {"fit": 0.40, "fresh": 0.20, "visa_comp": 0.20, "reply": 0.12, "stability": 0.08, "tracked": 0.05}
 
 LATE_STAGES = {"series_c", "series_d", "series_e", "series_f", "series_g", "public"}
 STAGE_STABILITY = {
@@ -45,6 +48,46 @@ def title_excluded(title: str, words: list[str]) -> str | None:
         elif re.search(rf"\b{re.escape(w)}\b", t):
             return w
     return None
+
+
+# Staffing agencies, body shops and AI-training gigs: the posting is not a job at the
+# company it names, or not an engineering job at all.
+DEFAULT_COMPANY_EXCLUDE = ["Kforce", "TEKsystems", "Insight Global", "Robert Half", "CyberCoders", "Jobot",
+                           "Motion Recruitment", "Randstad", "Infosys", "Wipro", "TCS", "Tata Consultancy",
+                           "Cognizant", "DynPro", "Revature", "Turing", "ELITEBRAIN", "Outlier", "DataAnnotation",
+                           "Mercor", "Micro1", "Dice", "Apex Systems", "Diverse Lynx", "Collabera"]
+_GIG_TITLE = re.compile(r"\bai (code |model )?(evaluat\w*|trainer|tutor)\b|\bannotat\w*|\brater\b|data label+ing", re.I)
+_CO_SUFFIX = {"inc", "llc", "ltd", "limited", "corp", "corporation", "co", "company", "technologies", "technology",
+              "labs", "software", "systems", "group", "holdings", "platforms", "hq", "the", "us", "usa", "pbc"}
+
+
+def co_words(name: str) -> list[str]:
+    """"Stripe, Inc." -> ["stripe"]; suffix words dropped unless that leaves nothing."""
+    words = re.findall(r"[a-z0-9]+", fold(name or "").replace("&", " and "))
+    return [w for w in words if w not in _CO_SUFFIX] or words
+
+
+def company_excluded(company: str, names: list[str]) -> str | None:
+    """The exclude entry `company` starts with, word for word ("Kforce Inc" matches "Kforce"), or None."""
+    words = co_words(company)
+    for n in names or []:
+        ex = co_words(n)
+        if ex and words[:len(ex)] == ex:
+            return n
+    return None
+
+
+def gig_title(title: str) -> str | None:
+    """"Junior Software Engineer – AI Code Evaluation" -> "ai code evaluation"."""
+    m = _GIG_TITLE.search(title or "")
+    return m.group(0).lower() if m else None
+
+
+def same_posting_key(company: str, title: str) -> tuple[str, str]:
+    """One key for the same posting seen on two boards ("Nationwide" and "Nationwide Mutual Insurance
+    Company"): the company's first word and the title's letters and digits."""
+    words = co_words(company)
+    return (words[0] if words else ""), " ".join(re.findall(r"[a-z0-9#+]+", (title or "").lower()))
 
 
 def jd_blocker(description: str) -> str | None:

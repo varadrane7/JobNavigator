@@ -97,10 +97,10 @@ def test_fit_score_unscored_never_beats_confirmed_fit():
 
 
 def test_composite_is_weighted_mean_and_deterministic():
-    parts = {"fit": 1, "fresh": 1, "visa_comp": 1, "reply": 1, "stability": 1}
+    parts = {"fit": 1, "fresh": 1, "visa_comp": 1, "reply": 1, "stability": 1, "tracked": 1}
     assert s.composite(parts) == 1.0
-    assert s.composite({"fit": 1}) == pytest.approx(0.4)
-    assert s.composite({"fit": 1}, {"fit": 1, "fresh": 0, "visa_comp": 0, "reply": 0, "stability": 0}) == 1.0
+    assert s.composite({"fit": 1}) == pytest.approx(0.4 / 1.05, abs=1e-4)
+    assert s.composite({"fit": 1}, {"fit": 1, "fresh": 0, "visa_comp": 0, "reply": 0, "stability": 0, "tracked": 0}) == 1.0
 
 
 def test_apply_window():
@@ -138,3 +138,29 @@ def test_parse_posted_bare_date():
 
 def test_parse_posted_never_in_future():
     assert parse_posted("2027-01-01T00:00:00Z", NOW) == NOW
+
+
+def test_company_excluded_matches_leading_words():
+    from backend.curator.scoring import DEFAULT_COMPANY_EXCLUDE, company_excluded
+    assert company_excluded("Kforce Inc", DEFAULT_COMPANY_EXCLUDE) == "Kforce"
+    assert company_excluded("Infosys Limited", DEFAULT_COMPANY_EXCLUDE) == "Infosys"
+    assert company_excluded("turing", DEFAULT_COMPANY_EXCLUDE) == "Turing"
+    assert company_excluded("Insight Global", DEFAULT_COMPANY_EXCLUDE) == "Insight Global"
+    assert company_excluded("Insightful Labs", DEFAULT_COMPANY_EXCLUDE) is None
+    assert company_excluded("Glean", DEFAULT_COMPANY_EXCLUDE) is None
+
+
+def test_gig_title():
+    from backend.curator.scoring import gig_title
+    assert gig_title("Junior Software Engineer – AI Code Evaluation (Remote)") == "ai code evaluation"
+    assert gig_title("AI Trainer - Python") == "ai trainer"
+    assert gig_title("Software Engineer, AI Data Application") is None
+    assert gig_title("Backend Engineer") is None
+
+
+def test_same_posting_key_spans_company_spellings():
+    from backend.curator.scoring import same_posting_key
+    a = same_posting_key("Nationwide", "Specialist, Software Engineer (Java, Spring Boot, Angular)")
+    b = same_posting_key("Nationwide Mutual Insurance Company", "Specialist, Software Engineer (Java, Spring Boot, Angular)")
+    assert a == b
+    assert same_posting_key("Glean", "Software Engineer") != same_posting_key("Glean", "Software Engineer II")

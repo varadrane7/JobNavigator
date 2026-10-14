@@ -182,7 +182,8 @@ class CompanyIntel(Base):
 
 
 class Contact(Base):
-    """A person to reach out to about a curated job (founder, hiring manager, recruiter)."""
+    """A person to reach out to: about a curated job (purpose 'job': founder, hiring manager, recruiter),
+    or a decision maker at a good company whether or not it has a role open (purpose 'network', no job)."""
     __tablename__ = "contacts"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -199,6 +200,7 @@ class Contact(Base):
     note = Column(Text, nullable=True)                   # draft LinkedIn note (<300 chars)
     email_draft = Column(Text, nullable=True)            # draft cold email
     status = Column(String, default="new")               # new | contacted | replied | skip
+    purpose = Column(String, default="job")              # job | network
     found_on = Column(Date, nullable=True, index=True)   # APP_TZ date
     created_at = Column(DateTime(timezone=True), default=utcnow)
 

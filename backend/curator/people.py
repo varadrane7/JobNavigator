@@ -18,6 +18,7 @@ from backend.analyzer.location import parse as parse_location
 from backend.curator.intel import make_email
 from backend.curator.linkedin_people import LinkedInPeople
 from backend.curator.llm import ask_json
+from backend.curator.scoring import co_words as _co_words
 from backend.search.searxng import SearchError, search
 
 logger = logging.getLogger("jobnavigator.curator.people")
@@ -56,13 +57,6 @@ _EXPERIENCE = re.compile(r"\b(?:Experience|Doświadczenie|Experiencia|Experiênc
 _LI_SUBDOMAIN = {"uk": "GB"}
 _ZIP = re.compile(r"^\d{5}(?:-\d{4})?$")
 _FORMER = re.compile(r"\b(?:ex|former(?:ly)?|previously|prev|past|alum\w*|retired)\b[^|·,;/]*$", re.I)
-_CO_SUFFIX = {"inc", "llc", "ltd", "limited", "corp", "corporation", "co", "company", "technologies", "technology",
-              "labs", "software", "systems", "group", "holdings", "platforms", "hq", "the", "us", "usa", "pbc"}
-
-
-def _co_words(name: str) -> list[str]:
-    words = re.findall(r"[a-z0-9]+", fold(name).replace("&", " and "))
-    return [w for w in words if w not in _CO_SUFFIX] or words
 
 
 def same_company(a: str, b: str) -> bool:
@@ -192,7 +186,47 @@ async def find_people(company: str, job_title: str, small_company: bool, li: Lin
                    + (' OR "university recruiter" OR "early career"' if early else "") + ")")
     if city:
         queries.append(f'site:linkedin.com/in {q_co} ("engineering manager" OR recruiter) "{city}"')
+    li_keywords = [f"{company} engineering manager {_area_terms(areas, li=True)}".strip(), f"{company} technical recruiter"]
+    return await _search_people(company, queries, li_keywords, li, areas=areas, small_company=small_company,
+                                want=want, country=country, region=region, early=early)
 
+
+# Who can put someone forward when there is no open role to apply to: the people who
+# own a team's headcount. Recruiters are left out; they work open requisitions.
+DECISION_MAKERS = {"hiring_manager", "founder"}
+_PROFILE_AREA_WORDS = {"ml": "AI", "backend": "backend", "infra": "platform", "data": "data",
+                       "mobile": "mobile", "frontend": "frontend", "security": "security"}
+
+
+def profile_areas(text: str) -> list[str]:
+    """The team areas the sender's résumé speaks to, in _AREAS order ("backend", "ml", ...)."""
+    return [a for a, rx, _, _ in _AREAS if a != "fullstack" and re.search(rx, text or "", re.I)]
+
+
+async def find_decision_makers(company: str, areas: list[str], small_company: bool, li: LinkedInPeople | None,
+                               want: int = 1, country: str = "US", region: str | None = None,
+                               city: str | None = None) -> list[dict]:
+    """Up to `want` engineering managers / directors / heads of engineering at `company` (founders and
+    CTOs too when it is small) who run the kind of team the sender fits, whether or not it is hiring."""
+    q_co = f'"{company}"'
+    words = [_PROFILE_AREA_WORDS[a] for a in areas if a in _PROFILE_AREA_WORDS][:4]
+    area_or = f"({' OR '.join(words)})" if words else ""
+    queries = [f'site:linkedin.com/in {q_co} ("engineering manager" OR "director of engineering" OR "head of engineering") {area_or}'.strip(),
+               f'site:linkedin.com/in {q_co} ("VP of engineering" OR "VP engineering" OR CTO'
+               + (' OR founder OR "co-founder"' if small_company else "") + ")"]
+    if city:
+        queries.append(f'site:linkedin.com/in {q_co} ("engineering manager" OR "director of engineering") "{city}"')
+    li_keywords = [f"{company} engineering manager {_area_terms(areas, li=True)}".strip(),
+                   f"{company} director of engineering"]
+    return await _search_people(company, queries, li_keywords, li, areas=areas, small_company=small_company,
+                                want=want, country=country, region=region, early=False, kinds=DECISION_MAKERS)
+
+
+async def _search_people(company: str, queries: list[str], li_keywords: list[str], li: LinkedInPeople | None, *,
+                         areas: list[str], small_company: bool, want: int, country: str, region: str | None,
+                         early: bool, kinds: set[str] | None = None) -> list[dict]:
+    """Run `queries` on SearXNG (then `li_keywords` on LinkedIn when nobody useful turned up) and
+    return the best `want` current employees in `country` whose kind is in `kinds` (default: all but engineers)."""
     cands: dict[str, dict] = {}
     rejected = {"left": 0, "country": 0}
 
@@ -212,7 +246,7 @@ async def find_people(company: str, job_title: str, small_company: bool, li: Lin
         out = []
         for c in cands.values():
             kind = classify(c["headline"])
-            if kind and kind != "engineer":
+            if kind and kind != "engineer" and (kinds is None or kind in kinds):
                 c = {**c, "kind": kind}
                 out.append({**c, "_p": priority(kind, small_company),
                             "_r": relevance(c, areas, small_company, region, early)})
@@ -233,7 +267,7 @@ async def find_people(company: str, job_title: str, small_company: bool, li: Lin
 
     best = ranked()
     if (not best or best[0]["_p"] < 2) and li is not None:
-        for kw in (f"{company} engineering manager {_area_terms(areas, li=True)}".strip(), f"{company} technical recruiter"):
+        for kw in li_keywords:
             for hit in await li.search(kw, country=country):
                 if hit.get("current_text"):
                     hit["current"] = names_company(hit["current_text"], company)
@@ -253,30 +287,64 @@ async def find_people(company: str, job_title: str, small_company: bool, li: Lin
 
 
 _DRAFT_SYSTEM = ("You write short, specific, human outreach for a job seeker. No flattery, no buzzwords, "
-                 "no em dashes. Never invent facts about the sender beyond the profile given.")
+                 "no em dashes. Never invent facts about the sender beyond the profile given, and never invent "
+                 "facts about the company beyond what you are told.")
 
 _DRAFT_PROMPT = """Sender: {me}
-Sender profile: {profile}
+Sender profile:
+{profile}
+
 Target: {name}, {headline} at {company}
 Role the sender is applying to: {job_title} ({job_url})
 
 Write JSON:
-- "note": LinkedIn connection note, max 280 characters, mentions the role and one concrete overlap
+- "note": LinkedIn connection note, max 290 characters, mentions the role and one concrete overlap: the project or past result from the profile closest to this team
 - "email_subject": max 8 words
-- "email_body": 70-110 words, plain text, says the sender applied (or is applying today), one line of relevant proof, a soft ask for a quick chat or a referral, sign-off with the sender's first name"""
+- "email_body": 80-120 words, plain text: says the sender applied (or is applying today); one line of proof naming the ONE project or past result from the profile that fits this role best, with the project's link if it has one; a soft ask for a quick chat or a referral; sign-off with the sender's first name"""
+
+_NETWORK_PROMPT = """Sender: {me}
+Sender profile:
+{profile}
+
+Target: {name}, {headline} at {company}
+About {company}: {about}
+
+The sender is not applying to a posted role. The target leads engineering people who could
+put the sender forward for a role on their team now or when one opens.
+
+Write JSON:
+- "note": LinkedIn connection note, max 290 characters: who the sender is in a few words, the project from the profile closest to the target's team, and a request to connect. Do not say the sender applied
+- "email_subject": max 8 words
+- "email_body": 80-120 words, plain text: one line on why {company} (only from the About line or the target's headline; skip it if neither says anything specific); one line of proof naming the ONE project from the profile closest to the target's team, with its link; the ask: a 15-minute chat about the team, and if a backend or AI role opens there, to be considered or referred; sign-off with the sender's first name"""
 
 
-async def draft(contact: dict, company: str, job: dict, me: str, profile: str) -> dict:
-    out = await ask_json(
-        _DRAFT_PROMPT.format(me=me, profile=profile[:900], name=contact["name"], headline=contact.get("headline", ""),
-                             company=company, job_title=job.get("title", ""), job_url=job.get("url", "")),
-        _DRAFT_SYSTEM, purpose="curator_outreach_draft", max_tokens=900, job_id=job.get("id"))
+def _split_draft(out: dict | None) -> dict:
     if not out:
         return {}
     note = str(out.get("note") or "")[:300]
     subj = str(out.get("email_subject") or "").strip()
     body = str(out.get("email_body") or "").strip()
     return {"note": note, "email_draft": (f"Subject: {subj}\n\n{body}" if subj else body) or None}
+
+
+async def draft(contact: dict, company: str, job: dict, me: str, profile: str) -> dict:
+    out = await ask_json(
+        _DRAFT_PROMPT.format(me=me, profile=profile, name=contact["name"], headline=contact.get("headline", ""),
+                             company=company, job_title=job.get("title", ""), job_url=job.get("url", "")),
+        _DRAFT_SYSTEM, purpose="curator_outreach_draft", max_tokens=900, job_id=job.get("id"))
+    return _split_draft(out)
+
+
+async def draft_network(contact: dict, company: str, intel: dict | None, me: str, profile: str) -> dict:
+    intel = intel or {}
+    about = " ".join(str(x) for x in (intel.get("notes"),
+                                       f"Funding: {intel['funding_stage'].replace('_', ' ')}" if intel.get("funding_stage") not in (None, "", "unknown") else "",
+                                       f"About {intel['headcount']} people" if intel.get("headcount") else "") if x) or "nothing known"
+    out = await ask_json(
+        _NETWORK_PROMPT.format(me=me, profile=profile, name=contact["name"], headline=contact.get("headline", ""),
+                               company=company, about=about),
+        _DRAFT_SYSTEM, purpose="curator_network_draft", max_tokens=900)
+    return _split_draft(out)
 
 
 def guess_email(name: str, intel: dict | None) -> tuple[str | None, float | None]:

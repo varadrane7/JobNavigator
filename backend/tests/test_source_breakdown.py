@@ -331,6 +331,18 @@ def test_condense_error_keeps_non_http_text():
     assert _site_key("uvicorn.error") is None
 
 
+def test_condense_error_reads_429_not_the_https_port():
+    """LinkedIn's guest API throttles with 429; urllib3's message names port=443 first."""
+    from backend.scraper.sources.jobspy import RATE_LIMITED, _condense_error
+
+    msg = ("LinkedIn: HTTPSConnectionPool(host='www.linkedin.com', port=443): Max retries exceeded with url: "
+           "/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=.NET&start=10 "
+           "(Caused by ResponseError('too many 429 error responses'))")
+    assert _condense_error(msg) == RATE_LIMITED
+    assert _condense_error("HTTPSConnectionPool(host='x', port=443): Read timed out") != "443"
+    assert _condense_error("HTTPSConnectionPool(host='x', port=443): status 503") == "503"
+
+
 # ── the ScrapeLog row ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

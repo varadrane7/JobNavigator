@@ -89,10 +89,19 @@ def _site_key(logger_name: str):
     return _JOBSPY_SITE_KEYS.get(flat, suffix.lower())
 
 
+# A throttled board: urllib3 gives up with "too many 429 error responses". The jobs from
+# the pages fetched before that are already in hand, so the run is partial, not failed.
+RATE_LIMITED = "429: rate-limited by the board; jobs from the earlier pages were kept"
+
+
 def _condense_error(msg: str) -> str:
-    """"ZipRecruiter response status code 403" -> "403"; anything else trimmed."""
+    """"ZipRecruiter response status code 403" -> "403"; anything else trimmed.
+
+    The port in "HTTPSConnectionPool(host=..., port=443)" is not a status code."""
     text = " ".join(str(msg).split())
-    m = re.search(r"\b([45]\d\d)\b", text)
+    if re.search(r"too many 429|\b429\b", text):
+        return RATE_LIMITED
+    m = re.search(r"(?<!port=)\b([45]\d\d)\b", text)
     if m:
         return m.group(1)
     return text[:120]

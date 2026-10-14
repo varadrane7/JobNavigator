@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.job_monitor import JobAlreadyRunningError, launch_background
-from backend.models.db import Contact, Job, Resume, get_db
+from backend.models.db import CompanyIntel, Contact, Job, Resume, get_db
 from backend.tz import APP_TZ_NAME, local_today
 
 logger = logging.getLogger("jobnavigator.curator.api")
@@ -19,7 +19,8 @@ router = APIRouter(tags=["curator"])
 
 def _summary_text(s: dict) -> str:
     return (f"{s['saved']} saved from {s['candidates']} candidates ({s['dropped']} dropped, "
-            f"{s['llm_pool']} ranked), {s['ignored']} ignored, {s['contacts']} contacts")
+            f"{s['llm_pool']} ranked), {s['ignored']} ignored, {s['contacts']} contacts, "
+            f"{s.get('network', 0)} people to know")
 
 
 @router.post("/curator/run", status_code=202, summary="Run the daily curation now")
@@ -54,7 +55,7 @@ def _contact_out(c: Contact) -> dict:
         "id": str(c.id), "job_id": str(c.job_id) if c.job_id else None, "company": c.company, "name": c.name,
         "title": c.title, "kind": c.kind, "linkedin_url": c.linkedin_url, "email": c.email,
         "email_confidence": c.email_confidence, "source": c.source, "location": c.location, "note": c.note,
-        "email_draft": c.email_draft, "status": c.status,
+        "email_draft": c.email_draft, "status": c.status, "purpose": c.purpose or "job",
         "found_on": c.found_on.isoformat() if c.found_on else None,
     }
 
@@ -65,6 +66,9 @@ def today(day: Optional[date] = None, db: Session = Depends(get_db)):
     jobs = (db.query(Job).filter(Job.curated_on == d, Job.curated_rank.isnot(None))
             .order_by(Job.curated_rank).all())
     contacts = db.query(Contact).filter(Contact.found_on == d).order_by(Contact.created_at).all()
+    # a network contact has no job card next to it, so it carries the company's one-line research note
+    keys = {(c.company or "").strip().lower() for c in contacts if c.purpose == "network"}
+    notes = {r.name_key: r.notes for r in db.query(CompanyIntel).filter(CompanyIntel.name_key.in_(keys)).all()} if keys else {}
     # best_cv holds the résumé's name; the cover-letter deep link needs its id
     resume_ids = {"Persona": "persona"}
     for rid, name, _ in db.query(Resume.id, Resume.name, Resume.is_base).order_by(Resume.is_base).all():
@@ -72,7 +76,8 @@ def today(day: Optional[date] = None, db: Session = Depends(get_db)):
     days = [r[0].isoformat() for r in db.query(Job.curated_on).filter(Job.curated_on.isnot(None))
             .distinct().order_by(Job.curated_on.desc()).limit(30).all()]
     return {"date": d.isoformat(), "timezone": APP_TZ_NAME, "days": days,
-            "jobs": [_job_out(j, resume_ids) for j in jobs], "contacts": [_contact_out(c) for c in contacts]}
+            "jobs": [_job_out(j, resume_ids) for j in jobs], "contacts": [{**_contact_out(c), "company_note": notes.get((c.company or "").strip().lower()) or None}
+                         for c in contacts]}
 
 
 class ContactPatch(BaseModel):
