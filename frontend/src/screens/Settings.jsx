@@ -305,6 +305,8 @@ export default function Settings() {
   const hasMe = !!me
   const isOwner = !!me && me.role === 'owner'
   const member = multi && !isOwner
+  // MT-21: the owner allowed this member its own local model server
+  const memberLocalOk = member && !!(acctData?.accounts || []).find((a) => a.id === me?.id)?.allow_local_url
   const ownerName = (acctData?.accounts || []).find((a) => a.role === 'owner')?.name || 'the owner'
   const unlocked = !!unlockedUntil
   // the unlock ends on its own after 15 minutes
@@ -533,6 +535,13 @@ export default function Settings() {
         { kind: 'clilogin', provider: 'agy', label: 'Antigravity CLI login',
           help: `Your Google subscription: sign in to agy on your own computer, zip the ~/.gemini folder and upload it here. Used by: ${usedBy('antigravity_cli').join(', ')}.`,
           hide: () => !usedBy('antigravity_cli').length || (member && sidx?.byId?.models?.mode !== 'own') },
+        // MT-21: a member the owner allowed points Ollama / LM Studio / OpenAI (Local) at its own server.
+        B('My LM Studio address', 'Your own LM Studio server (LAN or VPN address the install can reach), instead of the owner’s.', 'member_lmstudio_base_url',
+          { mono: true, w: '340px', placeholder: 'http://192.168.1.50:1234/v1', hide: () => !memberLocalOk || !usedBy('lmstudio').length }),
+        B('My Ollama address', 'Your own Ollama server (LAN or VPN address the install can reach), instead of the owner’s.', 'member_ollama_base_url',
+          { mono: true, w: '340px', placeholder: 'http://192.168.1.50:11434', hide: () => !memberLocalOk || !usedBy('ollama').length }),
+        B('My local endpoint URL', 'Your own OpenAI-compatible server, instead of the owner’s.', 'member_llm_local_base_url',
+          { mono: true, w: '340px', placeholder: 'http://192.168.1.50:1234/v1', hide: () => !memberLocalOk || !LOCAL_PROVIDER_KEYS.some((k) => val(k) === 'openai_local') }),
         // The local model servers' addresses: owner-only settings (one host per install), shown to the owner while some slot uses that provider.
         B('LM Studio address', 'Empty uses LMSTUDIO_BASE_URL from .env, else http://localhost:1234/v1. From Docker: http://host.docker.internal:1234/v1.'
             + (usedBy('lmstudio').length ? ` Used by: ${usedBy('lmstudio').join(', ')}.` : ''),
@@ -767,7 +776,7 @@ export default function Settings() {
       ]],
     ]
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [S, resumes, personaAvailable, trig, li, multi, isOwner, hasMe, sidx, gmail, effective])
+  }, [S, resumes, personaAvailable, trig, li, multi, isOwner, hasMe, sidx, gmail, effective, memberLocalOk])
 
   // The rail's account menu lands here: `#accounts` (Manage accounts) scrolls to the
   // Accounts / Your account section, `#add-account` also opens the Add dialog. The hash is

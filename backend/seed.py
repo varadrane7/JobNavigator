@@ -48,6 +48,10 @@ DEFAULT_SETTINGS = {
     # Billed per result by Apify; `_api_key` suffix keeps it redacted on GET /settings.
     "apify_api_key": ("", "Apify API token for the Apify search mode"),
     # OIDC login (backend/accounts/oidc.py). A value here wins over the OIDC_* environment variable.
+    "local_url_allowed_accounts": ("[]", "JSON list of member account ids that may use their own local model server (Settings › Accounts)"),
+    "member_lmstudio_base_url": ("", "A member's own LM Studio address (needs the owner's permission)"),
+    "member_ollama_base_url": ("", "A member's own Ollama address (needs the owner's permission)"),
+    "member_llm_local_base_url": ("", "A member's own OpenAI (Local) address (needs the owner's permission)"),
     "oidc_discovery_url": ("", "OIDC discovery URL (https://idp/application/o/app/.well-known/openid-configuration); empty = OIDC login off"),
     "oidc_client_id": ("", "OIDC client id"),
     "oidc_client_secret": ("", "OIDC client secret"),
@@ -515,7 +519,8 @@ ENUM_SETTING_VALUES = {
 }
 
 
-LOCAL_URL_SETTING_KEYS = {key for key, _env, _default in LOCAL_LLM_URLS.values()}
+LOCAL_URL_SETTING_KEYS = ({key for key, _env, _default in LOCAL_LLM_URLS.values()}
+                          | {"member_lmstudio_base_url", "member_ollama_base_url", "member_llm_local_base_url"})
 
 
 def _cron_error(value: str) -> str | None:

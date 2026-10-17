@@ -66,7 +66,7 @@ def _iso(dt):
     return dt.isoformat() if dt is not None else None
 
 
-def _full_view(acc: dict, row: Optional[Account], counts: dict, caller: dict) -> dict:
+def _full_view(acc: dict, row: Optional[Account], counts: dict, caller: dict, local_ok: Optional[set] = None) -> dict:
     out = acct_auth.public_account(acc)
     out.update({
         "created_at": _iso(acc.get("created_at")),
@@ -74,6 +74,8 @@ def _full_view(acc: dict, row: Optional[Account], counts: dict, caller: dict) ->
         "counts": {**admin.empty_counts(), **counts.get(acc["id"], {})},
         "is_self": acc["id"] == caller["id"],
     })
+    if acc["role"] != "owner" and local_ok is not None:
+        out["allow_local_url"] = str(acc["id"]) in local_ok   # MT-21: the owner sees every member's, a member only its own (full views)
     return out
 
 
@@ -124,10 +126,12 @@ def list_accounts(db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No account")
     rows = _rows_by_id(db)
     counts = admin.account_counts(db)
+    from backend.accounts import local_urls
+    local_ok = local_urls.allowed_ids(db)
     out = []
     for acc in accounts:
         if _is_owner(caller) or acc["id"] == caller["id"]:
-            out.append(_full_view(acc, rows.get(acc["id"]), counts, caller))
+            out.append(_full_view(acc, rows.get(acc["id"]), counts, caller, local_ok))
         else:
             out.append({"id": str(acc["id"]), "name": acc["name"], "color": acc["color"],
                         "role": acc["role"]})
@@ -222,6 +226,13 @@ def update_account(account_id: str, request: Request, response: Response,
     if "color" in body:
         changes["color"] = _clean_color(body.get("color"))
 
+    if "allow_local_url" in body:
+        # MT-21: the owner lets a member point its Ollama / LM Studio / OpenAI (Local) calls at its own server.
+        if not _is_owner(caller) or target["role"] == "owner" or not isinstance(body["allow_local_url"], bool):
+            raise HTTPException(status_code=403 if not _is_owner(caller) else 422, detail="allow_local_url")
+        from backend.accounts import local_urls
+        local_urls.set_allowed(db, target["id"], body["allow_local_url"])
+
     pin_changed = False
     if "pin" in body:
         new_pin = body.get("pin")
@@ -269,8 +280,10 @@ def update_account(account_id: str, request: Request, response: Response,
     if pin_changed:
         logger.info("PIN %s for account %s by %s", "set" if changes["pin_hash"] else "removed",
                     target["id"], "itself" if is_self else "the owner")
+    from backend.accounts import local_urls
     view = _full_view(updated, db.query(Account).filter(Account.id == target["id"]).first(),
-                      admin.account_counts(db), caller)
+                      admin.account_counts(db), caller,
+                      local_urls.allowed_ids(db) if _is_owner(caller) else None)
     return {"account": view, "pin_changed": pin_changed}
 
 

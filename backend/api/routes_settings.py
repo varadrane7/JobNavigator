@@ -15,6 +15,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
+def _check_member_local_urls(db, updates: dict, targets: dict) -> None:
+    """MT-21: a member writes its own local-server address only when the owner allowed it,
+    and the address must be a LAN/loopback host (accounts/local_urls.py)."""
+    from backend.accounts import local_urls
+    for key in local_urls.MEMBER_KEYS.values():
+        value = updates.get(key)
+        member = targets.get(key)
+        if value is None or member is None or not str(value).strip():
+            continue
+        if not local_urls.is_allowed(db, member):
+            raise HTTPException(status_code=403, detail="local_url_not_allowed")
+        problem = local_urls.check_url(str(value))
+        if problem:
+            raise HTTPException(status_code=400, detail=f"Invalid setting value — {key}: {problem}")
+
+
 _REDACT_SUFFIXES = ("_password", "_api_key", "_session_id", "_secret")
 _REDACT_KEYS = {"dashboard_api_key", "gmail_refresh_token", "claude_code_oauth_token",
                 "telegram_bot_token"}
@@ -202,6 +218,8 @@ def update_settings(updates: dict, db: Session = Depends(get_db)):
             status_code=403,
             detail="These settings are managed by the account owner: " + ", ".join(e.keys),
         )
+
+    _check_member_local_urls(db, checkable, targets)
 
     if "default_resume_id" in checkable:
         _check_default_resume(db, checkable["default_resume_id"])

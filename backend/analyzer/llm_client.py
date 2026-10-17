@@ -293,7 +293,8 @@ def _local_base_url() -> str:
     """base_url for the openai_local provider — one setting shared by every section, since it names where the local server lives, not a per-feature choice."""
     db = SessionLocal()
     try:
-        return _get_setting(db, "llm_local_base_url", "http://localhost:1234/v1")
+        from backend.accounts.local_urls import member_override
+        return member_override(db, "openai_local") or _get_setting(db, "llm_local_base_url", "http://localhost:1234/v1")
     finally:
         db.close()
 
@@ -676,11 +677,13 @@ def local_base_url(provider: str, db=None) -> str:
     if own_db:
         db = SessionLocal()
     try:
-        value = (get_setting(db, key) or "").strip()
+        from backend.accounts.local_urls import member_override
+        own = member_override(db, provider)   # MT-21: an allowed member's own server
+        value = "" if own else (get_setting(db, key) or "").strip()
     finally:
         if own_db:
             db.close()
-    return value.rstrip("/") or local_base_url_fallback(provider)
+    return own or value.rstrip("/") or local_base_url_fallback(provider)
 
 
 def local_base_url_fallback(provider: str) -> str:

@@ -476,6 +476,13 @@ export function AccountsTable({ data, me, onAdd, onChanged, push, policyFor = ''
               {onPolicyFor && (
                 <span role="cell" style={{ flex: '0 0 216px', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                   {!owner && (
+                    <Switch size="sm" on={!!a.allow_local_url} label="Own local model server"
+                      ariaLabel={`Let ${a.name} use their own local model server`}
+                      onChange={async (on) => {
+                        try { await api.patch(`/accounts/${a.id}`, { allow_local_url: on }); onChanged() } catch (err) { push({ kind: 'error', msg: errorText(err) }) }
+                      }} />
+                  )}
+                  {!owner && (
                     <Switch size="sm" on={policyFor === a.id} label="Edit policies" ariaLabel={`Edit ${a.name}’s policies`}
                       onChange={(on) => onPolicyFor(on ? a.id : '')} />
                   )}
