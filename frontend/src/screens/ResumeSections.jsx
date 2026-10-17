@@ -4,7 +4,7 @@
 // Real data is looser than the EMPTY skeleton (unknown keys, missing sections). Every mutation
 // goes through mutate(), which deep-clones and writes one path, so unknown keys survive.
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react'
-import { Band, Card, DashedAdd, Helper, Input, Label, MoveArrows, RemoveLink, RemoveX, SectionHead, Textarea } from '../ui'
+import { Band, Card, DashedAdd, Helper, Input, Label, MoveArrows, RemoveLink, RemoveX, SectionHead, Switch, Textarea } from '../ui'
 
 // The résumé sections' add-line IS ui.jsx's DashedAdd (accent ink · 1px dashed
 // --dashadd-border · r6 · 11.5 · h28, `big` = 32/12/500) — re-exported under the
@@ -21,6 +21,9 @@ export const kb = (fn, role = 'button') => ({
 })
 export const EMPTY = { header: { name: '', contact_items: [] }, summary: '', experience: [], skills: {}, education: [], projects: [], publications: [] }
 export const SECTION_ORDER = ['Header', 'Summary', 'Experience', 'Skills', 'Education', 'Projects', 'Publications']
+// The résumé editor's sections: the page footer needs a job's title and company, so only a
+// job-linked tailored copy gets the 'Settings' section (never a base, a freeform tailor or Persona).
+export const resumeSectionNames = (doc) => (doc && !doc.is_base && doc.job_id ? [...SECTION_ORDER, 'Settings'] : SECTION_ORDER)
 
 // Section counts for the collapsed header, from whichever sections exist.
 export const sectionCounts = (data) => ({
@@ -152,8 +155,22 @@ export function SectionEditor({ name, data, setField, mutate, baseData, emptyNot
     case 'Education': return <EducationEditor emptyNote={emptyNote} data={data} setField={setField} mutate={mutate} onRemoved={onRemoved} />
     case 'Projects': return <ProjectsEditor emptyNote={emptyNote} data={data} setField={setField} mutate={mutate} onRemoved={onRemoved} />
     case 'Publications': return <PublicationsEditor emptyNote={emptyNote} data={data} setField={setField} mutate={mutate} onRemoved={onRemoved} />
+    case 'Settings': return <SettingsEditor data={data} setField={setField} />
     default: return null
   }
+}
+
+// Résumé-only, never in SECTION_ORDER or Persona: ResumeEditor appends it for a job-linked
+// tailored copy. The footer (from #24, by @mrAlishah) is opt-in: only `footer_enabled === true`
+// prints it (PDF and Word), so a copy without the key exports without one.
+export function SettingsEditor({ data, setField }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 10 }}>
+      <Switch on={data.footer_enabled === true} onChange={(v) => setField('footer_enabled', v)} label="Page footer"
+        title="Print your name, the job title and the company at the foot of every page of this résumé's PDF and Word downloads." />
+      <Helper>Adds “name - job title - company” in small type at the foot of every page.</Helper>
+    </div>
+  )
 }
 
 export function HeaderEditor({ data, setField, mutate, onRemoved }) {

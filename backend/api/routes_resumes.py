@@ -4,16 +4,20 @@ import io
 import json
 import logging
 import re
+import unicodedata
 import uuid as _uuid
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote as _url_quote, urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, Response, JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from backend.models.db import get_db, Resume, TracerLink, TracerClickEvent, Setting, Job, Application, SessionLocal, utcnow, Persona
+from backend.accounts.owned import get_owned, get_owned_or_404, get_persona, owned_id_or_404
+from backend.models.db import get_db, Resume, TracerLink, TracerClickEvent, Job, Application, SessionLocal, utcnow, Persona
+from backend.accounts.settings import get_setting
 from backend.api._input import str_field
 from backend.analyzer.model_json import UNPARSEABLE_MESSAGE, ModelReplyError, parse_model_json
 from backend.job_monitor import launch_background, JobAlreadyRunningError
@@ -277,11 +281,11 @@ def _get_section_order(db: Session | None) -> list[dict]:
     """Resolve configured section order and titles, filling missing sections."""
     if db is None:
         return list(DEFAULT_SECTION_ORDER)
-    row = db.query(Setting).filter(Setting.key == "resume_section_order").first()
-    if not row or not row.value:
+    raw = get_setting(db, "resume_section_order")
+    if not raw:
         return list(DEFAULT_SECTION_ORDER)
     try:
-        configured = json.loads(row.value)
+        configured = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return list(DEFAULT_SECTION_ORDER)
     if not isinstance(configured, list):
@@ -328,6 +332,7 @@ def _render_html(json_data: dict, template_name: str, page_format: str,
     # json_data may carry internal metadata under "_"-prefixed keys (_tailor_context,
     # _score) that are never résumé content — keep them out of the template namespace so they can't render or collide with a template global.
     content = {k: v for k, v in (json_data or {}).items() if not str(k).startswith("_")}
+    content = _render_safe_links(content)
     html = template.render(
         **content,
         page_format=page_format,
@@ -336,6 +341,100 @@ def _render_html(json_data: dict, template_name: str, page_format: str,
         section_order=_get_section_order(db),
     )
     return html
+
+
+def _as_text(value) -> str:
+    """A template-ready string: None prints nothing, any other non-string as itself."""
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+def _header_name(json_data) -> str:
+    """`header.name` as a string, or "" when the JSON, its header or the name is missing
+    or not the expected shape (a null header from an import, a string header from the API)."""
+    header = json_data.get("header") if isinstance(json_data, dict) else None
+    return _as_text(header.get("name")) if isinstance(header, dict) else ""
+
+
+# Schemes a printed link may never carry: they run script or open local content. Checked
+# after removing whitespace and controls, which a browser's URL parser strips too
+# (`java\tscript:` is `javascript:` to it). `host:port` and every other value pass.
+_UNSAFE_LINK_SCHEMES = ("javascript", "vbscript", "data", "file", "blob")
+
+
+def _printable_link(url) -> str:
+    url = _as_text(url)
+    m = _SCHEME_RE.match(re.sub(r"[\x00-\x20\x7f]", "", url))
+    if m and m.group(1).lower() in _UNSAFE_LINK_SCHEMES:
+        return ""
+    return url
+
+
+def _render_safe_links(content: dict) -> dict:
+    """The links a résumé or cover-letter template prints, in the shapes it expects:
+    contact items are dicts with string `text` and `url` (a null or a number from an
+    import or the API would otherwise print "None" or fail `item.url.startswith`; the
+    templates already put `https://` before any other scheme), and a project or
+    publication URL with a script-capable scheme is left out, so the PDF never carries a
+    `javascript:` link annotation."""
+    out = dict(content)
+    header = out.get("header")
+    if isinstance(header, dict):
+        items = header.get("contact_items")
+        out["header"] = {**header, "contact_items": [
+            {**item, "text": _as_text(item.get("text")), "url": _as_text(item.get("url"))}
+            for item in (items if isinstance(items, list) else []) if isinstance(item, dict)
+        ]}
+    for key in ("projects", "publications"):
+        if isinstance(out.get(key), list):
+            out[key] = [{**entry, "url": _printable_link(entry.get("url"))}
+                        if isinstance(entry, dict) and entry.get("url") else entry
+                        for entry in out[key]]
+    return out
+
+
+# ── Sandboxed PDF rendering ─────────────────────────────────────────────────
+# Résumé and cover-letter text is printed into the templates as HTML, and every account
+# shares the backend's Chromium. So the page renders with JavaScript off and with no
+# network except Google Fonts, which several templates @import: an injected <script>,
+# <iframe> or <img> can neither run nor reach an internal address.
+_PDF_ALLOWED_HOSTS = frozenset({"fonts.googleapis.com", "fonts.gstatic.com"})
+
+
+def _pdf_request_allowed(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+        if parts.scheme in ("data", "about"):
+            return True
+        return (parts.scheme == "https" and parts.hostname in _PDF_ALLOWED_HOSTS
+                and parts.port in (None, 443) and not parts.username and not parts.password)
+    except ValueError:
+        return False
+
+
+async def _pdf_route_guard(route):
+    url = route.request.url
+    if _pdf_request_allowed(url):
+        await route.continue_()
+    else:
+        logger.warning("PDF render blocked a request to %s", url[:200])
+        await route.abort()
+
+
+async def _render_pdf(html: str, **pdf_options) -> bytes:
+    """`html` as PDF bytes in a fresh, JavaScript-off browser context whose only network
+    is Google Fonts (`page.pdf` options pass through). Shared by /resumes and
+    /cover-letters; the context is closed even when the render fails."""
+    browser = await _get_browser()
+    context = await browser.new_context(java_script_enabled=False)
+    try:
+        await context.route("**/*", _pdf_route_guard)
+        page = await context.new_page()
+        await page.set_content(html, wait_until="networkidle")
+        return await page.pdf(**pdf_options)
+    finally:
+        await context.close()
 
 
 # Anything that already names a scheme: `tel:`, `mailto:`, `sms:`, `skype:`…
@@ -364,20 +463,24 @@ def _rewrite_urls_with_tracers(json_data: dict, resume_id: str, db,
     """Replace header contact URLs with tracer redirect URLs, returning a modified copy; owner is exactly one of a resume (resume_id) or a cover letter (cover_letter_id), with job_id resolving the short_id for job_id token styles."""
     import secrets, json as _json
 
-    enabled_row = db.query(Setting).filter(Setting.key == "tracer_links_enabled").first()
-    if not enabled_row or enabled_row.value != "true":
+    if get_setting(db, "tracer_links_enabled") != "true":
         return json_data
 
-    base_url_row = db.query(Setting).filter(Setting.key == "tracer_links_base_url").first()
-    base_url = (base_url_row.value if base_url_row else "").rstrip("/")
+    base_url = get_setting(db, "tracer_links_base_url", "").rstrip("/")
     if not base_url:
         return json_data
 
-    style_row = db.query(Setting).filter(Setting.key == "tracer_links_url_style").first()
-    url_style = style_row.value if style_row else "path"
+    url_style = get_setting(db, "tracer_links_url_style", "path")
+
+    from backend.accounts.context import resolve_account
+    my_account = resolve_account(db)
+
+    def _any_account_links():
+        # Token holder lookups only: the token namespace is install-wide.
+        return db.query(TracerLink).execution_options(jn_unscoped=True)
 
     owner_is_cl = cover_letter_id is not None
-    owner_filter = (TracerLink.cover_letter_id == cover_letter_id) if owner_is_cl \
+    owner_filter =(TracerLink.cover_letter_id == cover_letter_id) if owner_is_cl \
         else (TracerLink.resume_id == resume_id)
 
     def _new_link(token, dest_url, label):
@@ -410,16 +513,28 @@ def _rewrite_urls_with_tracers(json_data: dict, resume_id: str, db,
             job_short_id = job_obj.short_id if job_obj else None
 
     data = _json.loads(_json.dumps(json_data))
-    header = data.get("header", {})
+    # The JSON comes from the editor, an LLM, a PDF import or the API, so any part of
+    # it may be null or the wrong type: only a dict header's dict items with a string
+    # URL are rewritten, everything else passes through for the renderer to tolerate.
+    header = data.get("header") if isinstance(data, dict) else None
+    if not isinstance(header, dict):
+        return data
+    items = header.get("contact_items")
+    if not isinstance(items, list):
+        return data
 
-    items = header.get("contact_items", [])
     for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
         url = item.get("url")
-        if not url or not url.strip() or not _is_traceable_url(url):
+        if not isinstance(url, str) or not url.strip() or not _is_traceable_url(url):
             continue
 
         url = url.strip()
-        label = item.get("text", f"Link {i+1}")
+        # A string text (an empty one included) labels the link exactly as before, so
+        # the job-derived tokens already printed in sent PDFs keep their suffix.
+        text = item.get("text", f"Link {i+1}")
+        label = text if isinstance(text, str) else (f"Link {i+1}" if text is None else str(text))
         dest_url = url if url.lower().startswith(("http://", "https://")) else f"https://{url}"
         # Suffix for per-link distinction in job_id modes (user stub or first 3 chars)
         stub = item.get("stub")
@@ -442,8 +557,11 @@ def _rewrite_urls_with_tracers(json_data: dict, resume_id: str, db,
 
         # The deterministic token is a preference, never a guarantee: only a
         # job-derived {short_id}{stub} is unique by construction, so the job-less 0{stub} fallback may only be taken when nothing else holds it.
+        # Tokens are unique across the whole install (the public /cv/{token} redirect
+        # resolves any account's link), so every holder lookup sees all accounts (MT-5);
+        # a token another account holds is never repointed, only avoided.
         def _taken_by_other(tok):
-            q = db.query(TracerLink).filter(TracerLink.token == tok)
+            q = _any_account_links().filter(TracerLink.token == tok)
             if existing is not None:
                 q = q.filter(TracerLink.id != existing.id)
             return q.first()
@@ -459,7 +577,7 @@ def _rewrite_urls_with_tracers(json_data: dict, resume_id: str, db,
             token = existing.token
         else:
             holder = _taken_by_other(token) if token else None
-            if holder is not None and not job_short_id:
+            if holder is not None and (not job_short_id or holder.account_id != my_account):
                 # 0{stub} already belongs to a different job-less owner — taking
                 # it would break their links, so fall back to a random token.
                 token = None
@@ -477,16 +595,18 @@ def _rewrite_urls_with_tracers(json_data: dict, resume_id: str, db,
                         db.commit()
                     except IntegrityError:
                         db.rollback()
-                        winner = db.query(TracerLink).filter(TracerLink.token == token).first()
-                        if winner:
+                        winner = _any_account_links().filter(TracerLink.token == token).first()
+                        if winner is not None and winner.account_id == my_account:
                             _repoint(winner, dest_url, label)
                             db.commit()
+                        elif winner is not None:
+                            token = None   # another account's token: take a random one below
             if not token:
                 # secrets, not random: the fallback token is the only entropy a
                 # link without a job short_id has (R4-T5-07). 8 bytes ≈ 11 chars.
                 for _ in range(100):
                     token = secrets.token_urlsafe(8)
-                    if db.query(TracerLink).filter(TracerLink.token == token).first():
+                    if _any_account_links().filter(TracerLink.token == token).first():
                         continue
                     try:
                         db.add(_new_link(token, dest_url, label))
@@ -503,7 +623,6 @@ def _rewrite_urls_with_tracers(json_data: dict, resume_id: str, db,
 
         items[i]["url"] = tracer_url
 
-    data["header"] = header
     return data
 
 
@@ -702,11 +821,12 @@ def create_resume(body: dict, db: Session = Depends(get_db)):
     if "template" in body:
         validate_template_name(body["template"], TEMPLATES_DIR)
 
+    # Body ids must be the account's own rows (MT-5): 404 for anything else.
     resume = Resume(
         name=name,
         is_base=body.get("is_base", True),
-        parent_id=body.get("parent_id"),
-        job_id=body.get("job_id"),
+        parent_id=owned_id_or_404(db, Resume, body.get("parent_id"), "Parent resume not found"),
+        job_id=owned_id_or_404(db, Job, body.get("job_id")),
         template=body.get("template", _default_template_id()),
         page_format=body.get("page_format", "letter"),
         json_data=body.get("json_data", {}),
@@ -726,21 +846,15 @@ def copy_resume_for_job(body: dict, db: Session = Depends(get_db)):
     if not base_resume_id or not job_id:
         raise HTTPException(400, "base_resume_id and job_id are required")
 
-    base = db.query(Resume).filter(Resume.id == base_resume_id).first()
-    if not base:
-        raise HTTPException(404, "Base resume not found")
-
-
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(404, "Job not found")
+    base = get_owned_or_404(db, Resume, base_resume_id, "Base resume not found")
+    job = get_owned_or_404(db, Job, job_id)
 
     job_name = f"{job.company} \u2014 {job.title}" if job.company else job.title or ""
     copy = Resume(
         name=f"{base.name} \u2192 {job_name}",
         is_base=False,
         parent_id=base.id,
-        job_id=job_id,
+        job_id=job.id,
         template=base.template,
         page_format=base.page_format,
         json_data=_json.loads(_json.dumps(base.json_data or {})),
@@ -753,8 +867,7 @@ def copy_resume_for_job(body: dict, db: Session = Depends(get_db)):
 
 def _resolve_chain_score_depth(db) -> str | None:
     """Depth of the score chained after a job-linked tailor ('light'/'full'), or None for no chain, read from the `tailor_auto_quick_score` setting (default 'light')."""
-    chain_row = db.query(Setting).filter(Setting.key == "tailor_auto_quick_score").first()
-    raw_chain = (chain_row.value if chain_row else "light").strip().lower()
+    raw_chain = get_setting(db, "tailor_auto_quick_score", "light").strip().lower()
     depth_map = {
         "off": None, "false": None, "no": None, "0": None,
         "true": "light", "light": "light", "yes": "light", "1": "light", "": "light",
@@ -778,28 +891,23 @@ async def tailor_resume(body: dict, db: Session = Depends(get_db)):
     # Fast-fail: base resume must exist. Reserved id 'persona' resolves to the
     # singleton Persona's resume_content — must be non-empty.
     if base_resume_id == "persona":
-        persona = db.query(Persona).filter(Persona.id == 1).first()
+        persona = get_persona(db, create=False)
         if not persona or not (persona.resume_content or {}):
             raise HTTPException(400, "Persona has no resume_content — fill it in /persona first")
         base_name = "Persona"
     else:
-        base = db.query(Resume).filter(Resume.id == base_resume_id).first()
-        if not base:
-            raise HTTPException(404, "Base resume not found")
+        base = get_owned_or_404(db, Resume, base_resume_id, "Base resume not found")
         base_name = base.name
 
     # Fast-fail: job must exist and have some JD source; the worker resolves the actual
     # text (description → live fetch → cached page) later, so this just confirms something exists without the slow fetch.
     if job_id:
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if not job:
-            raise HTTPException(404, "Job not found")
+        job = get_owned_or_404(db, Job, job_id)
         if not ((job.description or "").strip() or (job.url or "").strip() or (job.cached_page_text or "").strip()):
             raise HTTPException(400, "Job has no description, URL, or cached page to tailor from")
 
     # Fast-fail: the prompt template must exist
-    prompt_row = db.query(Setting).filter(Setting.key == "cv_tailor_prompt").first()
-    if not prompt_row or not (prompt_row.value or "").strip():
+    if not (get_setting(db, "cv_tailor_prompt") or "").strip():
         raise HTTPException(500, "cv_tailor_prompt setting is empty — configure it in Settings")
 
     target_uuid = _uuid.UUID(job_id) if job_id else None
@@ -900,7 +1008,7 @@ async def _tailor_impl(base_resume_id: str, job_id: str | None, job_description_
             # Resume row.
             persona_as_base = (base_resume_id == "persona")
             if persona_as_base:
-                persona_row = db.query(Persona).filter(Persona.id == 1).first()
+                persona_row = get_persona(db, create=False)
                 if not persona_row or not (persona_row.resume_content or {}):
                     logger.error("Tailor: persona has no resume_content at execution time")
                     raise RuntimeError("Tailor: persona has no resume_content at execution time")
@@ -936,15 +1044,15 @@ async def _tailor_impl(base_resume_id: str, job_id: str | None, job_description_
             # rich pool); falls back to the standard cv_tailor_prompt if unconfigured.
             prompt_template = None
             if persona_as_base:
-                p_row = db.query(Setting).filter(Setting.key == "persona_tailor_prompt").first()
-                if p_row and (p_row.value or "").strip():
-                    prompt_template = p_row.value
+                p_value = get_setting(db, "persona_tailor_prompt") or ""
+                if p_value.strip():
+                    prompt_template = p_value
             if not prompt_template:
-                prompt_row = db.query(Setting).filter(Setting.key == "cv_tailor_prompt").first()
-                if not prompt_row or not prompt_row.value:
+                prompt_value = get_setting(db, "cv_tailor_prompt")
+                if not prompt_value:
                     logger.error("Tailor: cv_tailor_prompt setting is empty")
                     raise RuntimeError("Tailor: cv_tailor_prompt setting is empty")
-                prompt_template = prompt_row.value
+                prompt_template = prompt_value
 
             # Same resolver call_cv_tailor_llm dispatches with, so the log row can never
             # name a model that was not called.
@@ -1102,6 +1210,12 @@ def update_resume(resume_id: str, body: dict, db: Session = Depends(get_db)):
     # (it is also the value every later render reads — R4-T5-01).
     if "template" in body:
         validate_template_name(body["template"], TEMPLATES_DIR)
+    # Re-linking a résumé: the new parent / job must be the account's own (MT-5).
+    body = dict(body)
+    if "parent_id" in body:
+        body["parent_id"] = owned_id_or_404(db, Resume, body["parent_id"], "Parent resume not found")
+    if "job_id" in body:
+        body["job_id"] = owned_id_or_404(db, Job, body["job_id"])
     for key, value in body.items():
         if key in allowed:
             setattr(resume, key, value)
@@ -1193,6 +1307,53 @@ def _clear_orphan_tailored_score(db: Session, job_id) -> bool:
     return changed
 
 
+# ── Footer (from #24, by @mrAlishah) ────────────────────────────────────────
+# An opt-in line at the foot of every page of a tailored copy's export, so a loose page
+# still says whose it is and which role it was written for. Off unless the copy's
+# `json_data.footer_enabled` is exactly True; the editor shows the switch only on a
+# job-linked tailored copy. Every export format reads `_resume_footer_text`.
+
+def _tailored_resume_footer_text(resume: "Resume", job: Optional["Job"]) -> str:
+    """"{Candidate Name} - {Job Title} - {Company}" for a footer, or "" when it doesn't apply.
+
+    Only for a résumé tailored against a real Job row (`is_base=False` and `job_id` set):
+    a base résumé or a freeform tailor has no company or title to print. Also "" if any of
+    the three pieces is missing, since a partial footer ("Dana -  - ") would be worse than
+    none. A plain ASCII hyphen, so the text can't pick up an en/em dash from a pasted title.
+    """
+    if not resume or resume.is_base or not resume.job_id or not job:
+        return ""
+    candidate_name = _header_name(resume.json_data).strip()
+    job_title = str(job.title or "").strip()
+    company = str(job.company or "").strip()
+    if not (candidate_name and job_title and company):
+        return ""
+    return f"{candidate_name} - {job_title} - {company}"
+
+
+def _resume_footer_text(db: Session, resume: "Resume") -> str:
+    """The footer for this résumé's exports: "" unless the user switched it on
+    (`json_data.footer_enabled is True`) on a job-linked tailored copy whose job is the
+    current account's own row."""
+    if (resume.json_data or {}).get("footer_enabled") is not True or not resume.job_id:
+        return ""
+    return _tailored_resume_footer_text(resume, get_owned(db, Job, resume.job_id))
+
+
+def _footer_html_template(footer_text: str) -> str:
+    """Playwright `footerTemplate` markup: centred, small, grey, confined to the margin
+    box Chromium reserves per page, so it is never part of the content flow. It lands in
+    the bottom gutter every template already reserves in `@page`. Empty text renders no
+    markup at all."""
+    if not footer_text:
+        return "<span></span>"
+    from markupsafe import escape
+    return (
+        '<div style="width:100%; font-size:8px; color:#999999; text-align:center; '
+        'font-family:Helvetica,Arial,sans-serif;">' + str(escape(footer_text)) + '</div>'
+    )
+
+
 # ── Preview & PDF ───────────────────────────────────────────────────────────
 
 @router.get("/{resume_id}/preview")
@@ -1204,56 +1365,49 @@ def preview_resume(resume_id: str, db: Session = Depends(get_db)):
 
     json_data = _rewrite_urls_with_tracers(resume.json_data or {}, str(resume.id), db)
     html = _render_html(json_data, resume.template, resume.page_format, db)
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=html, headers={"Content-Security-Policy": _PREVIEW_CSP})
+
+
+# The preview is the résumé's own HTML served from the app's origin: the same rules as
+# the PDF renderer (no script, no network but Google Fonts), and a sandboxed origin.
+_PREVIEW_CSP = ("sandbox; default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src data: https://fonts.gstatic.com; img-src data:; frame-ancestors 'self'")
 
 
 @router.get("/{resume_id}/pdf")
 async def export_pdf(resume_id: str, template: Optional[str] = None, format: Optional[str] = None, db: Session = Depends(get_db)):
     """Render resume as PDF via Playwright; `template`/`format` query params override the stored values so a rapid template switch in the live editor doesn't race the debounced PATCH."""
-    resume = db.query(Resume).filter(Resume.id == resume_id).first()
-    if not resume:
-        raise HTTPException(status_code=404, detail="Resume not found")
+    resume = get_owned_or_404(db, Resume, resume_id)
 
     tpl = template or resume.template
     fmt = (format or resume.page_format or "letter")
     json_data = resume.json_data or {}
     pdf_data = _rewrite_urls_with_tracers(json_data, str(resume.id), db)
     html = _render_html(pdf_data, tpl, fmt, db)
+    footer_text = _resume_footer_text(db, resume)
 
     paper_format = "A4" if fmt.lower() == "a4" else "Letter"
 
     try:
-        browser = await _get_browser()
-        page = await browser.new_page()
-        await page.set_content(html, wait_until="networkidle")
-        pdf_bytes = await page.pdf(
+        pdf_bytes = await _render_pdf(
+            html,
             format=paper_format,
             print_background=True,
             margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
+            display_header_footer=bool(footer_text),
+            header_template="<span></span>",
+            footer_template=_footer_html_template(footer_text),
         )
         # Count pages (rough estimate from PDF byte boundaries)
         page_count = pdf_bytes.count(b"/Type /Page") - pdf_bytes.count(b"/Type /Pages")
         if page_count < 1:
             page_count = 1
-        await page.close()
     except Exception as e:
         logger.error(f"PDF generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
 
-    # Filename: {Name}_{Type}_Resume_{number}.pdf \u2014 Name is the candidate header name,
-    # Type is the base resume name, number is the linked job's short_id (omitted for base resumes with none).
-    header_name = (resume.json_data or {}).get("header", {}).get("name", "Resume").replace(" ", "")
-    base_name = (resume.name.split(" \u2192 ")[0] if " \u2192 " in (resume.name or "") else resume.name) or "Resume"
-    base_name = base_name.replace(" ", "")
-    number = ""
-    if resume.job_id:
-        job_for_name = db.query(Job).filter(Job.id == resume.job_id).first()
-        if job_for_name and job_for_name.short_id:
-            number = f"_{job_for_name.short_id}"
-    filename = f"{header_name}_{base_name}_Resume{number}".encode("ascii", "replace").decode()
-
     headers = {
-        "Content-Disposition": f'attachment; filename="{filename}.pdf"',
+        "Content-Disposition": _content_disposition(_resume_download_name(db, resume), "pdf"),
         "X-Page-Count": str(page_count),
     }
     if page_count > 1:
@@ -1263,6 +1417,258 @@ async def export_pdf(resume_id: str, template: Optional[str] = None, format: Opt
         content=pdf_bytes,
         media_type="application/pdf",
         headers=headers,
+    )
+
+
+def _resume_download_name(db: Session, resume: "Resume") -> str:
+    """A download's filename without the extension, shared by /pdf and /docx:
+    {Name}_{Type}_Resume_{number}. Name is the candidate's header name, Type the base
+    résumé's name, number the linked job's short_id (left out when there is none)."""
+    header_name = (_header_name(resume.json_data) or "Resume").replace(" ", "")
+    base_name = (resume.name.split(" → ")[0] if " → " in (resume.name or "") else resume.name) or "Resume"
+    base_name = base_name.replace(" ", "")
+    number = ""
+    if resume.job_id:
+        job_for_name = get_owned(db, Job, resume.job_id)
+        if job_for_name and job_for_name.short_id:
+            number = f"_{job_for_name.short_id}"
+    name = f"{header_name}_{base_name}_Resume{number}"
+    return re.sub(r'["\\\x00-\x1f\x7f]', "", name)
+
+
+# Letters NFKD does not split into a base letter plus a mark.
+_ASCII_FOLD = str.maketrans({
+    "ß": "ss", "ẞ": "SS", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ø": "o", "Ø": "O",
+    "đ": "d", "Đ": "D", "ð": "d", "Ð": "D", "ł": "l", "Ł": "L", "þ": "th", "Þ": "Th", "ı": "i",
+})
+
+
+def _ascii_filename_stem(stem: str) -> str:
+    """The plain `filename=` fallback for a download stem: accents folded (José Müller
+    gives Jose_Muller), anything with no ASCII form dropped, and the `_`-separated parts
+    left empty by that removed, so an all-Cyrillic name gives `Resume_…`, never `____`."""
+    folded = unicodedata.normalize("NFKD", stem.translate(_ASCII_FOLD)).encode("ascii", "ignore").decode()
+    folded = re.sub(r'["\\\x00-\x1f\x7f]', "", folded)
+    return "_".join(part for part in folded.split("_") if part) or "Resume"
+
+
+def _content_disposition(stem: str, ext: str) -> str:
+    """An attachment header that keeps a non-ASCII name: an ASCII `filename=` for old
+    clients plus the RFC 5987 `filename*=UTF-8''…` every current browser prefers."""
+    return (f'attachment; filename="{_ascii_filename_stem(stem)}.{ext}"; '
+            f"filename*=UTF-8''{_url_quote(f'{stem}.{ext}', safe='')}")
+
+
+# ── Word export (based on work by @mrAlishah) ───────────────────────────────
+# One plain, editable layout for every template: the same content as the PDF in Word's
+# own styles, with no tables, text boxes or images, so it stays ATS-safe. The footer
+# follows the PDF's opt-in switch (`_resume_footer_text`).
+
+DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+DOCX_MISSING_DETAIL = ("python-docx is missing from this image — pull or rebuild it: "
+                       "`docker compose pull && docker compose up -d`, or `docker compose up --build -d`.")
+
+# XML 1.0 forbids the C0 controls other than tab, LF and CR (plus U+FFFE/U+FFFF and lone
+# surrogates); lxml refuses them, and PDF imports can leave a \x0b or \x0c in the text.
+_XML_ILLEGAL_CHARS = "".join(map(chr, (*range(0x09), 0x0b, 0x0c, *range(0x0e, 0x20), 0xfffe, 0xffff)))
+_XML_ILLEGAL_RE = re.compile("[" + re.escape(_XML_ILLEGAL_CHARS) + r"\ud800-\udfff]")
+
+# Link schemes a Word hyperlink may carry; anything else is printed as plain text.
+_DOCX_LINK_SCHEMES = ("http", "https", "mailto", "tel")
+_PHONE_RE = re.compile(r"\+?[\d\s().\-]{6,}")
+
+
+def _xml_safe(value):
+    """A copy of `value` with every XML-illegal character dropped from its strings
+    (a vertical tab or form feed becomes a space, so words don't run together). Keys
+    are cleaned too: a skills category name is a dict key and is printed."""
+    if isinstance(value, str):
+        return _XML_ILLEGAL_RE.sub(lambda m: " " if m.group() in "\x0b\x0c" else "", value)
+    if isinstance(value, dict):
+        return {_xml_safe(k): _xml_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_xml_safe(v) for v in value]
+    return value
+
+
+def _docx_href(url) -> Optional[str]:
+    """The hyperlink target for a contact or project URL, or None to print it as text.
+    A named scheme is kept as it is (`tel:+1555…` stays a phone link; the PDF templates'
+    `https://` prefix would make it `https://tel:…`) when it is a web, mail or phone one.
+    A bare address gets `mailto:`, a bare phone number `tel:`, anything else `https://`."""
+    url = str(url or "").strip()
+    if not url:
+        return None
+    m = _SCHEME_RE.match(url)
+    if m:
+        return url if m.group(1).lower() in _DOCX_LINK_SCHEMES else None
+    if "@" in url.split("/", 1)[0]:
+        return "mailto:" + url
+    if _PHONE_RE.fullmatch(url):
+        return "tel:" + re.sub(r"[^\d+]", "", url)
+    return "https://" + url
+
+
+def _build_docx(json_data: dict, fmt: str, footer_text: str = "") -> bytes:
+    """An editable, template-neutral Word résumé from the résumé's JSON sections, in the
+    PDF templates' order: header, summary, experience, skills, education, projects,
+    publications."""
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Emu, Inches, Pt, RGBColor
+
+    data = _xml_safe(json_data or {})
+    footer_text = _xml_safe(footer_text or "")
+    doc = Document()
+    page = doc.sections[0]
+    page.page_width, page.page_height = (Emu(7560310), Emu(10692130)) if (fmt or "").lower() == "a4" else (Inches(8.5), Inches(11))
+    page.top_margin = page.bottom_margin = page.left_margin = page.right_margin = Inches(0.7)
+    body_width = page.page_width - page.left_margin - page.right_margin
+    doc.styles["Normal"].font.size = Pt(10.5)
+    doc.styles["Heading 2"].font.size = Pt(12)
+    doc.styles["Heading 2"].font.color.rgb = RGBColor(0, 0, 0)
+
+    header = data.get("header") if isinstance(data.get("header"), dict) else {}
+    candidate = str(header.get("name") or "").strip()
+    # python-docx's default template signs every file "python-docx"; an employer sees these.
+    props = doc.core_properties
+    props.author = props.last_modified_by = candidate
+    props.title = f"{candidate} résumé" if candidate else "Résumé"
+    props.comments = props.subject = props.keywords = props.category = ""
+
+    if footer_text:
+        footer = page.footer.paragraphs[0]
+        footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        footer_run = footer.add_run(footer_text)
+        footer_run.font.size = Pt(8)
+        footer_run.font.color.rgb = RGBColor(153, 153, 153)
+
+    def runs(paragraph, value, bold=False):
+        # `**bold**` markup, as the PDF templates' `bold` filter reads it
+        for index, part in enumerate(re.split(r"\*\*(.+?)\*\*", str(value or ""))):
+            if part:
+                paragraph.add_run(part).bold = bold or bool(index % 2)
+
+    def link(paragraph, label, url):
+        href = _docx_href(url)
+        if not href:
+            runs(paragraph, label)
+            return
+        hyperlink = OxmlElement("w:hyperlink")
+        hyperlink.set(qn("r:id"), doc.part.relate_to(href, RT.HYPERLINK, is_external=True))
+        run = OxmlElement("w:r")
+        properties = OxmlElement("w:rPr")
+        color = OxmlElement("w:color")
+        color.set(qn("w:val"), "0563C1")
+        underline = OxmlElement("w:u")
+        underline.set(qn("w:val"), "single")
+        properties.extend((color, underline))
+        text = OxmlElement("w:t")
+        text.text = label
+        text.set(qn("xml:space"), "preserve")
+        run.extend((properties, text))
+        hyperlink.append(run)
+        paragraph._p.append(hyperlink)
+
+    def row(left, right=""):
+        # left in bold, right (a date or place) on a right-aligned tab stop
+        paragraph = doc.add_paragraph()
+        paragraph.paragraph_format.tab_stops.add_tab_stop(body_width, WD_TAB_ALIGNMENT.RIGHT)
+        runs(paragraph, left, bold=True)
+        if right:
+            paragraph.add_run("\t" + str(right))
+
+    def details(item):
+        if item.get("description"):
+            runs(doc.add_paragraph(), item["description"])
+        for bullet in item.get("bullets") or []:
+            runs(doc.add_paragraph(style="List Bullet"), bullet)
+
+    def items(key):
+        return [i for i in (data.get(key) or []) if isinstance(i, dict)]
+
+    name = doc.add_paragraph().add_run(candidate)
+    name.bold = True
+    name.font.size = Pt(20)
+    if header.get("title"):
+        runs(doc.add_paragraph(), header["title"])
+    contacts = [c for c in (header.get("contact_items") or []) if isinstance(c, dict) and (c.get("text") or c.get("url"))]
+    if contacts:
+        contact = doc.add_paragraph()
+        for index, item in enumerate(contacts):
+            if index:
+                contact.add_run(" | ")
+            if item.get("url"):
+                link(contact, str(item.get("text") or item["url"]), item["url"])
+            else:
+                runs(contact, item.get("text"))
+
+    if data.get("summary"):
+        runs(doc.add_paragraph(), data["summary"])
+    if items("experience"):
+        doc.add_heading("Experience", level=2)
+        for job in items("experience"):
+            row(f"{job.get('title') or ''}{' at ' + str(job['company']) if job.get('company') else ''}",
+                job.get("date") or job.get("dates") or "")
+            if job.get("location"):
+                doc.add_paragraph(str(job["location"]))
+            details(job)
+    skills = data.get("skills")
+    if skills:
+        if isinstance(skills, dict):
+            pairs = list(skills.items())
+        else:
+            pairs = [(s.get("category"), s.get("items")) for s in skills if isinstance(s, dict)]
+        if pairs:
+            doc.add_heading("Skills", level=2)
+            for label, value in pairs:
+                paragraph = doc.add_paragraph()
+                if label:
+                    runs(paragraph, f"{label}: ", bold=True)
+                runs(paragraph, ", ".join(map(str, value)) if isinstance(value, list) else value)
+    if items("education"):
+        doc.add_heading("Education", level=2)
+        for education in items("education"):
+            row(education.get("school") or "", education.get("location") or "")
+            if education.get("degree"):
+                runs(doc.add_paragraph(), education["degree"])
+    for key, title in (("projects", "Projects"), ("publications", "Publications")):
+        if items(key):
+            doc.add_heading(title, level=2)
+            for item in items(key):
+                row(item.get("name") or item.get("title") or "")
+                if item.get("url"):
+                    link(doc.add_paragraph(), str(item["url"]), item["url"])
+                details(item)
+
+    output = io.BytesIO()
+    doc.save(output)
+    return output.getvalue()
+
+
+@router.get("/{resume_id}/docx")
+def export_docx(resume_id: str, template: Optional[str] = None, format: Optional[str] = None, db: Session = Depends(get_db)):
+    """Export the résumé as an editable Word document. One layout for every template, so
+    `template` is accepted only for parity with /pdf; `format` overrides the paper size."""
+    resume = get_owned_or_404(db, Resume, resume_id)
+    fmt = format or resume.page_format or "letter"
+    data = _rewrite_urls_with_tracers(resume.json_data or {}, str(resume.id), db)
+    try:
+        content = _build_docx(data, fmt, _resume_footer_text(db, resume))
+    except ImportError as error:
+        # 3.0 code in a pre-3.0 image (git pull without pulling or rebuilding it)
+        logger.error("DOCX export unavailable, python-docx cannot be imported: %s", error)
+        raise HTTPException(status_code=503, detail=DOCX_MISSING_DETAIL)
+    except Exception as error:
+        logger.error("DOCX generation failed: %s", error)
+        raise HTTPException(status_code=500, detail="DOCX generation failed")
+    return Response(
+        content=content,
+        media_type=DOCX_MEDIA_TYPE,
+        headers={"Content-Disposition": _content_disposition(_resume_download_name(db, resume), "docx")},
     )
 
 
