@@ -25,10 +25,7 @@ def _summary_text(s: dict) -> str:
 
 @router.post("/curator/run", status_code=202, summary="Run the daily curation now")
 async def run_now(outreach: bool = True, send: bool = True, db: Session = Depends(get_db)):
-    from backend.accounts.settings import acts_as_owner
     from backend.curator.run import run_daily_curation
-    if not acts_as_owner(db):
-        raise HTTPException(403, "Only the owner can run the curator")
 
     async def _do():
         return _summary_text(await run_daily_curation(outreach=outreach, send=send))

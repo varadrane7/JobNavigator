@@ -107,15 +107,20 @@ _SECTIONS = [
     ("linkedin", "LinkedIn", POLICY, OWN, ["linkedin"], [
         "linkedin_email", "linkedin_password", "linkedin_mock_email", "linkedin_mock_password",
         "linkedin_use_mock_account"]),
-    # The daily curator runs once, as the owner (scheduler.run_curation); its settings are the install's.
-    ("curator", "Daily curator", OWNER_ONLY, INHERIT, ["scheduler", "models"], [
-        "curate_cron", "curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore",
-        "curate_title_exclude", "curate_company_exclude", "curate_weights", "curate_embed_model",
-        "curate_concurrency", "llm_local_base_url", "searxng_url", "target_base_min", "target_base_max",
-        "outreach_count", "outreach_network_count", "linkedin_people_daily_cap",
+    # The daily curator runs once per account (scheduler.run_curation): the list size, window,
+    # excludes, weights and outreach are personal ('own' by default); its model follows
+    # 'inherit' (the owner's curator model) or 'own' (the member's own provider and key);
+    # when it runs, the search service and the embedding model are the install's.
+    ("curator", "Daily curator", POLICY, OWN, ["curator"], [
+        "curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore",
+        "curate_title_exclude", "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max",
+        "outreach_count", "outreach_network_count", "linkedin_people_daily_cap"]),
+    ("curator_llm", "Curator model", POLICY, INHERIT, ["curator"], [
         "curator_llm_provider", "curator_llm_model", "curator_llm_api_key", "curator_llm_effort",
         "curator_fallback_llm_provider", "curator_fallback_llm_model", "curator_fallback_llm_api_key",
         "curator_fallback_llm_effort"]),
+    ("curator_infra", "Curator infrastructure", OWNER_ONLY, INHERIT, ["curator"], [
+        "curate_cron", "curate_concurrency", "curate_embed_model", "llm_local_base_url", "searxng_url"]),
     ("advanced", "Advanced", OWNER_ONLY, INHERIT, ["advanced"], ["proxy_url", "dashboard_api_key"]),
     # OIDC single sign-on (MT-20): the provider the install trusts; env OIDC_* are the defaults.
     ("oidc", "Single sign-on (OIDC)", OWNER_ONLY, INHERIT, ["advanced"], [

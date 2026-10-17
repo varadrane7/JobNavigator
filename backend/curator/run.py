@@ -35,11 +35,14 @@ TRACKED_WINDOW_HOURS = 7 * 24
 
 
 def _settings() -> dict:
+    """The current account's curator settings (own or inherited per section, MT-9)."""
+    from backend.accounts.settings import get_setting
+    keys = ("curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore", "curate_title_exclude",
+            "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max", "outreach_count",
+            "outreach_network_count")
     db = SessionLocal()
     try:
-        rows = {r.key: r.value for r in db.query(Setting).filter(
-            or_(Setting.key.like("curate_%"), Setting.key.in_(["target_base_min", "target_base_max", "outreach_count",
-                                                     "outreach_network_count"]))).all()}
+        rows = {k: get_setting(db, k) for k in keys}
     finally:
         db.close()
 
@@ -321,12 +324,13 @@ def _me() -> tuple[str, str, dict]:
     from backend.models.db import Resume
     db = SessionLocal()
     try:
-        p = db.get(Persona, 1)
+        from backend.accounts.owned import get_persona
+        from backend.accounts.settings import get_setting
+        p = get_persona(db, create=False)
         contact = (p.contact if p else None) or {}
         name = " ".join(x for x in (contact.get("first_name"), contact.get("last_name")) if x) or "the candidate"
         brief = ""
-        row = db.query(Setting).filter(Setting.key == "default_resume_id").first()
-        rid = row.value if row else ""
+        rid = get_setting(db, "default_resume_id") or ""
         if rid == "persona":
             brief = sender_brief((p.resume_content if p else None) or {})
         elif rid:

@@ -136,4 +136,4 @@ def test_delete_removes_the_login(client, homes):
     client.put("/api/credentials/codex", json={"auth_json": GOOD})
     assert client.delete("/api/credentials/codex").status_code == 200
     assert client.get("/api/credentials").json()["codex"]["logged_in"] is False
-    assert client.delete("/api/credentials/other").status_code == 404
+    assert client.delete("/api/credentials/other").status_code in (404, 405)

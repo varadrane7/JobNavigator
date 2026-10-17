@@ -50,7 +50,7 @@ def test_every_known_key_has_exactly_one_section():
 # the list is kept here and re-read from the source when it is available.
 SCREEN_SECTIONS = {"feed", "models", "scoring", "tailoring", "letters", "autofill", "prep",
                    "emailclass", "scheduler", "exclude", "dedup", "notifications", "tracer",
-                   "apify", "jobright", "linkedin", "advanced"}
+                   "apify", "jobright", "linkedin", "advanced", "curator"}
 
 
 def test_ui_sections_match_the_settings_screen():

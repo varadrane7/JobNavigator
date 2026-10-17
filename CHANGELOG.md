@@ -8,7 +8,12 @@ Releases are named major.minor ("3.0"); tags before 3.0 carry a `.0` patch (`v2.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- **Single sign-on (OIDC):** sign in with Authentik, Keycloak or any OpenID Connect provider. Give the discovery URL (`OIDC_DISCOVERY_URL`, or Settings › Advanced), a client id and secret, and add `<dashboard>/api/auth/oidc/callback` as the redirect URI. The login screen then offers **Sign in with …**. The email in `OIDC_OWNER_EMAIL` signs in as the existing owner; everyone else becomes a member on first login (still five accounts at most) with their own models, LinkedIn, Jobright and Apify credentials. A single-sign-on browser stays in its own account (no switching, no PIN picker, no minting tokens for others), and the install password remains as a break-glass login (**Use the install password**). With SSO on, a member's `X-Account-Token` is enough for the extension and scripts, so members never need the install password.
+- **Codex and Antigravity logins from Settings › Models:** upload `~/.codex/auth.json` or a zip of `~/.gemini` instead of running a `docker compose exec` login per account. Files go to the account's own home (the owner's to the default one) and are never sent back.
+- **Own local model server per member:** the owner can allow a member to point Ollama, LM Studio or OpenAI (Local) at its own server (Settings › Accounts › **Own local model server**). The address must be a LAN, VPN or loopback host; link-local and public addresses are refused, again before every call.
+- **Daily curator per account:** the 4 a.m. run now builds each account's own Top list, outreach and summary from its own jobs, résumés and settings. List size, window, excludes, weights and outreach are personal; the curator model inherits the owner's or uses the member's own provider and key; the schedule, search service and embedding model stay the owner's. An account with no résumé is skipped. Members can use **Run curator** themselves.
+- **Cambridge cover letter** template matching the Cambridge résumé, and the Cambridge résumé's `@page` margins now equal its preview padding (same look on the first page, same margins on every printed page).
 
 ## [3.0] — 2026-10-17
 

@@ -164,10 +164,7 @@ async def put_agy(request: Request, db: Session = Depends(get_db)):
     return {"ok": True, "logged_in": _agy_logged_in(t["agy_home"])}
 
 
-@router.delete("/{provider}")
-def delete_login(provider: str, db: Session = Depends(get_db)):
-    if provider not in ("codex", "agy"):
-        raise HTTPException(status_code=404, detail="unknown provider")
+def _delete(provider: str, db) -> dict:
     t = _targets(db)
     if provider == "codex":
         try:
@@ -177,3 +174,13 @@ def delete_login(provider: str, db: Session = Depends(get_db)):
     else:
         shutil.rmtree(_agy_state(t["agy_home"]), ignore_errors=True)
     return {"ok": True}
+
+
+@router.delete("/codex")
+def delete_codex(db: Session = Depends(get_db)):
+    return _delete("codex", db)
+
+
+@router.delete("/agy")
+def delete_agy(db: Session = Depends(get_db)):
+    return _delete("agy", db)

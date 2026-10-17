@@ -113,7 +113,7 @@ Follow steps here manually or ask AI to: [Upgrading from 2.x](CHANGELOG.md#upgra
 | **Applications** | Stages, interviews, notes, status history (funnel and Sankey in Stats), a prep handover for any AI chat |
 | **Persona** | Contact, work authorization, compensation, preferences, résumé content, Q&A bank; import from a résumé or PDF |
 | **Extension** | Passive LinkedIn capture, save any job from any page, ATS form autofill and AI answers to free-text questions from your Persona |
-| **Accounts** | Owner + up to four members, each with their own jobs, applications, résumés, letters, Persona, searches and companies; optional 4-digit PINs; settings inherited or own per section; scraping shared (one fetch per page, filtered and scored per account); with one account none of it shows |
+| **Accounts** | Sign in with your own identity provider (OIDC / Authentik) or the install password; owner + up to four members, each with their own jobs, applications, résumés, letters, Persona, searches and companies; optional 4-digit PINs; settings inherited or own per section; scraping shared (one fetch per page, filtered and scored per account); with one account none of it shows |
 | **Gmail** | Polls replies, classifies them, updates the application; each account connects its own mailbox |
 | **Telegram** | New-job alerts, daily digest, scrape health, inline actions; per account (household bot or its own) |
 | **H-1B** | Company filing lookups, description exclusion phrases |

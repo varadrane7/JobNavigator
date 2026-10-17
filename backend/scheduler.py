@@ -12,6 +12,7 @@ Accounts (MT-7). Each job is one of:
   JobRun) that fetches each target once and ingests it per subscribing account.
 LinkedIn session refresh is install-level too but has no schedule (manual trigger only).
 """
+import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -134,7 +135,7 @@ def _register_jobs(scrape_interval, email_interval, backup_cron, digest_cron, h1
     _add_cron_job(refresh_h1b_data, "h1b_refresh", h1b_cron)                 # install-level
     _add_cron_job(run_job_cleanup_auto, "job_cleanup", cleanup_cron)         # per account
     _add_cron_job(run_auto_reject, "auto_reject", reject_cron)               # per account
-    _add_cron_job(run_curation, "curate", curate_cron)                       # install-level, as the owner
+    _add_cron_job(run_curation, "curate", curate_cron)                       # per account
 
     logger.info(
         f"Scheduler configured: scrape every {scrape_interval}m, "
@@ -452,19 +453,26 @@ async def refresh_h1b_data():
         logger.warning(f"Scheduler skipped: {e}")
 
 
-@as_owner
+@scheduled_job
 async def run_curation():
-    """Daily Top-N curation + outreach (backend/curator/run.py)."""
+    """Daily Top-N curation + outreach (backend/curator/run.py), once per account, in turn:
+    each account's own pool, résumés, settings and curator model."""
+    await for_each_account("curate", _curate_for_account)
+
+
+async def _curate_for_account():
     from backend.job_monitor import tracked_run, JobAlreadyRunningError
     from backend.curator.routes import _summary_text
-    from backend.curator.run import run_daily_curation
+    from backend.curator.run import run_daily_curation, _resume_texts
     try:
+        # a member who has not uploaded a résumé yet has nothing to rank against
+        if not await asyncio.to_thread(_resume_texts):
+            logger.info("Curation skipped: this account has no résumé")
+            return
         async with tracked_run("curate", "scheduler") as run:
             run.summary = _summary_text(await run_daily_curation())
     except JobAlreadyRunningError:
         logger.info("Curation already running, skipping")
-    except Exception as e:
-        logger.exception(f"Curation failed: {e}")
 
 
 @scheduled_job

@@ -323,7 +323,7 @@ async def test_ollama_dispatch_uses_the_setting(test_db, monkeypatch):
 def test_local_urls_are_one_owner_only_section_shown_in_models():
     sec = S.SETTING_SECTIONS["llm_local"]
     assert (sec["scope"], sec["ui"]) == ("owner_only", ["models"])
-    assert set(sec["keys"]) == {"lmstudio_base_url", "ollama_base_url"}
+    assert set(sec["keys"]) == {"lmstudio_base_url", "ollama_base_url", "local_url_allowed_accounts"}
     assert S.section_of("lmstudio_base_url") == S.section_of("ollama_base_url") == "llm_local"
 
 

@@ -6,6 +6,16 @@ finds people to contact about them, and finds a few engineering leaders worth kn
 companies whether or not they are hiring. Results are on the **Today** screen. Telegram gets one
 line of counts ("Curated list generated · X jobs to apply · Y unique companies · Z people to connect").
 
+## One list per account
+
+The run happens once per account, in turn, each on that account's own jobs, résumés and
+Persona. List size, window, excludes, weights, pay targets and outreach counts are personal
+settings (Settings › Daily curator; a new member starts from the defaults). The curator model
+and its fallback follow the account's choice: **Inherit** the owner's provider and key, or
+**Own** (the member's own provider and key). The schedule, SearXNG URL, embedding model and
+parallelism stay the owner's. An account with no résumé is skipped; everyone can press
+**Run curator** for their own list. Telegram summaries go to each account's own chat.
+
 ## How a job gets picked
 
 | Step | What happens | Cost |
