@@ -2,24 +2,21 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import { useToasts, ToastStack } from '../Toast'
-import { Button, Card, HeaderRow, Helper, Label, Link, Meter, Mono, PageTitle, Segmented, Select, Tag, Heading, Notice, Spinner, scoreTone } from '../ui'
+import { Button, Card, HeaderRow, Helper, Label, Link, Meter, Mono, PageTitle, Select, Tag, Heading, Notice, Spinner, scoreTone } from '../ui'
 import { agoShort, tzDateKey, TZ_SHORT } from '../time'
 import { fetchRunOutcome, runFailed, runFailureReason } from '../hooks'
 import '../theme.css'
 
 // Today: the daily curator's ranked Top list (backend/curator), the people to
 // contact about it, and "people to know": decision makers at good companies with
-// no posting for the user today. Rank is the order to apply in; the window says how soon.
+// no posting for the user today. Rank is the order to apply in; everything is meant to be done today.
+// Applied / skipped jobs and contacted / skipped people sink into a "Done" section at the bottom.
 
-const WINDOW = {
-  now: ['good', 'Apply now'],
-  morning: ['accent', 'This morning'],
-  today: ['neutral', 'Today'],
-}
 const PARTS = [['fit', 'Fit'], ['fresh', 'Fresh'], ['visa_comp', 'Visa / pay'], ['reply', 'Reply odds'], ['stability', 'Stability']]
 const KIND = { founder: 'Founder', hiring_manager: 'Hiring manager', recruiter: 'Recruiter', engineer: 'Engineer' }
-const CONTACT_STATUS = [['new', 'New'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['skip', 'Skip']]
-const CONTACT_DONE = new Set(['contacted', 'skip'])   // greyed and sunk to the bottom
+const CONTACT_STATUS = [['new', 'New'], ['contacted', 'Contacted'], ['skip', 'Skip']]
+const CONTACT_DONE = new Set(['contacted', 'replied', 'skip'])   // 'replied' is legacy: shown as contacted
+const DIM = 0.55   // dims the card's text, never the card: opacity would trap the status dropdown under later cards
 const SORTS = [['rank', 'Rank'], ['fit', 'Fit'], ['newest', 'Newest'], ['company', 'Company']]
 const SORT_BY = {
   rank: (a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9),
@@ -35,14 +32,12 @@ const copy = async (text, push, what) => {
 
 function JobCard({ j, onStatus, onCoverLetter }) {
   const [open, setOpen] = useState(false)
-  const [tone, label] = WINDOW[j.apply_window] || WINDOW.today
   const done = j.status !== 'saved'
   const it = j.intel || {}
   return (
-    <Card style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 14px', opacity: done ? 0.55 : 1 }}>
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: done ? '6px 14px' : '10px 14px', opacity: done ? DIM : 1 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
         <Mono size="lg" style={{ flex: '0 0 28px', textAlign: 'right' }}>{j.rank}</Mono>
-        <Tag tone={tone}>{label}</Tag>
         <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column' }}>
           <Link href={j.url} target="_blank" rel="noreferrer" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{j.title}</Link>
           <Helper size="xs" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -63,7 +58,7 @@ function JobCard({ j, onStatus, onCoverLetter }) {
           title={j.best_cv ? `Cover letter for this job, from ${j.best_cv}` : 'Cover letter for this job'}>Cover letter</Button>
         <Button size="xs" variant="ghost" onClick={() => setOpen((v) => !v)} ariaLabel="Why this job">{open ? '▴' : '▾'}</Button>
       </div>
-      <Helper size="xs" style={{ paddingLeft: 38 }}>{j.reason}</Helper>
+      {!done && <Helper size="xs" style={{ paddingLeft: 38 }}>{j.reason}</Helper>}
       {open && (
         <div style={{ paddingLeft: 38, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '6px 18px' }}>
           {PARTS.map(([k, name]) => (
@@ -81,21 +76,19 @@ function JobCard({ j, onStatus, onCoverLetter }) {
 
 function ContactCard({ c, job, onStatus, push }) {
   const done = CONTACT_DONE.has(c.status)
-  const [tone, label] = job ? (WINDOW[job.apply_window] || WINDOW.today) : []
   return (
-    <Card style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 14px', opacity: done ? 0.55 : 1 }}>
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 14px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-        <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', opacity: done ? DIM : 1 }}>
           <Link href={c.linkedin_url} target="_blank" rel="noreferrer">{c.name}</Link>
           <Helper size="xs" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.title || ''} · {c.company}{c.location ? ` · ${c.location}` : ''}</Helper>
           {job && <Helper size="xs" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>re #{job.rank} {job.title}</Helper>}
           {c.company_note && <Helper size="xs" title={c.company_note} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.company_note}</Helper>}
         </div>
-        {job && <Tag tone={tone}>{label}</Tag>}
-        {c.kind && <Tag tone={c.kind === 'hiring_manager' || c.kind === 'founder' ? 'accent' : 'neutral'}>{KIND[c.kind] || c.kind}</Tag>}
-        <Select value={c.status} options={CONTACT_STATUS} onPick={(v) => onStatus(c, v)} width="120px" ariaLabel="Contact status" />
+        {c.kind && <Tag style={{ opacity: done ? DIM : 1 }} tone={c.kind === 'hiring_manager' || c.kind === 'founder' ? 'accent' : 'neutral'}>{KIND[c.kind] || c.kind}</Tag>}
+        <Select value={c.status === 'replied' ? 'contacted' : c.status} options={CONTACT_STATUS} onPick={(v) => onStatus(c, v)} width="120px" ariaLabel="Contact status" />
       </div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', opacity: done ? DIM : 1 }}>
         {c.email
           ? <Helper size="xs" mono title="Guessed from the company's email format — verify before sending">{c.email} (guess)</Helper>
           : <Helper size="xs">No email found</Helper>}
@@ -111,7 +104,6 @@ function ContactCard({ c, job, onStatus, push }) {
 export default function Today() {
   const navigate = useNavigate()
   const { toasts, push, dismiss } = useToasts()
-  const [win, setWin] = useState('all')
   const [sort, setSort] = useState('rank')
   const [day, setDay] = useState(tzDateKey())
   const [data, setData] = useState(null)
@@ -178,30 +170,21 @@ export default function Today() {
   const allJobs = data?.jobs || []
   const allContacts = data?.contacts || []
   const jobContacts = useMemo(() => allContacts.filter((c) => c.purpose !== 'network'), [allContacts])
-  const network = useMemo(() => allContacts.filter((c) => c.purpose === 'network')
-    .map((c, i) => ({ c, i }))
-    .sort((a, b) => (CONTACT_DONE.has(a.c.status) - CONTACT_DONE.has(b.c.status)) || a.i - b.i)
-    .map(({ c }) => c), [allContacts])
+  const network = useMemo(() => allContacts.filter((c) => c.purpose === 'network' && !CONTACT_DONE.has(c.status)), [allContacts])
   const applied = allJobs.filter((j) => j.status === 'applied').length
   const jobById = useMemo(() => Object.fromEntries(allJobs.map((j) => [j.id, j])), [allJobs])
-  const inWin = (j) => win === 'all' || (j?.apply_window || 'today') === win
-  const jobs = useMemo(() => allJobs.filter(inWin).sort(SORT_BY[sort]),
+  const sortedJobs = useMemo(() => [...allJobs].sort(SORT_BY[sort]), [allJobs, sort])
+  const todo = useMemo(() => sortedJobs.filter((j) => j.status === 'saved'), [sortedJobs])
+  const doneJobs = useMemo(() => sortedJobs.filter((j) => j.status !== 'saved'), [sortedJobs])
+  // people follow the job list's order
+  const pos = useMemo(() => Object.fromEntries(todo.concat(doneJobs).map((j, i) => [j.id, i])), [todo, doneJobs])
+  const byJob = (a, b) => ((pos[a.job_id] ?? 1e9) - (pos[b.job_id] ?? 1e9))
+  const contacts = useMemo(() => jobContacts.filter((c) => !CONTACT_DONE.has(c.status)).sort(byJob),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [allJobs, win, sort])
-  // people follow the job list's order; contacted / skipped ones sink to the bottom
-  const contacts = useMemo(() => {
-    const pos = Object.fromEntries(jobs.map((j, i) => [j.id, i]))
-    return jobContacts.filter((c) => win === 'all' || inWin(jobById[c.job_id]))
-      .map((c, i) => ({ c, i }))
-      .sort((a, b) => (CONTACT_DONE.has(a.c.status) - CONTACT_DONE.has(b.c.status))
-        || ((pos[a.c.job_id] ?? 1e9) - (pos[b.c.job_id] ?? 1e9)) || a.i - b.i)
-      .map(({ c }) => c)
+    [jobContacts, pos])
+  const doneContacts = useMemo(() => allContacts.filter((c) => CONTACT_DONE.has(c.status)).sort(byJob),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobContacts, jobs, jobById, win])
-  const winOpts = useMemo(() => [['all', 'All'], ...Object.entries(WINDOW).map(([k, [, l]]) => [k, l])].map(([value, l]) => {
-    const n = value === 'all' ? allJobs.length : allJobs.filter((j) => (j.apply_window || 'today') === value).length
-    return { value, label: `${l} · ${n}` }
-  }), [allJobs])
+    [allContacts, pos])
   const dayOpts = useMemo(() => {
     const ds = new Set([tzDateKey(), ...(data?.days || [])])
     return [...ds].sort().reverse().map((d) => [d, d === tzDateKey() ? `Today · ${d}` : d])
@@ -225,31 +208,41 @@ export default function Today() {
         {!data && !err && <Spinner />}
         {data && (
           <>
-            {allJobs.length > 0 && (
-              <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                <Segmented size="sm" grow={false} ariaLabel="Apply window" value={win} onChange={setWin} options={winOpts} />
-                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Label size="xs">Sort</Label>
-                  <Select value={sort} options={SORTS} onPick={setSort} width="120px" ariaLabel="Sort jobs" />
-                </div>
-              </div>
-            )}
             <section style={{ flex: '2 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <Heading strong={600} size={16}>{sort === 'rank' ? 'Apply in this order' : 'Jobs'}</Heading>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Heading strong={600} size={16}>{sort === 'rank' ? 'Apply in this order' : 'Jobs'}</Heading>
+                {allJobs.length > 0 && (
+                  <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Label size="xs">Sort</Label>
+                    <Select value={sort} options={SORTS} onPick={setSort} width="120px" ariaLabel="Sort jobs" />
+                  </div>
+                )}
+              </div>
               {allJobs.length === 0 && <Helper>No curated jobs for {day}. Run now, or wait for the morning run.</Helper>}
-              {allJobs.length > 0 && jobs.length === 0 && <Helper>No jobs in this window.</Helper>}
-              {jobs.map((j) => <JobCard key={j.id} j={j} onStatus={setJobStatus} onCoverLetter={openCoverLetter} />)}
+              {allJobs.length > 0 && todo.length === 0 && <Helper>All done for {day}.</Helper>}
+              {todo.map((j) => <JobCard key={j.id} j={j} onStatus={setJobStatus} onCoverLetter={openCoverLetter} />)}
+              {doneJobs.length > 0 && (
+                <>
+                  <Heading strong={600} size={16} style={{ marginTop: 14 }}>Applied / skipped · {doneJobs.length}</Heading>
+                  {doneJobs.map((j) => <JobCard key={j.id} j={j} onStatus={setJobStatus} onCoverLetter={openCoverLetter} />)}
+                </>
+              )}
             </section>
             <section style={{ flex: '1 1 340px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <Heading strong={600} size={16}>People to contact</Heading>
               {jobContacts.length === 0 && <Helper>Nobody found for {day} yet.</Helper>}
-              {jobContacts.length > 0 && contacts.length === 0 && <Helper>Nobody for the jobs in this window.</Helper>}
               {contacts.map((c) => <ContactCard key={c.id} c={c} job={jobById[c.job_id]} onStatus={setContactStatus} push={push} />)}
               {network.length > 0 && (
                 <>
                   <Heading strong={600} size={16} style={{ marginTop: 14 }}>People to know</Heading>
                   <Helper size="xs">Engineering leaders at good companies, open role or not. Ask for a chat, and a referral when a role opens.</Helper>
                   {network.map((c) => <ContactCard key={c.id} c={c} onStatus={setContactStatus} push={push} />)}
+                </>
+              )}
+              {doneContacts.length > 0 && (
+                <>
+                  <Heading strong={600} size={16} style={{ marginTop: 14 }}>Contacted / skipped · {doneContacts.length}</Heading>
+                  {doneContacts.map((c) => <ContactCard key={c.id} c={c} job={jobById[c.job_id]} onStatus={setContactStatus} push={push} />)}
                 </>
               )}
             </section>
