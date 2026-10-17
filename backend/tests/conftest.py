@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 # Force SQLite for tests before any imports that touch the engine
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+# A developer .env must not change what the tests see: no install password unless a test sets one.
+os.environ["INITIAL_API_KEY"] = ""
 # MT-2: a query on an account-owned model without an account context raises in tests
 # instead of falling back to the owner. MT_STRICT=0 turns that off for a local run.
 os.environ.setdefault("MT_STRICT", "1")

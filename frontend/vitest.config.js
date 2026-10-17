@@ -22,5 +22,6 @@ export default defineConfig({
     // tests assert logic, never computed style.
     css: false,
     clearMocks: true,
+    setupFiles: ['./vitest.setup.js'],
   },
 })

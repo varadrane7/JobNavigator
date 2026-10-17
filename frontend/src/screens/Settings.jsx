@@ -84,7 +84,7 @@ const kb = (fn, role = 'button') => ({
 const asList = (v) => (Array.isArray(v) ? v.join('\n') : (v == null ? '' : String(v)))
 const asJson = (v) => {
   if (typeof v === 'string') return v
-  try { return JSON.stringify(v, null, 2) } catch { return '' }
+  try { return JSON.stringify(v, null, 2) ?? '' } catch { return '' }
 }
 
 // Free-text box; secrets mask until revealed as the literal MASK string GET /settings returns for a set secret.
