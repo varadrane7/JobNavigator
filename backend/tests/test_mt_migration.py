@@ -8,7 +8,7 @@ import pytest
 
 import backend.seed as seed
 from backend.models.db import (
-    Account, ActivityLog, Application, Company, CoverLetter, Interview, Job, JobRun,
+    Account, ActivityLog, Application, Company, Contact, CoverLetter, Interview, Job, JobRun,
     LlmCallLog, Persona, Resume, ScrapeLog, Search, TracerLink, get_owner_id,
 )
 from backend.tests.r4_support import make_job
@@ -24,7 +24,7 @@ def _seed_one_of_each(db):
     resume = Resume(name="R")
     db.add_all([Search(name="S"), Company(name="C"), app, resume,
                 CoverLetter(name="L"), JobRun(job_type="t", trigger="manual"),
-                ScrapeLog(), LlmCallLog(purpose="p"), ActivityLog(type="t", message="m")])
+                ScrapeLog(), Contact(name="P"), LlmCallLog(purpose="p"), ActivityLog(type="t", message="m")])
     db.commit()
     db.add_all([Interview(application_id=app.id, what="Call"),
                 TracerLink(token="abc", destination_url="u", source_label="s", resume_id=resume.id)])

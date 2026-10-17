@@ -24,8 +24,11 @@ def _summary_text(s: dict) -> str:
 
 
 @router.post("/curator/run", status_code=202, summary="Run the daily curation now")
-async def run_now(outreach: bool = True, send: bool = True):
+async def run_now(outreach: bool = True, send: bool = True, db: Session = Depends(get_db)):
+    from backend.accounts.settings import acts_as_owner
     from backend.curator.run import run_daily_curation
+    if not acts_as_owner(db):
+        raise HTTPException(403, "Only the owner can run the curator")
 
     async def _do():
         return _summary_text(await run_daily_curation(outreach=outreach, send=send))
@@ -89,13 +92,8 @@ class ContactPatch(BaseModel):
 
 @router.patch("/contacts/{contact_id}", summary="Update a contact")
 def patch_contact(contact_id: str, body: ContactPatch, db: Session = Depends(get_db)):
-    import uuid
-    try:
-        c = db.get(Contact, uuid.UUID(contact_id))
-    except ValueError:
-        c = None
-    if c is None:
-        raise HTTPException(404, "Contact not found")
+    from backend.accounts.owned import get_owned_or_404
+    c = get_owned_or_404(db, Contact, contact_id, "Contact not found")
     data = body.model_dump(exclude_unset=True)
     if "status" in data and data["status"] not in ("new", "contacted", "replied", "skip"):
         raise HTTPException(422, "status must be new, contacted, replied or skip")

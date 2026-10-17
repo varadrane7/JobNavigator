@@ -83,6 +83,7 @@ PARAM_MODELS = {
     "link_id": "tracer_link",
     "tracer_link_id": "tracer_link",
     "persona_id": "persona",
+    "contact_id": "contact",
 }
 PLURAL_PARAMS = {"job_ids": "job", "resume_ids": "resume", "company_ids": "company",
                  "search_ids": "search", "app_ids": "application",
@@ -152,7 +153,7 @@ def _ids():
     return {k: uuid.uuid4() for k in (
         "search", "company", "job", "job_new", "application", "interview", "resume", "tailored",
         "cover_letter", "tracer_link", "click", "tracer_link_cl", "click_cl", "activity", "llm", "job_run", "scrape_log",
-        "location")}
+        "location", "contact")}
 
 
 def _seed(db, account_id, ids, text, token, persona_id):
@@ -219,6 +220,8 @@ def _seed(db, account_id, ids, text, token, persona_id):
                      status="completed", started_at=now - timedelta(minutes=5), finished_at=now,
                      duration_seconds=3.0, result_summary=text, meta={"note": text},
                      target_job_id=ids["job"]),
+            m.Contact(id=ids["contact"], company=text, name=text, title=text, linkedin_url=f"https://{token}.example/in/{text}",
+                      email=f"{token}@example.com", note=text, email_draft=text, status="new"),
             m.ScrapeLog(id=ids["scrape_log"], search_id=ids["search"], company_id=ids["company"],
                         source="jobspy", jobs_found=3, new_jobs=1, error=text, is_warning=True,
                         source_breakdown={text: 3}),

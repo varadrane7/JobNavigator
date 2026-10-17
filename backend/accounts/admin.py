@@ -409,7 +409,7 @@ def _delete_plan():
         ("cover_letters", m.CoverLetter), ("resumes", m.Resume),
         ("job_locations", m.JobLocation), ("llm_calls", m.LlmCallLog),
         ("job_runs", m.JobRun), ("scrape_log", m.ScrapeLog), ("activity_log", m.ActivityLog),
-        ("jobs", m.Job), ("searches", m.Search), ("companies", m.Company),
+        ("contacts", m.Contact), ("jobs", m.Job), ("searches", m.Search), ("companies", m.Company),
         ("persona", m.Persona), ("settings", m.Setting), ("section_policies", m.SectionPolicy),
     ]
 
@@ -535,6 +535,7 @@ def build_export(db, account_id, owner_id) -> "tempfile.SpooledTemporaryFile":
         ("interviews", m.Interview), ("tracer_links", m.TracerLink),
         ("tracer_click_events", m.TracerClickEvent), ("activity_log", m.ActivityLog),
         ("llm_call_log", m.LlmCallLog), ("job_runs", m.JobRun), ("scrape_log", m.ScrapeLog),
+        ("contacts", m.Contact),
     ]
     buf = tempfile.SpooledTemporaryFile(max_size=32 * 1024 * 1024)
     counts = {}

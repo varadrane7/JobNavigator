@@ -47,6 +47,7 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("GET", "/api/cover-letters/templates"): "template files on disk, shared by every account",
     ("GET", "/api/llm/efforts"): "static reasoning-effort catalog",
     ("GET", "/api/llm/models"): "provider model catalog fetched over the network",
+    ("GET", "/api/search/test"): "install diagnostic: one SearXNG query, touches no account rows",
     ("GET", "/api/searches/countries"): "static country list",
 
     # Install-level sessions and bots (per-account in MT-16 / MT-17)

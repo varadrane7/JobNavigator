@@ -301,7 +301,7 @@ class CompanyIntel(Base):
     fetched_at = Column(DateTime(timezone=True), default=utcnow)
 
 
-class Contact(Base):
+class Contact(AccountScoped, Base):
     """A person to reach out to: about a curated job (purpose 'job': founder, hiring manager, recruiter),
     or a decision maker at a good company whether or not it has a role open (purpose 'network', no job)."""
     __tablename__ = "contacts"
@@ -324,7 +324,7 @@ class Contact(Base):
     found_on = Column(Date, nullable=True, index=True)   # APP_TZ date
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
-    __table_args__ = (UniqueConstraint("company", "linkedin_url", name="uq_contact_company_url"),)
+    __table_args__ = (UniqueConstraint("account_id", "company", "linkedin_url", name="uq_contacts_account_company_url"),)
 
 
 # ── Jobs ─────────────────────────────────────────────────────────────────────

@@ -878,6 +878,9 @@ END $$;""",
         "CREATE INDEX IF NOT EXISTS ix_jobs_discovered_at ON jobs(discovered_at)",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS location VARCHAR",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS purpose VARCHAR DEFAULT 'job'",
+        # contacts belong to an account: the (company, url) dedup key is per account.
+        "ALTER TABLE contacts DROP CONSTRAINT IF EXISTS uq_contact_company_url",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_contacts_account_company_url ON contacts(account_id, company, linkedin_url)",
         # AutoApply was removed; drop its tables and settings (no-ops once gone).
         "DROP TABLE IF EXISTS autoapply_attempts, autoapply_questions, autoapply_items, "
         "autoapply_llm_usage, autoapply_ats_credentials CASCADE",
@@ -944,7 +947,7 @@ def _migrate_unique_per_account(db):
 ACCOUNT_TABLES = [
     "searches", "companies", "jobs", "applications", "interviews", "resumes",
     "cover_letters", "personas", "tracer_links", "activity_log_v2", "llm_call_log",
-    "job_runs", "scrape_log",
+    "job_runs", "scrape_log", "contacts",
 ]
 
 
