@@ -16,6 +16,7 @@ from backend.job_monitor import launch_background, JobAlreadyRunningError, get_a
 
 from backend.api.routes_settings import router as settings_router
 from backend.api.routes_oidc import router as oidc_router
+from backend.api.routes_credentials import router as credentials_router
 from backend.api.routes_jobs import router as jobs_router
 from backend.api.routes_applications import router as applications_router
 from backend.api.routes_companies import router as companies_router
@@ -658,6 +659,7 @@ app.include_router(llm_router, prefix="/api")
 app.include_router(curator_router, prefix="/api")
 app.include_router(accounts_router, prefix="/api")
 app.include_router(oidc_router, prefix="/api")
+app.include_router(credentials_router, prefix="/api")
 app.include_router(gmail_router, prefix="/api")
 
 

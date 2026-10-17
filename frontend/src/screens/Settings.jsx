@@ -527,10 +527,12 @@ export default function Settings() {
           'claude_code_oauth_token', { secret: true, mono: true, w: '340px',
             hide: () => !usedBy('claude_code').length || (member && sidx?.byId?.models?.mode !== 'own') }),
         // The other two subscription CLIs keep their login in a folder, not a token: show how to log in.
-        { kind: 'note', label: 'Codex CLI login', help: `No token to paste: Codex signs in once from a terminal. Used by: ${usedBy('codex_cli').join(', ')}.`,
-          text: 'docker compose exec backend python -m backend.scripts.cli_login codex "<account name>"', hide: () => !usedBy('codex_cli').length },
-        { kind: 'note', label: 'Antigravity CLI login', help: `No token to paste: Antigravity signs in once from a terminal. Used by: ${usedBy('antigravity_cli').join(', ')}.`,
-          text: 'docker compose exec backend python -m backend.scripts.cli_login agy "<account name>"', hide: () => !usedBy('antigravity_cli').length },
+        { kind: 'clilogin', provider: 'codex', label: 'Codex CLI login',
+          help: `Your ChatGPT subscription: run \`codex login\` on your own computer, then upload ~/.codex/auth.json here. Used by: ${usedBy('codex_cli').join(', ')}.`,
+          hide: () => !usedBy('codex_cli').length || (member && sidx?.byId?.models?.mode !== 'own') },
+        { kind: 'clilogin', provider: 'agy', label: 'Antigravity CLI login',
+          help: `Your Google subscription: sign in to agy on your own computer, zip the ~/.gemini folder and upload it here. Used by: ${usedBy('antigravity_cli').join(', ')}.`,
+          hide: () => !usedBy('antigravity_cli').length || (member && sidx?.byId?.models?.mode !== 'own') },
         // The local model servers' addresses: owner-only settings (one host per install), shown to the owner while some slot uses that provider.
         B('LM Studio address', 'Empty uses LMSTUDIO_BASE_URL from .env, else http://localhost:1234/v1. From Docker: http://host.docker.internal:1234/v1.'
             + (usedBy('lmstudio').length ? ` Used by: ${usedBy('lmstudio').join(', ')}.` : ''),
@@ -1131,6 +1133,8 @@ function Row({ r, ctx }) {
             <ActionBtn label={r.btnLabel} state={trig[r.label] || ''} onClick={() => runAction(r.label, r.act)} ariaLabel={`${r.label} — ${r.btnLabel}`} />
           </>
         )
+      case 'clilogin':
+        return <CliLoginRow provider={r.provider} flash={flash} />
       case 'note':
         return <Mono style={{ fontSize: 11.5, userSelect: 'all', overflowWrap: 'anywhere' }}>{r.text}</Mono>
       case 'apikey':
@@ -1254,6 +1258,49 @@ function ApiKeyRow({ value, save, flash }) {
         try { await api.post('/auth/set-session', { api_key: local.trim() }) } catch { /* cookie refresh is best effort */ }
         setLocal(''); flash('Key saved')
       }} />
+    </>
+  )
+}
+
+// A subscription CLI's login files, uploaded instead of a terminal login (MT-21). The server
+// never sends them back: this only knows "logged in" or not.
+function CliLoginRow({ provider, flash }) {
+  const [state, setState] = useState(null)   // { logged_in } | null while loading
+  const [busy, setBusy] = useState(false)
+  const fileRef = useRef(null)
+  const isCodex = provider === 'codex'
+  const load = useCallback(() => api.get('/credentials')
+    .then(({ data }) => setState({ logged_in: !!data?.[provider]?.logged_in, scope: data?.scope }))
+    .catch(() => setState({ logged_in: false })), [provider])
+  useEffect(() => { load() }, [load])
+  const upload = async (file) => {
+    if (!file) return
+    setBusy(true)
+    try {
+      if (isCodex) await api.put('/credentials/codex', { auth_json: await file.text() })
+      else await api.put('/credentials/agy', await file.arrayBuffer(), { headers: { 'Content-Type': 'application/zip' } })
+      flash('Login saved')
+    } catch (err) {
+      flash(errorText(err, 'Could not save the login'), true)
+    }
+    setBusy(false)
+    if (fileRef.current) fileRef.current.value = ''
+    load()
+  }
+  const remove = async () => {
+    setBusy(true)
+    try { await api.delete(`/credentials/${provider}`); flash('Login removed') } catch (err) { flash(errorText(err, 'Could not remove the login'), true) }
+    setBusy(false); load()
+  }
+  return (
+    <>
+      <Helper style={{ flex: 1, minWidth: 0 }}>{state == null ? 'Checking…' : (state.logged_in ? 'Logged in' : 'Not logged in')}</Helper>
+      {/* ui: keep — hidden native file input driven by the Pill below */}
+      <input ref={fileRef} type="file" accept={isCodex ? '.json,application/json' : '.zip,application/zip'}
+        style={{ display: 'none' }} onChange={(e) => upload(e.target.files?.[0])} aria-label={isCodex ? 'Codex auth.json file' : 'Antigravity login zip'} />
+      <Pill size="sm" disabled={busy} onClick={busy ? undefined : () => fileRef.current?.click()}
+        ariaLabel={isCodex ? 'Upload auth.json' : 'Upload the .gemini zip'}>{state?.logged_in ? 'Replace' : (isCodex ? 'Upload auth.json' : 'Upload .zip')}</Pill>
+      {state?.logged_in && <Pill size="sm" disabled={busy} onClick={busy ? undefined : remove} ariaLabel="Remove the login">Remove</Pill>}
     </>
   )
 }
