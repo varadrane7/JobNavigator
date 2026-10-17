@@ -11,7 +11,7 @@
 
 @page {
   size: {{ 'letter' if page_format == 'letter' else 'A4' }};
-  margin: 0;
+  margin: 0.2in 0.45in 0.1in 0.45in;
 }
 
 html, body {
@@ -31,6 +31,12 @@ html, body {
   width: {{ '8.5in' if page_format == 'letter' else '210mm' }};
   padding: 0.2in 0.45in 0.1in 0.45in;
   margin: 0 auto;
+}
+
+/* The preview uses the wrapper padding. Printed pages use the @page margins (same
+   values), so every continuation page keeps the same whitespace. */
+@media print {
+  .page { width: auto; padding: 0; margin: 0; }
 }
 
 /* --- Header: two stacked left-aligned lines (name, then contact) --- */
