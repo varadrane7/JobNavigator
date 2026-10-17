@@ -131,13 +131,21 @@ def test_account_limit(idp, test_db, monkeypatch):
     assert "jn_account" not in r.cookies and "jn_session" not in r.cookies
 
 
-def test_unverified_owner_email_does_not_link(idp, test_db, monkeypatch):
+def test_unverified_owner_email_is_refused_not_made_a_member(idp, test_db, monkeypatch):
     r = _login(idp, monkeypatch, sub="evil", email="owner@example.com", email_verified=False)
+    assert r.headers["location"] == "/?oidc_error=email_unverified"
     owner = test_db.query(Account).filter(Account.role == "owner").one()
     test_db.refresh(owner)
-    assert owner.oidc_sub is None
-    assert r.headers["location"] == "/"   # became a plain member instead
-    assert len(_members(test_db)) == 1
+    assert owner.oidc_sub is None and not _members(test_db)
+
+
+def test_trust_email_links_the_owner_despite_unverified(idp, test_db, monkeypatch):
+    monkeypatch.setenv("OIDC_TRUST_EMAIL", "true")
+    r = _login(idp, monkeypatch, sub="sub-1", email="owner@example.com", email_verified=False)
+    assert r.headers["location"] == "/"
+    owner = test_db.query(Account).filter(Account.role == "owner").one()
+    test_db.refresh(owner)
+    assert owner.oidc_sub == "sub-1" and not _members(test_db)
 
 
 def test_owner_already_linked_to_someone_else(idp, test_db, monkeypatch):

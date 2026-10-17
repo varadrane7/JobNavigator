@@ -10,6 +10,7 @@ const OIDC_ERRORS = {
   not_allowed: 'Your account is not allowed to use this install.',
   no_email: 'The identity provider did not share an email address.',
   owner_conflict: 'The owner account is linked to a different identity.',
+  email_unverified: 'The provider marks your email unverified — verify it there, or set OIDC_TRUST_EMAIL=true.',
   bad_state: 'The sign-in expired — try again.',
   provider_denied: 'The identity provider refused the sign-in.',
   provider_unreachable: 'The identity provider could not be reached.',

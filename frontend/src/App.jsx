@@ -79,7 +79,10 @@ function App() {
   useEffect(() => {
     const key = localStorage.getItem('jobnavigator_api_key') || ''
     axios.post('/api/auth/set-session', { api_key: key }, { withCredentials: true }).catch((err) => {
-      if (err.response?.status === 401) setShowLogin(true)
+      if (err.response?.status !== 401) return
+      // A single-sign-on browser holds a valid session without any key in localStorage:
+      // only show the sign-in when the session itself is not accepted.
+      axios.get('/api/auth/me', { withCredentials: true }).catch(() => setShowLogin(true))
     })
   }, [])
 

@@ -71,6 +71,9 @@ def config(db) -> dict:
         value = (get_install_setting(db, f"oidc_{key}", "") or "").strip()
         out[key] = value or os.environ.get(env, "").strip()
     out["scopes"] = out["scopes"] or DEFAULT_SCOPES
+    # Authentik (and others) mark emails unverified unless told otherwise; the install owner may
+    # decide the provider's emails can be trusted (env only, never a Settings value).
+    out["trust_email"] = os.environ.get("OIDC_TRUST_EMAIL", "").strip().lower() in ("1", "true", "yes")
     return out
 
 
@@ -251,12 +254,17 @@ def resolve_account(db, cfg: dict, issuer: str, claims: dict) -> dict:
         raise OidcDenied("not_allowed", "Your account is not in a group allowed to use this install.")
     sub = str(claims["sub"])
     email = (claims.get("email") or "").strip().lower() if isinstance(claims.get("email"), str) else ""
-    verified = claims.get("email_verified") is not False   # absent counts as verified, an explicit false does not
+    verified = claims.get("email_verified") is not False or cfg["trust_email"]   # absent counts as verified, an explicit false does not
+    logger.info("OIDC login: sub=%s email=%s email_verified=%s", sub, email or "-", claims.get("email_verified"))
 
     with unscoped():
         row = db.query(Account).filter(Account.oidc_issuer == issuer, Account.oidc_sub == sub).first()
         if row is None:
             owner_email = cfg["owner_email"].strip().lower()
+            if email and owner_email and email == owner_email and not verified:
+                # never fall through to creating a second account for the owner's address
+                raise OidcDenied("email_unverified",
+                                 "The provider reports this email as unverified; mark it verified there or set OIDC_TRUST_EMAIL=true.")
             if email and verified and owner_email and email == owner_email:
                 owner = db.query(Account).filter(Account.role == "owner").first()
                 if owner is None:
