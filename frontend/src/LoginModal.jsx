@@ -1,8 +1,21 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import axios from 'axios'
 import { Button, GlyphBadge, Heading, Helper, Label, ModalPanel } from './ui'
 import { useTheme, themeAttrs } from './theme'
 import './theme.css'
+
+// Why an OIDC sign-in came back (?oidc_error=<code>, set by /api/auth/oidc/callback).
+const OIDC_ERRORS = {
+  account_limit: 'This install already has 5 accounts — ask the owner to remove one.',
+  not_allowed: 'Your account is not allowed to use this install.',
+  no_email: 'The identity provider did not share an email address.',
+  owner_conflict: 'The owner account is linked to a different identity.',
+  bad_state: 'The sign-in expired — try again.',
+  provider_denied: 'The identity provider refused the sign-in.',
+  provider_unreachable: 'The identity provider could not be reached.',
+  token_invalid: 'The identity provider’s answer could not be verified.',
+  token_exchange_failed: 'The identity provider rejected the sign-in.',
+}
 
 // Sign-in overlay. Loading, error and success states are kept from v1 —
 // signing in is the one place the app can strand you with no way forward.
@@ -15,6 +28,24 @@ export default function LoginModal({ onSuccess }) {
   // this overlay mounts outside the v2 shell, so it carries the theme itself
   // from the shared store
   const look = useTheme()
+  // OIDC single sign-on: when the install has it, the button comes first and the install
+  // password (break-glass) sits behind a link.
+  const [sso, setSso] = useState(null)   // { enabled, provider_name } once known
+  const [usePassword, setUsePassword] = useState(false)
+  const [ssoError] = useState(() => {
+    try {
+      const code = new URLSearchParams(window.location.search).get('oidc_error')
+      return code ? (OIDC_ERRORS[code] || 'Single sign-on failed — try again.') : ''
+    } catch { return '' }
+  })
+  useEffect(() => {
+    let live = true
+    axios.get('/api/auth/oidc/config')
+      .then(({ data }) => { if (live && data?.enabled) setSso(data) })
+      .catch(() => { /* no SSO: the password form is all there is */ })
+    return () => { live = false }
+  }, [])
+  const showSso = !!sso?.enabled && !usePassword
 
   const submit = async (e) => {
     e.preventDefault()
@@ -62,6 +93,23 @@ export default function LoginModal({ onSuccess }) {
             </span>
           </div>
 
+          {showSso && (
+            <>
+              {ssoError && <Helper style={{ color: 'var(--bad)' }}>{ssoError}</Helper>}
+              <Button href="/api/auth/oidc/login" ariaLabel={`Sign in with ${sso.provider_name}`}>
+                Sign in with {sso.provider_name}
+              </Button>
+              <Helper style={{ textWrap: 'pretty' }}>
+                {/* ui: keep — inline text link inside a helper sentence */}
+                Install owner locked out? <span className="v2-anchor" role="button" tabIndex={0}
+                  onClick={() => setUsePassword(true)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setUsePassword(true) }}
+                  style={{ color: 'var(--accent)', cursor: 'pointer' }}>Use the install password</span>
+              </Helper>
+            </>
+          )}
+
+          {!showSso && (<>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             <Label>API key</Label>
             <div className="v2-fieldwrap" style={{ height: 36, padding: '0 12px', border: `1px solid ${error ? 'var(--bad)' : 'var(--edge)'}`, borderRadius: 'var(--radius-row)', background: 'var(--surface)', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -84,6 +132,7 @@ export default function LoginModal({ onSuccess }) {
           <Helper style={{ textWrap: 'pretty' }}>
             If no API key is set yet, leave this blank and sign in. You can add a key later in Settings › Advanced.
           </Helper>
+          </>)}
         </>
       )}
     </ModalPanel>

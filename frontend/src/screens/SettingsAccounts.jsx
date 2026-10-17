@@ -493,6 +493,7 @@ export function AccountsTable({ data, me, onAdd, onChanged, push, policyFor = ''
                   {self ? (a.has_pin ? 'Change PIN' : 'Set PIN') : (a.has_pin ? 'Reset PIN' : 'Set PIN')}
                 </Pill>
                 {self && <ApiTokenButton account={a} push={push} />}
+                {self && me?.oidc && <SignOutPill />}
                 {!owner && !self && (
                   <Pill size="sm" hover="v2-hover-bad-bdc" onClick={() => setRemoving(a)} ariaLabel={`Remove ${a.name}`}>Remove</Pill>
                 )}
@@ -518,6 +519,16 @@ export function AccountsTable({ data, me, onAdd, onChanged, push, policyFor = ''
       )}
     </div>
   )
+}
+
+// Single sign-on (OIDC) browsers sign out of the install: the install and account cookies
+// are cleared and the sign-in screen comes back.
+function SignOutPill() {
+  const out = async () => {
+    try { await api.post('/auth/logout') } catch { /* the cookies are dropped either way on reload */ }
+    window.location.assign('/')
+  }
+  return <Pill size="sm" onClick={out} ariaLabel="Sign out">Sign out</Pill>
 }
 
 // ── member: Your account ────────────────────────────────────────────────────
@@ -561,7 +572,8 @@ export function YourAccount({ data, me, onChanged, push }) {
       {row('Colour', 'Your avatar colour — the standing cue for which account is open.',
         <ColorPicker name={mine.name} value={mine.color} onPick={(c) => c !== mine.color && patch({ color: c }, 'Colour saved')}
           taken={others.map((a) => (a.color || '').toLowerCase())} ariaLabel="Your colour" />)}
-      {row('PIN', mine.has_pin ? 'Asked when someone opens your account. The owner’s PIN opens it too.' : 'Off — anyone at this browser can open your account with one click.',
+      {me.oidc && row('Sign out', 'You are signed in through single sign-on.', <SignOutPill />)}
+      {!me.oidc && row('PIN', mine.has_pin ? 'Asked when someone opens your account. The owner’s PIN opens it too.' : 'Off — anyone at this browser can open your account with one click.',
         <>
           <Pill size="sm" onClick={() => setPinMode('set')}>{mine.has_pin ? 'Change PIN' : 'Set PIN'}</Pill>
           {mine.has_pin && <Pill size="sm" onClick={() => setPinMode('remove')}>Remove PIN</Pill>}

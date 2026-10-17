@@ -586,7 +586,10 @@ def auth_me(request: Request):
             raise HTTPException(status_code=404, detail="No account")
         until = getattr(request.state, "owner_unlocked_until", 0) or 0
         owner = acct_auth._owner_of(accounts)
-        return {"account": acct_auth.public_account(acc), "accounts_count": len(accounts),
+        view = acct_auth.public_account(acc)
+        if getattr(request.state, "oidc_session", False):
+            view["oidc"] = True   # MT-20: the Settings screen offers Sign out instead of a PIN
+        return {"account": view, "accounts_count": len(accounts),
                 "owner_has_pin": bool(owner and owner["pin_hash"]),
                 "owner_unlocked_until": _epoch_iso(until) if until > acct_auth._now() else None}
     finally:

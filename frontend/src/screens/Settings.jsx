@@ -754,6 +754,13 @@ export default function Settings() {
       ['advanced', 'System', 'Advanced', '', [
         B('Proxy URL', 'Used by scrapes that hit rate limits or geo-blocks. Empty = direct.', 'proxy_url', { mono: true, w: '340px', placeholder: 'socks5://127.0.0.1:9050' }),
         { kind: 'apikey', label: 'Dashboard API key', help: 'Saving refreshes the session cookie so iframes keep working.' },
+        B('SSO discovery URL', 'OpenID Connect sign-in (Authentik, Keycloak…): the provider’s .well-known/openid-configuration URL. Empty = the OIDC_DISCOVERY_URL environment variable, or no SSO. Redirect URI: <this dashboard>/api/auth/oidc/callback.', 'oidc_discovery_url', { mono: true, w: '340px', placeholder: 'https://auth.example.com/application/o/jobnavigator/.well-known/openid-configuration' }),
+        B('SSO client ID', 'The provider application’s client ID.', 'oidc_client_id', { mono: true, w: '260px' }),
+        B('SSO client secret', 'Stored locally; the provider’s client secret.', 'oidc_client_secret', { secret: true, w: '260px' }),
+        B('SSO owner email', 'The email that signs in as the owner of this install. Everyone else becomes a member (5 accounts at most).', 'oidc_owner_email', { w: '260px', placeholder: 'you@example.com' }),
+        B('SSO allowed groups', 'Optional, comma-separated. Only people in one of these provider groups can sign in. Empty = everyone the provider admits.', 'oidc_allowed_groups', { w: '260px' }),
+        B('SSO public URL', 'Optional: https://jobs.example.com, for the redirect URI when the dashboard sits behind a proxy.', 'oidc_public_url', { mono: true, w: '260px' }),
+        B('SSO button name', 'Optional label, e.g. Authentik.', 'oidc_provider_name', { w: '200px' }),
         BT('DB backup', 'DB snapshot now, outside the cron.', 'Run backup', () => api.post('/db/backup'), { ownerOnly: true }),
       ]],
     ]
