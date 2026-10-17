@@ -15,6 +15,7 @@ from backend.config import INITIAL_API_KEY, TELEGRAM_BOT_TOKEN
 from backend.job_monitor import launch_background, JobAlreadyRunningError, get_all_running, is_running, _get_running_by_job_type, cleanup_stale_runs, sanitize_run_error
 
 from backend.api.routes_settings import router as settings_router
+from backend.api.routes_oidc import router as oidc_router
 from backend.api.routes_jobs import router as jobs_router
 from backend.api.routes_applications import router as applications_router
 from backend.api.routes_companies import router as companies_router
@@ -178,7 +179,7 @@ from backend.accounts.context import owner_context, owner_unlocked, use_account,
 from backend.accounts import auth as acct_auth
 
 # Paths that NEVER require auth (exact or prefix match)
-_PUBLIC_PREFIXES = ("/health", "/docs", "/openapi.json", "/redoc", "/cv", "/api/telegram/webhook", "/api/auth/set-session", "/api/auth/verify", "/api/auth/logout",
+_PUBLIC_PREFIXES = ("/health", "/docs", "/openapi.json", "/redoc", "/cv", "/api/telegram/webhook", "/api/auth/set-session", "/api/auth/verify", "/api/auth/logout", "/api/auth/oidc",
                     "/api/gmail/callback")  # Google redirects the browser there (MT-19; signed state)
 # Need the install password but no account (the picker reads and calls these).
 _ACCOUNT_OPTIONAL = ("/api/auth/accounts", "/api/auth/switch", "/api/auth/verify-pin")
@@ -260,8 +261,13 @@ async def _api_key_auth(request: Request, call_next):
     if changed is not None:
         return changed
     unlocked = bool(res.unlocked_until) and res.unlocked_until > acct_auth._now()
-    with use_account(res.account["id"]), owner_unlocked(unlocked):
-        resp = await call_next(request)
+    request.state.oidc_session = bool(res.oidc)
+    oidc_token = acct_auth.oidc_session.set(bool(res.oidc))
+    try:
+        with use_account(res.account["id"]), owner_unlocked(unlocked):
+            resp = await call_next(request)
+    finally:
+        acct_auth.oidc_session.reset(oidc_token)
     resp.headers[acct_auth.ACCOUNT_HEADER] = acc_id
     return resp
 
@@ -288,6 +294,18 @@ def _account_changed_response(request: Request, path: str, account: dict, acc_id
         headers={acct_auth.ACCOUNT_HEADER: acc_id})
 
 
+def _oidc_token_ok(db, token: str) -> bool:
+    """MT-20: OIDC members never learn the install password, so with OIDC on the extension
+    and scripts authenticate with their signed X-Account-Token alone (issued only to the
+    signed-in account itself, POST /api/accounts/{id}/api-token)."""
+    from backend.accounts import oidc as _oidc
+    try:
+        return (_oidc.enabled(db)
+                and acct_auth.account_from_token(db, acct_auth.cached_accounts(db), token) is not None)
+    except Exception:
+        return False
+
+
 def _authenticate_sync(path: str, api_key: str, token: str, cookie: str):
     """(early response or None, account resolution or None). Runs in the threadpool."""
     # A middleware runs outside FastAPI's exception handlers, so a pool timeout
@@ -310,9 +328,11 @@ def _authenticate_sync(path: str, api_key: str, token: str, cookie: str):
             )
         else:
             # Key configured → require match (timing-safe compare)
-            if not api_key:
+            if token and not (api_key and _secret_eq(api_key, expected)) and _oidc_token_ok(db, token):
+                pass   # MT-20: with OIDC on, a valid account token stands in for the install key
+            elif not api_key:
                 return JSONResponse(status_code=401, content={"detail": "API key required"}), None
-            if not _secret_eq(api_key, expected):
+            elif not _secret_eq(api_key, expected):
                 return JSONResponse(status_code=401, content={"detail": "Invalid API key"}), None
 
         # Tests that drive the app on their own throwaway engine run unscoped (system
@@ -487,11 +507,15 @@ def _revoke_cookie_unlock(request: Request) -> None:
 
 
 @app.get("/api/auth/accounts", tags=["auth"], summary="Accounts for the picker")
-def auth_accounts():
-    """Every account as {id, name, color, role, has_pin}, owner first; nothing else. Needs the install password but no account."""
+def auth_accounts(request: Request):
+    """Every account as {id, name, color, role, has_pin}, owner first; nothing else. Needs the install password but no account. A browser signed in through OIDC sees only its own account."""
     db = SessionLocal()
     try:
-        return [acct_auth.public_account(a) for a in acct_auth.load_accounts(db)]
+        accounts = acct_auth.load_accounts(db)
+        if getattr(request.state, "oidc_session", False):
+            from backend.accounts.context import current_account
+            accounts = [a for a in accounts if a["id"] == current_account.get()]
+        return [acct_auth.public_account(a) for a in accounts]
     finally:
         db.close()
 
@@ -499,6 +523,8 @@ def auth_accounts():
 @app.post("/api/auth/switch", tags=["auth"], summary="Switch this browser to an account")
 def auth_switch(body: dict, request: Request, response: _Response):
     """Body {account_id, pin?}. Sets the signed httpOnly `jn_account` cookie for this browser only (ending any owner unlock of the previous one). The owner's PIN is required once it has one; a member's PIN is optional, and the owner's PIN also opens a PIN'd member. Errors: 404 unknown account, 401 `pin_required` / `wrong_pin` (+ `tries_left`), 429 `pin_cooldown` (+ Retry-After) after 5 wrong tries for that account from this client (30 s, doubling for repeated cooldowns up to 15 min), or while the account's global ceiling is cooling."""
+    if getattr(request.state, "oidc_session", False):
+        raise HTTPException(status_code=403, detail="oidc_session")   # MT-20: one person, one account
     body = body or {}
     pin = body.get("pin")
     if pin is not None and not isinstance(pin, str):
@@ -525,6 +551,8 @@ def auth_switch(body: dict, request: Request, response: _Response):
 @app.post("/api/auth/verify-pin", tags=["auth"], summary="Check an account PIN and issue its API token")
 def auth_verify_pin(body: dict, request: Request):
     """Body {account_id, pin?}. Same PIN rules, cooldown counters and owner-covers-member as /api/auth/switch (an account without a PIN needs none), but sets no cookie and changes nothing. Returns {ok, via, account, token}: `token` is the account's signed API token, sent back as the `X-Account-Token` header (the extension stores it; valid 1 year, dies with a PIN change or the account). Errors: 404 unknown account, 401 `pin_required` / `wrong_pin` (+ `tries_left`), 429 `pin_cooldown`. Needs the install key; no account needed."""
+    if getattr(request.state, "oidc_session", False):
+        raise HTTPException(status_code=403, detail="oidc_session")   # MT-20: one person, one account
     body = body or {}
     pin = body.get("pin")
     if pin is not None and not isinstance(pin, str):
@@ -569,6 +597,8 @@ def auth_me(request: Request):
 def auth_verify_owner_pin(body: dict, request: Request, response: _Response):
     """Body {pin}. On the owner's PIN (or when the owner has none yet) re-issues this browser's `jn_account` cookie for the current account with `u` = now + 15 min, exposed to routes as `request.state.owner_unlocked_until`. Returns {ok, unlocked_until}. Same 401/429 contract and owner cooldown as /api/auth/switch."""
     from backend.accounts.context import current_account
+    if getattr(request.state, "oidc_session", False):
+        raise HTTPException(status_code=403, detail="oidc_session")   # MT-20: one person, one account
     pin = (body or {}).get("pin")
     if pin is not None and not isinstance(pin, str):
         pin = str(pin)
@@ -624,6 +654,7 @@ app.include_router(autofill_router, prefix="/api")
 app.include_router(llm_router, prefix="/api")
 app.include_router(curator_router, prefix="/api")
 app.include_router(accounts_router, prefix="/api")
+app.include_router(oidc_router, prefix="/api")
 app.include_router(gmail_router, prefix="/api")
 
 

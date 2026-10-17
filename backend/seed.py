@@ -47,6 +47,15 @@ DEFAULT_SETTINGS = {
     "jobright_session_obtained_at": ("", "UTC ISO timestamp of the last successful Jobright login. Read-only; set by the scraper."),
     # Billed per result by Apify; `_api_key` suffix keeps it redacted on GET /settings.
     "apify_api_key": ("", "Apify API token for the Apify search mode"),
+    # OIDC login (backend/accounts/oidc.py). A value here wins over the OIDC_* environment variable.
+    "oidc_discovery_url": ("", "OIDC discovery URL (https://idp/application/o/app/.well-known/openid-configuration); empty = OIDC login off"),
+    "oidc_client_id": ("", "OIDC client id"),
+    "oidc_client_secret": ("", "OIDC client secret"),
+    "oidc_scopes": ("", "OIDC scopes (default: openid email profile)"),
+    "oidc_owner_email": ("", "The OIDC email that signs in as the install owner"),
+    "oidc_allowed_groups": ("", "Comma-separated group names allowed to sign in (empty = everyone the provider lets in)"),
+    "oidc_public_url": ("", "Public base URL of this dashboard, for the OIDC redirect URI (empty = taken from the request)"),
+    "oidc_provider_name": ("", "Name shown on the sign-in button (default: the provider)"),
     "reject_cron": ("0 4 * * *", "Auto-reject cron (min hour day month dow). Empty = disabled"),
     # ── Daily curator (backend/curator) ──
     "searxng_url": ("http://searxng:8080", "SearXNG base URL the curator searches with (the compose service by default)"),
@@ -696,6 +705,10 @@ def run_migrations(db):
     """Run ALTER TABLE migrations for columns that create_all() won't add to existing tables."""
     migrations = [
         "ALTER TABLE companies ADD COLUMN IF NOT EXISTS h1b_slug VARCHAR",
+        "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS oidc_issuer VARCHAR",
+        "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS oidc_sub VARCHAR",
+        "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS oidc_email VARCHAR",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_accounts_oidc_identity ON accounts (oidc_issuer, oidc_sub)",
         "ALTER TABLE searches ADD COLUMN IF NOT EXISTS company_exclude JSONB DEFAULT '[]'",
         "ALTER TABLE searches ADD COLUMN IF NOT EXISTS max_pages INTEGER DEFAULT 50",
         "ALTER TABLE companies ALTER COLUMN tier DROP NOT NULL",

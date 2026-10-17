@@ -113,6 +113,10 @@ _SECTIONS = [
         "curator_fallback_llm_provider", "curator_fallback_llm_model", "curator_fallback_llm_api_key",
         "curator_fallback_llm_effort"]),
     ("advanced", "Advanced", OWNER_ONLY, INHERIT, ["advanced"], ["proxy_url", "dashboard_api_key"]),
+    # OIDC single sign-on (MT-20): the provider the install trusts; env OIDC_* are the defaults.
+    ("oidc", "Single sign-on (OIDC)", OWNER_ONLY, INHERIT, ["advanced"], [
+        "oidc_discovery_url", "oidc_client_id", "oidc_client_secret", "oidc_scopes", "oidc_owner_email",
+        "oidc_allowed_groups", "oidc_public_url", "oidc_provider_name"]),
     # Not a section of the Settings screen. MT-19: the token is connected from a row in Email
     # classification (GET /api/gmail/connect); gmail_token_status = the "expired" marker after
     # an invalid_grant (never served).

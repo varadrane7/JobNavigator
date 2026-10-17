@@ -133,6 +133,12 @@ class Account(Base):
     pin_hash = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
     last_active_at = Column(DateTime(timezone=True), nullable=True)
+    # OIDC login: the identity provider's issuer + subject this account is linked to, and the
+    # email it presented at link time (display only). NULL = a PIN-only account.
+    oidc_issuer = Column(String, nullable=True)
+    oidc_sub = Column(String, nullable=True)
+    oidc_email = Column(String, nullable=True)
+    __table_args__ = (Index("uq_accounts_oidc_identity", "oidc_issuer", "oidc_sub", unique=True),)
 
 
 class AccountScoped:

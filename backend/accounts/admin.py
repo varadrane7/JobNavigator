@@ -74,6 +74,45 @@ def empty_counts() -> dict:
 
 # ── Create ───────────────────────────────────────────────────────────────────
 
+# Sections whose credentials a self-registered (OIDC) member keeps for itself: it starts
+# on 'own' so it never silently spends the owner's LLM keys, Apify credit or LinkedIn login.
+OWN_BY_DEFAULT_SECTIONS = ("models", "linkedin", "jobright", "apify")
+
+
+class AccountLimitReached(Exception):
+    """The install already holds MAX_ACCOUNTS accounts."""
+
+
+def create_member(db, name: str, oidc_issuer=None, oidc_sub=None, oidc_email=None):
+    """Create a member account (the shared path of POST /accounts and the first OIDC
+    login): cap check, unique name, next free colour, seeded Persona and searches, and
+    'own' policies for the credential sections. Commits. Raises AccountLimitReached."""
+    import uuid
+    from backend.models.db import ACCOUNT_COLORS, Account, SectionPolicy
+    accounts = db.query(Account).all()
+    if len(accounts) >= MAX_ACCOUNTS:
+        raise AccountLimitReached()
+    taken = {(a.name or "").strip().lower() for a in accounts}
+    base = " ".join((name or "").split())[:40] or "Member"
+    final, n = base, 2
+    while final.lower() in taken:
+        suffix = f" {n}"
+        final, n = base[:40 - len(suffix)] + suffix, n + 1
+    used = {(a.color or "").lower() for a in accounts}
+    color = next((c for c in ACCOUNT_COLORS if c.lower() not in used), ACCOUNT_COLORS[0])
+    acc = Account(id=uuid.uuid4(), name=final, color=color, role="member",
+                  oidc_issuer=oidc_issuer, oidc_sub=oidc_sub, oidc_email=oidc_email)
+    db.add(acc)
+    db.flush()
+    for section in OWN_BY_DEFAULT_SECTIONS:
+        db.add(SectionPolicy(account_id=acc.id, section=section, mode=acct_settings.OWN))
+    seed_new_account(db, acc.id)
+    db.commit()
+    from backend.accounts import auth as acct_auth
+    acct_auth.invalidate_accounts_cache()
+    return acc
+
+
 def _columns(model, skip=()):
     skip = set(skip) | {"id", "account_id"}
     return [c.key for c in model.__mapper__.column_attrs if c.key not in skip]

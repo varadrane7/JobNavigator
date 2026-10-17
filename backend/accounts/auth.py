@@ -77,6 +77,7 @@ Wrong PINs (QA F3 / R2-02, R2-04, R2-05; in-memory, per process, 429 with Retry-
   owner PIN does not cover members for that client.
 """
 import base64
+import contextvars
 import hashlib
 import hmac
 import json
@@ -315,8 +316,15 @@ def read_cookie(secret: bytes, value: Optional[str]) -> Optional[dict]:
     return payload
 
 
+# MT-20: True while a request carries a `jn_account` cookie issued by an OIDC login (set by
+# the HTTP middleware). Such a browser belongs to one verified person: it can never switch
+# to, mint a token for, or unlock another account, and every cookie it re-issues (PIN
+# change, owner lock) keeps the flag.
+oidc_session: "contextvars.ContextVar[bool]" = contextvars.ContextVar("jn_oidc_session", default=False)
+
+
 def make_cookie_value(db, account: dict, unlocked_until: float = 0,
-                      unlock_id: Optional[str] = None) -> str:
+                      unlock_id: Optional[str] = None, oidc: Optional[bool] = None) -> str:
     """An owner unlock ("u") is only written together with its live allowlist id ("n",
     from `grant_unlock`); without one the cookie is locked (QA F3 / R2-06)."""
     until = int(unlocked_until or 0) if unlock_id else 0
@@ -324,16 +332,18 @@ def make_cookie_value(db, account: dict, unlocked_until: float = 0,
                "e": int(_now() + COOKIE_MAX_AGE), "u": until}
     if until:
         payload["n"] = unlock_id
+    if oidc_session.get() if oidc is None else oidc:
+        payload["o"] = 1
     return sign_cookie(cookie_secret(db), payload)
 
 
 def set_account_cookie(response, db, account: dict, unlocked_until: float = 0,
-                       unlock_id: Optional[str] = None) -> None:
+                       unlock_id: Optional[str] = None, oidc: Optional[bool] = None) -> None:
     """Issue `jn_account` for `account` (also for MT-11 when a PIN change re-signs the
     caller's own cookie). Same flags and lifetime as jn_session."""
     response.set_cookie(
         key=COOKIE_NAME,
-        value=make_cookie_value(db, account, unlocked_until, unlock_id),
+        value=make_cookie_value(db, account, unlocked_until, unlock_id, oidc),
         httponly=True,
         samesite="strict",
         max_age=COOKIE_MAX_AGE,
@@ -444,10 +454,11 @@ def account_from_token(db, accounts: list, value: Optional[str]) -> Optional[dic
 # ── Request resolution ───────────────────────────────────────────────────────
 
 class Resolution:
-    __slots__ = ("account", "error", "unlocked_until", "via", "unlock_id", "clear_cookie")
+    __slots__ = ("account", "error", "unlocked_until", "via", "unlock_id", "clear_cookie", "oidc")
 
     def __init__(self, account=None, error=None, unlocked_until=0, via=None, unlock_id=None,
-                 clear_cookie=False):
+                 clear_cookie=False, oidc=False):
+        self.oidc = oidc                    # the cookie came from an OIDC login (MT-20)
         self.account = account
         self.error = error
         self.unlocked_until = unlocked_until
@@ -479,7 +490,8 @@ def resolve_request(db, token: Optional[str], cookie: Optional[str]) -> Resoluti
         unlock_id = payload.get("n") if until else None
         if until and not unlock_live(unlock_id):
             until, unlock_id = 0, None       # revoked, restarted or pre-F3: locked
-        return Resolution(account=acc, unlocked_until=until, via="cookie", unlock_id=unlock_id)
+        return Resolution(account=acc, unlocked_until=until, via="cookie", unlock_id=unlock_id,
+                          oidc=bool(payload.get("o")))
     if not accounts:
         return Resolution(via=None)    # before the MT-1 migration: run as before (owner fallback)
     if cookie:
