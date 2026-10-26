@@ -153,6 +153,7 @@ docs/*
 !docs/slate.png
 !docs/board.png
 !docs/GETTING-STARTED.md
+!docs/APPLY_LOOP.md
 docker-compose.test.yml
 .agents
 agent
