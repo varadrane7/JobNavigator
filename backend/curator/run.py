@@ -508,8 +508,8 @@ def summary_message(top: list[dict], contacts: list[dict], network: list[dict]) 
 
 
 async def notify(top: list[dict], contacts: list[dict], network: list[dict] | None = None) -> None:
-    from backend.notifier.telegram import _get_chat_id, _is_enabled, _send_message
-    if not _is_enabled():
+    from backend.notifier.telegram import _get_chat_id, _send_message, feature_on
+    if not feature_on("telegram_curator_summary"):
         return
     chat = _get_chat_id()
     if not chat:

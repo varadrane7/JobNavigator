@@ -74,6 +74,24 @@ def _is_enabled() -> bool:
         db.close()
 
 
+# One switch per kind of message (Settings › Notifications), under the master `telegram_enabled`.
+# Unset reads as on, so an install keeps what it had until the user turns one off.
+FEATURES = ("telegram_job_alerts", "telegram_digest", "telegram_reply_alerts", "telegram_curator_summary",
+            "telegram_nag", "telegram_scrape_health")
+
+
+def feature_on(key: str) -> bool:
+    """The master switch and this message kind's own switch are both on."""
+    if not _is_enabled():
+        return False
+    db = SessionLocal()
+    try:
+        value = get_setting(db, key)
+        return value is None or str(value).strip().lower() != "false"
+    finally:
+        db.close()
+
+
 def _own_bot_token():
     """The current account's own bot token, or None = the household bot. Only a member
     with `telegram_bot_mode` = own and a token has one; the owner always uses the
@@ -111,7 +129,7 @@ async def send_system_alert(text: str) -> bool:
     whoever is running. Install values = the owner's switch and chat."""
     from backend.accounts.context import unscoped
     with unscoped():
-        if not _is_enabled():
+        if not feature_on("telegram_scrape_health"):
             return False
         chat_id = _get_chat_id()
     if not chat_id:
@@ -224,7 +242,7 @@ def _format_h1b(verdict, lca_count=None, approval_rate=None):
 
 async def send_job_alert(data: dict):
     """Send new job alert with inline buttons."""
-    if not _is_enabled():
+    if not feature_on("telegram_job_alerts"):
         return
 
     chat_id, token = resolve_target()
@@ -281,7 +299,7 @@ async def send_job_alert(data: dict):
 
 async def send_email_alert(data: dict):
     """Send email response alert."""
-    if not _is_enabled():
+    if not feature_on("telegram_reply_alerts"):
         return
 
     chat_id, token = resolve_target()
@@ -313,7 +331,7 @@ async def send_email_alert(data: dict):
 async def send_digest():
     """Send daily digest. Returns True when a message went out, False when it was skipped
     (Telegram off, or this account has no chat id) - QA F9 / T3-02."""
-    if not _is_enabled():
+    if not feature_on("telegram_digest"):
         return False
 
     chat_id, token = resolve_target()

@@ -1391,6 +1391,7 @@ SCHEDULE_NAMES = {
     "telemetry_daily": "Send telemetry (what Settings › Telemetry allows)",
     "curate": "Curate today's Top jobs + contacts",
     "network_scout": "Scout people to network with (persona, not jobs)",
+    "nag": "Telegram nag: today's applications and requests vs targets",
 }
 
 

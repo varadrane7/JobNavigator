@@ -6,7 +6,7 @@ import { useToasts, ToastStack } from '../Toast'
 // shared dialog also serves résumé and cover-letter deletes, so it lives in its own file.
 import ConfirmDialog from '../ConfirmDialog'
 import CopyFrom from '../CopyFrom'
-import { useSettled, useWarm, NBSP, DASH } from '../hooks'
+import { useSettled, useWarm, NBSP, DASH, fetchRunOutcome, runFailed, runFailureReason } from '../hooks'
 import { Button, DashedAdd, Dot, Drawer as UiDrawer, FlaskGlyph, FooterRow, HeaderRow, Heading, Helper, IconButton, Input, Label, Link, Menu, MenuItem, ModalPanel, Mono, Notice, PageTitle, Pill, Row, Rule, SearchInput, Segmented, ShowMore, Spinner, TableHead, TableRow, Tag } from '../ui'
 import '../theme.css'
 
@@ -407,9 +407,17 @@ export default function Companies() {
     setYcBusy(true)
     try {
       const { data } = await api.post('/companies/import-yc', null, { params: { limit: 30 } })
+      pushToast({ kind: 'progress', msg: 'Looking for YC startups with a public job board — about a minute' })
+      let run = null
+      for (let i = 0; i < 90; i++) {
+        await new Promise((r) => setTimeout(r, 4000))
+        run = await fetchRunOutcome(data.run_id, 'yc_import')
+        if (run && run.status && run.status !== 'running') break
+      }
       await fetchCompanies()
       window.dispatchEvent(new CustomEvent('jn:counts-changed'))
-      pushToast({ kind: 'success', msg: `${data.added.length} YC startups added, paused for review (${data.no_board} had no public board)` })
+      if (run && runFailed(run)) pushToast({ kind: 'error', msg: `YC import failed — ${runFailureReason(run)}` })
+      else pushToast({ kind: 'success', msg: run?.result_summary || 'YC import finished' })
     } catch (e) {
       pushToast({ kind: 'error', msg: 'YC import failed' + (typeof e?.response?.data?.detail === 'string' ? ' — ' + e.response.data.detail : '') })
     } finally { setYcBusy(false) }

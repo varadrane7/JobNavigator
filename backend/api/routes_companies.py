@@ -391,10 +391,21 @@ def delete_company(company_id: str, db: Session = Depends(get_db)):
     return {"deleted": True}
 
 
-@router.post("/import-yc", summary="Add hiring YC startups with a public job board (inactive until reviewed)")
+@router.post("/import-yc", status_code=202, summary="Add hiring YC startups with a public job board (paused until reviewed)")
 async def import_yc_companies(limit: int = 30, activate: bool = False):
+    """Runs in the background (it asks three ATS APIs about each candidate); poll the run."""
+    from fastapi.responses import JSONResponse
+    from backend.job_monitor import JobAlreadyRunningError, launch_background
     from backend.scraper.yc_import import import_yc
-    return await import_yc(limit=max(1, min(limit, 100)), activate=activate)
+
+    async def _do():
+        out = await import_yc(limit=max(1, min(limit, 100)), activate=activate)
+        return (f"{len(out['added'])} YC startups added (paused) of {out['qualified']} qualifying; "
+                f"{out['no_board']} without a public board")
+    try:
+        return {"run_id": launch_background("yc_import", _do, trigger="manual"), "status": "running"}
+    except JobAlreadyRunningError as e:
+        return JSONResponse(status_code=409, content={"detail": f"{e.job_type} is already running"})
 
 
 @router.post("/auto-create-from-jobs")

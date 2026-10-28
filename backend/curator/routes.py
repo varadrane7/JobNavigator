@@ -158,6 +158,13 @@ async def scout_run():
         return JSONResponse(status_code=409, content={"detail": f"{e.job_type} is already running"})
 
 
+@router.post("/nag/send", summary="Send the Telegram nag now (what the nag cron sends)")
+async def nag_now():
+    from backend.curator.nag import send_nag
+    text = await send_nag()
+    return {"sent": text is not None, "text": text}
+
+
 @router.get("/linkedin/usage", summary="Today's LinkedIn requests and cooldowns per session")
 def linkedin_usage():
     from backend.curator import li_budget

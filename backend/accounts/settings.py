@@ -109,9 +109,11 @@ _SECTIONS = [
     # uses the household bot); telegram_own_webhook_secret signs that bot's webhook (never served).
     ("notifications", "Notifications", OWN_ALWAYS, OWN, ["notifications"], [
         "telegram_enabled", "telegram_chat_id", "fit_score_threshold",
+        "telegram_job_alerts", "telegram_digest", "telegram_reply_alerts", "telegram_curator_summary", "telegram_nag",
         "telegram_bot_mode", "telegram_bot_token", "telegram_own_webhook_secret"]),
     # The household bot's webhook secret: one per bot, the bot is the install's (owner's).
-    ("telegram_bot", "Telegram bot", OWNER_ONLY, INHERIT, ["notifications"], ["telegram_webhook_secret"]),
+    ("telegram_bot", "Telegram bot", OWNER_ONLY, INHERIT, ["notifications"], ["telegram_webhook_secret",
+                                                                        "telegram_scrape_health"]),
     ("tracer", "Tracked links", OWNER_ONLY, INHERIT, ["tracer"], [
         "tracer_links_enabled", "tracer_links_base_url", "tracer_links_url_style"]),
     ("jobright", "Jobright.ai", POLICY, OWN, ["jobright"], [
@@ -131,13 +133,13 @@ _SECTIONS = [
         "curate_max_years", "curate_drop_unlikely_sponsors",
         "outreach_count", "outreach_network_count",
         "linkedin_mock_daily_cap", "linkedin_main_daily_cap", "linkedin_cooldown_hours",
-        "scout_daily_leads", "github_token"]),
+        "scout_daily_leads", "github_token", "nag_apply_target", "nag_request_target", "nag_calendar"]),
     ("curator_llm", "Curator model", POLICY, INHERIT, ["curator"], [
         "curator_llm_provider", "curator_llm_model", "curator_llm_api_key", "curator_llm_effort",
         "curator_fallback_llm_provider", "curator_fallback_llm_model", "curator_fallback_llm_api_key",
         "curator_fallback_llm_effort"]),
     ("curator_infra", "Curator infrastructure", OWNER_ONLY, INHERIT, ["curator"], [
-        "curate_cron", "network_scout_cron", "curate_concurrency", "curate_embed_model", "llm_local_base_url", "llm_local_api_key", "searxng_url",
+        "curate_cron", "network_scout_cron", "nag_cron", "curate_concurrency", "curate_embed_model", "llm_local_base_url", "llm_local_api_key", "searxng_url",
         "linkedin_lookup_max_per_scrape"]),
     ("advanced", "Advanced", OWNER_ONLY, INHERIT, ["advanced"], ["proxy_url", "dashboard_api_key"]),
     # OIDC single sign-on (MT-20): the provider the install trusts; env OIDC_* are the defaults.
