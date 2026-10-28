@@ -12,6 +12,9 @@ Pipeline (each step narrows the pool before the next, more expensive one):
   rank        fit / freshness / visa-or-pay / reply odds / stability / tracked (scoring.py),
               one copy of a posting seen on two boards
   write       Top-N -> saved + curated_rank; the rest of the pool -> ignored
+  release     a Top pick left unapplied for curate_release_hours goes back to the pool (it may be
+              picked again until it is 30 days old or released 3 times), and people never contacted
+              come back to the Today list in place of some of the day's new finds
   outreach    people for the top companies, then decision makers at good companies with
               no open role for the user (people.py); a one-line Telegram summary
 """
@@ -33,6 +36,8 @@ logger = logging.getLogger("jobnavigator.curator")
 
 PER_COMPANY_CAP = 2
 TRACKED_WINDOW_HOURS = 7 * 24
+RELEASE_MAX_AGE_DAYS = 30     # a released job older than this is never picked again
+RELEASE_MAX_TIMES = 3         # a job or person passed over this many times is put away
 
 
 def _settings() -> dict:
@@ -40,7 +45,7 @@ def _settings() -> dict:
     from backend.accounts.settings import get_setting
     keys = ("curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore", "curate_title_exclude",
             "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max", "outreach_count",
-            "outreach_network_count", "curate_max_years", "curate_drop_unlikely_sponsors")
+            "outreach_network_count", "curate_max_years", "curate_drop_unlikely_sponsors", "curate_release_hours")
     db = SessionLocal()
     try:
         rows = {k: get_setting(db, k) for k in keys}
@@ -73,7 +78,63 @@ def _settings() -> dict:
         "network": i("outreach_network_count", 10),
         "max_years": i("curate_max_years", 5),
         "drop_unlikely": (rows.get("curate_drop_unlikely_sponsors") or "true").lower() == "true",
+        "release_hours": i("curate_release_hours", 72),
     }
+
+
+def _release_cutoff(today, hours: int):
+    """Picks made on or before this date have waited at least `hours` (picks are dated, runs are daily)."""
+    return today - timedelta(days=max(1, -(-hours // 24)))
+
+
+def release_stale_jobs(db, today, hours: int) -> dict:
+    """Top picks still unapplied after `hours` go back to status new, so a later run can pick them again.
+    A job released RELEASE_MAX_TIMES times is ignored instead. Returns {released, retired}."""
+    out = {"released": 0, "retired": 0}
+    if hours <= 0:
+        return out
+    applied = db.query(Application.job_id).filter(Application.job_id.isnot(None))
+    rows = (db.query(Job).filter(Job.status == "saved", Job.curated_on.isnot(None),
+                                 Job.curated_on <= _release_cutoff(today, hours), ~Job.id.in_(applied)).all())
+    for row in rows:
+        times = int((row.curation or {}).get("released") or 0) + 1
+        row.curated_on = row.curated_rank = None
+        row.saved = False
+        if times >= RELEASE_MAX_TIMES:
+            row.status = "ignored"
+            row.curation = {"out": True, "on": today.isoformat(), "released": times,
+                            "why": f"picked {times} times, never applied"}
+            out["retired"] += 1
+        else:
+            row.status = "new"
+            row.curation = {"released": times, "released_on": today.isoformat()}
+            out["released"] += 1
+    db.commit()
+    return out
+
+
+def resurface_contacts(db, today, hours: int, want: int, top_companies: list[str]) -> list[dict]:
+    """Up to `want` people from the curator's own lists (job and network contacts) never contacted after
+    `hours`, moved onto today's list: people at today's Top companies first, then the most recent.
+    Someone passed over RELEASE_MAX_TIMES times is skipped instead."""
+    if hours <= 0:
+        return []
+    stale = (db.query(Contact).filter(Contact.status == "new", Contact.lead_kind.in_(("job", "network")),
+                                      Contact.found_on <= _release_cutoff(today, hours))
+             .order_by(Contact.found_on.desc(), Contact.created_at.desc()).all())
+    for c in stale:
+        if (c.resurfaced or 0) >= RELEASE_MAX_TIMES:
+            c.status = "skip"
+    stale = [c for c in stale if c.status == "new"]
+    hot = {name_key(n) for n in top_companies}
+    stale.sort(key=lambda c: name_key(c.company or "") not in hot)   # stable: recency within each group
+    out = []
+    for c in stale[:max(0, want)]:
+        c.found_on = today
+        c.resurfaced = (c.resurfaced or 0) + 1
+        out.append({"company": c.company, "name": c.name, "purpose": c.purpose})
+    db.commit()
+    return out
 
 
 def _job_dict(j: Job) -> dict:
@@ -112,8 +173,9 @@ def load_pool(window_hours: int) -> tuple[list[dict], list]:
                        .filter(Application.applied_at >= now - timedelta(days=30)).all()}
         tracked = tracked_keys(db)
         # a closed posting, or a copy of one already listed (dedup_copy_* = new), is never picked
+        oldest = min(since_tracked, now - timedelta(days=RELEASE_MAX_AGE_DAYS))
         q = (db.query(Job).filter(Job.status == "new")
-             .filter(func.coalesce(Job.posted_at, Job.discovered_at) >= since_tracked)
+             .filter(func.coalesce(Job.posted_at, Job.discovered_at) >= oldest)
              .filter(or_(Job.open_state.is_(None), Job.open_state != "closed"))
              .filter(Job.duplicate_of.is_(None)))
         jobs = []
@@ -122,9 +184,11 @@ def load_pool(window_hours: int) -> tuple[list[dict], list]:
             if seen is not None and seen.tzinfo is None:
                 seen = seen.replace(tzinfo=timezone.utc)
             is_tracked = name_key(j.company) in tracked
-            if is_tracked or (seen is not None and seen >= since):
+            released = bool((j.curation or {}).get("released"))
+            if released or (seen is not None and seen >= (since_tracked if is_tracked else since)):
                 jobs.append((j, is_tracked))
-        all_ids = [j.id for j, _ in jobs]
+        # a released job that loses today stays new for another try (never auto-ignored)
+        all_ids = [j.id for j, _ in jobs if not (j.curation or {}).get("released")]
         pool = []
         for j, is_tracked in jobs:
             if (j.loc_country in (None, "", "US")) and name_key(j.company) not in recent_apps:
@@ -270,7 +334,8 @@ def write_results(top: list[dict], pool_ids: list, auto_ignore: bool, dropped: d
             row.status, row.saved = "saved", True
             row.curated_on, row.curated_rank = today, i
             row.curation = {"score": j["score"], "parts": j["parts"], "reason": j["reason"],
-                            "apply_window": scoring.apply_window(i, j["parts"]["fresh"]), "intel": j["intel"]}
+                            "apply_window": scoring.apply_window(i, j["parts"]["fresh"]), "intel": j["intel"],
+                            "released": (row.curation or {}).get("released") or 0}
         ignored = 0
         if auto_ignore:
             rest = [i for i in pool_ids if i not in top_ids]
@@ -281,6 +346,14 @@ def write_results(top: list[dict], pool_ids: list, auto_ignore: bool, dropped: d
                     ignored += 1
         db.commit()
         return ignored
+    finally:
+        db.close()
+
+
+def _with_db(fn, *args):
+    db = SessionLocal()
+    try:
+        return fn(db, *args)
     finally:
         db.close()
 
@@ -531,6 +604,9 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     reset_run()
     cfg = _settings()
     now = datetime.now(timezone.utc)
+    released = {"released": 0, "retired": 0}
+    if not dry_run:
+        released = await asyncio.to_thread(_with_db, release_stale_jobs, local_today(), cfg["release_hours"])
     pool, pool_ids = await asyncio.to_thread(load_pool, cfg["window_hours"])
     dropped, keep = {}, []
     for j in pool:
@@ -571,16 +647,20 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
                 "drop_reasons": _count(dropped.values())}
     ignored = await asyncio.to_thread(write_results, top, pool_ids, cfg["auto_ignore"], dropped)
 
-    contacts, network = [], []
+    contacts, network, again = [], [], []
     _OUTREACH_ERRORS.clear()
-    if outreach and cfg["outreach"] > 0 and top:
+    if outreach and cfg["outreach"] > 0:
+        # people never contacted come back first, taking up to half the day's slots
+        again = await asyncio.to_thread(_with_db, resurface_contacts, local_today(), cfg["release_hours"],
+                                        -(-cfg["outreach"] // 2), [j["company"] for j in top])
+    if outreach and cfg["outreach"] - len(again) > 0 and top:
         try:
-            contacts = await find_contacts(top, intel, cfg["outreach"])
+            contacts = await find_contacts(top, intel, cfg["outreach"] - len(again))
         except Exception as e:
             logger.exception(f"curator outreach failed: {e}")
             _OUTREACH_ERRORS.append(f"outreach: {e}")
     # Job slots nobody filled go to people at companies with no posting for the user today.
-    network_want = cfg["network"] + max(0, cfg["outreach"] - len(contacts)) if cfg["network"] > 0 else 0
+    network_want = cfg["network"] + max(0, cfg["outreach"] - len(again) - len(contacts)) if cfg["network"] > 0 else 0
     if outreach and network_want > 0:
         try:
             network = await find_network_contacts(network_companies(ranked, top, cfg, network_want * 3), network_want)
@@ -594,7 +674,8 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
             logger.warning(f"curator Telegram summary failed: {e}")
     summary = {"pool": len(pool_ids), "candidates": len(pool), "dropped": len(dropped),
                "llm_pool": len(shortlist), "saved": len(top), "ignored": ignored, "contacts": len(contacts),
-               "network": len(network)}
+               "network": len(network), "released": released["released"], "retired": released["retired"],
+               "resurfaced": len(again)}
     if _OUTREACH_ERRORS:
         summary["outreach_errors"] = list(_OUTREACH_ERRORS[:5])
     logger.info(f"curator done: {summary}")

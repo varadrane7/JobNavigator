@@ -164,3 +164,49 @@ async def test_tracked_company_gets_a_week_long_window(seeded):
     out = await run_daily_curation(dry_run=True)
     companies = {t["company"] for t in out["top"]}
     assert "Intuit" in companies and "Untracked" not in companies
+
+
+def test_unapplied_picks_go_back_to_the_queue(test_db):
+    from backend.curator.run import load_pool, release_stale_jobs
+    from backend.models.db import Application
+    from backend.tz import local_today
+    today, old = local_today(), datetime.now(timezone.utc) - timedelta(days=6)
+    stale = _job(1, status="saved", saved=True, curated_on=today - timedelta(days=3), curated_rank=1,
+                 discovered_at=old, posted_at=old)
+    fresh = _job(2, status="saved", saved=True, curated_on=today - timedelta(days=1), curated_rank=2)
+    applied = _job(3, status="saved", saved=True, curated_on=today - timedelta(days=5), curated_rank=3)
+    worn = _job(4, status="saved", saved=True, curated_on=today - timedelta(days=4), curated_rank=4,
+                curation={"released": 2})
+    test_db.add_all([stale, fresh, applied, worn])
+    test_db.flush()
+    test_db.add(Application(job_id=applied.id, status="applied"))
+    test_db.commit()
+
+    assert release_stale_jobs(test_db, today, 72) == {"released": 1, "retired": 1}
+    assert stale.status == "new" and stale.curated_on is None and stale.curation["released"] == 1
+    assert fresh.status == "saved" and applied.status == "saved" and worn.status == "ignored"
+    # six days old is outside the 36 h window, but a released pick is in the pool and never auto-ignored
+    pool, ids = load_pool(36)
+    assert [j["id"] for j in pool] == [stale.id] and ids == []
+    assert release_stale_jobs(test_db, today, 0) == {"released": 0, "retired": 0}
+
+
+def test_people_never_contacted_come_back_to_today(test_db):
+    from backend.curator.run import resurface_contacts
+    from backend.tz import local_today
+    today = local_today()
+    def c(name, company, days, **kw):
+        return Contact(name=name, company=company, linkedin_url=f"u-{name}", status=kw.pop("status", "new"),
+                       lead_kind=kw.pop("lead_kind", "job"), found_on=today - timedelta(days=days), **kw)
+    rows = [c("old", "Other", 9), c("hot", "Acme", 12), c("recent", "Other", 1), c("asked", "Other", 9, status="requested"),
+            c("scouted", "Other", 9, lead_kind="hiring_post"), c("worn", "Other", 5, resurfaced=3),
+            c("net", "Big", 4, lead_kind="network", purpose="network")]
+    test_db.add_all(rows)
+    test_db.commit()
+    back = resurface_contacts(test_db, today, 72, 2, ["Acme"])
+    assert [b["name"] for b in back] == ["hot", "net"]          # today's Top company first, then the newest
+    by = {r.name: r for r in rows}
+    assert by["hot"].found_on == today and by["hot"].resurfaced == 1
+    assert by["old"].found_on == today - timedelta(days=9)        # waits for another day
+    assert by["worn"].status == "skip" and by["recent"].found_on == today - timedelta(days=1)
+    assert by["asked"].found_on != today and by["scouted"].found_on != today

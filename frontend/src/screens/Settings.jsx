@@ -694,6 +694,7 @@ export default function Settings() {
         B('People per day', 'Founders, hiring managers and recruiters found for the top companies.', 'outreach_count', { mono: true, int: true, w: '135px' }),
         B('People to know per day', 'Engineering leaders at good companies with no posting for you today; job slots left unused add to this.', 'outreach_network_count', { mono: true, int: true, w: '135px' }),
         B('Max years asked', 'A posting that asks for this many years of experience or more is dropped.', 'curate_max_years', { mono: true, int: true, w: '135px' }),
+        B('Release after (hours)', 'A Top pick you have not applied to, or a person you have not contacted, goes back to the queue after this long and can be picked again. 0 = never.', 'curate_release_hours', { mono: true, int: true, w: '135px' }),
         SW('Drop unlikely sponsors', 'Jobs at companies whose H-1B record says they rarely sponsor are never picked.', 'Off — they are ranked like the rest.', 'curate_drop_unlikely_sponsors', { dflt: true }),
         B('Lead scout · people/day', 'New people the lead scout saves each morning (People screen), found from your persona, not today’s jobs.', 'scout_daily_leads', { mono: true, int: true, w: '135px' }),
         B('Lead scout · min score', 'Lowest score (0-100) a scouted person needs to be saved. Lower finds more people, and more noise.', 'scout_min_score', { mono: true, int: true, w: '135px' }),

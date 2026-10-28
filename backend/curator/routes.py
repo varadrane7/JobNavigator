@@ -21,6 +21,9 @@ def _summary_text(s: dict) -> str:
     return (f"{s['saved']} saved from {s['candidates']} candidates ({s['dropped']} dropped, "
             f"{s['llm_pool']} ranked), {s['ignored']} ignored, {s['contacts']} contacts, "
             f"{s.get('network', 0)} people to know"
+            + (f"; {s['released']} old picks back in the queue" if s.get("released") else "")
+            + (f", {s['retired']} put away" if s.get("retired") else "")
+            + (f"; {s['resurfaced']} people not yet contacted back on the list" if s.get("resurfaced") else "")
             + (f"; people search errors: {' | '.join(s['outreach_errors'])}"[:600] if s.get("outreach_errors") else ""))
 
 

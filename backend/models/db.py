@@ -343,6 +343,7 @@ class Contact(AccountScoped, Base):
     evidence = Column(Text, nullable=True)               # the post / snippet that surfaced them
     next_action_at = Column(Date, nullable=True, index=True)   # due date of the next step (follow-up)
     last_action_at = Column(DateTime(timezone=True), nullable=True)
+    resurfaced = Column(Integer, default=0)              # times the curator put this person back on Today uncontacted
     found_on = Column(Date, nullable=True, index=True)   # APP_TZ date
     created_at = Column(DateTime(timezone=True), default=utcnow)
 

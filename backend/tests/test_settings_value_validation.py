@@ -57,6 +57,7 @@ def test_int_keys_match_the_rows_settings_marks_int():
         "nag_apply_target",
         "nag_request_target",
         "curate_max_years",
+        "curate_release_hours",
         "curate_concurrency",
     }
 
