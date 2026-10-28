@@ -26,6 +26,7 @@ from backend.curator import scoring
 from backend.curator.embed import percentiles, similarity
 from backend.curator.intel import get_intel, name_key, own_reply_rates
 from backend.models.db import Application, Company, Contact, Job, Persona, SessionLocal, Setting, VisaCache
+from backend.scraper._shared.link_kinds import job_link
 from backend.tz import local_now, local_today
 
 logger = logging.getLogger("jobnavigator.curator")
@@ -75,7 +76,7 @@ def _settings() -> dict:
 
 def _job_dict(j: Job) -> dict:
     return {
-        "id": j.id, "company": j.company or "", "title": j.title or "", "url": j.url or "",
+        "id": j.id, "company": j.company or "", "title": j.title or "", "url": job_link(j) or "",
         "description": j.description or "", "posted_at": j.posted_at or j.discovered_at,
         "best_cv_score": j.best_cv_score, "best_cv": j.best_cv,
         "lca": j.h1b_company_lca_count, "approval": j.h1b_company_approval_rate,
@@ -108,8 +109,11 @@ def load_pool(window_hours: int) -> tuple[list[dict], list]:
         recent_apps = {name_key(c) for (c,) in db.query(Job.company).join(Application, Application.job_id == Job.id)
                        .filter(Application.applied_at >= now - timedelta(days=30)).all()}
         tracked = tracked_keys(db)
+        # a closed posting, or a copy of one already listed (dedup_copy_* = new), is never picked
         q = (db.query(Job).filter(Job.status == "new")
-             .filter(func.coalesce(Job.posted_at, Job.discovered_at) >= since_tracked))
+             .filter(func.coalesce(Job.posted_at, Job.discovered_at) >= since_tracked)
+             .filter(or_(Job.open_state.is_(None), Job.open_state != "closed"))
+             .filter(Job.duplicate_of.is_(None)))
         jobs = []
         for j in q.all():
             seen = j.posted_at or j.discovered_at
@@ -351,6 +355,11 @@ def _is_small(it: dict) -> bool:
     return (it.get("headcount") or 10**6) < 300 or (it.get("funding_stage") or "") in ("seed", "pre_seed", "series_a", "series_b")
 
 
+# What went wrong finding people in the current run, shown in the run's summary (curator/routes.py)
+# instead of only the log: a broken LinkedIn session stayed invisible for ten days.
+_OUTREACH_ERRORS: list = []
+
+
 async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[dict]:
     from backend.curator.linkedin_people import LinkedInPeople
     from backend.curator.people import draft, find_people, guess_email
@@ -368,8 +377,13 @@ async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[d
             it = intel.get(k) or {}
             small = _is_small(it)
             city = (j.get("loc_city") or "").title() or None
-            people = await find_people(j["company"], j["title"], small, li, want=1 if want_total - len(found) <= len(top) else 2,
-                                       country=j.get("loc_country") or "US", region=j.get("loc_region"), city=city)
+            try:   # one company failing never costs the people already found
+                people = await find_people(j["company"], j["title"], small, li, want=1 if want_total - len(found) <= len(top) else 2,
+                                           country=j.get("loc_country") or "US", region=j.get("loc_region"), city=city)
+            except Exception as e:
+                logger.exception(f"curator outreach: {j['company']} failed: {e}")
+                _OUTREACH_ERRORS.append(f"{j['company']}: {e}")
+                continue
             for p in people:
                 email, conf = guess_email(p["name"], it)
                 d = await draft(p, j["company"], j, me, profile)
@@ -449,8 +463,13 @@ async def find_network_contacts(companies: list[str], want_total: int) -> list[d
             if len(found) >= want_total:
                 break
             it = intel.get(name_key(company)) or {}
-            people = await find_decision_makers(company, areas, _is_small(it), li, want=1,
-                                                country=country, region=region, city=city)
+            try:
+                people = await find_decision_makers(company, areas, _is_small(it), li, want=1,
+                                                    country=country, region=region, city=city)
+            except Exception as e:
+                logger.exception(f"curator network outreach: {company} failed: {e}")
+                _OUTREACH_ERRORS.append(f"{company}: {e}")
+                continue
             for p in people:
                 email, conf = guess_email(p["name"], it)
                 d = await draft_network(p, company, it, me, profile)
@@ -548,11 +567,13 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     ignored = await asyncio.to_thread(write_results, top, pool_ids, cfg["auto_ignore"], dropped)
 
     contacts, network = [], []
+    _OUTREACH_ERRORS.clear()
     if outreach and cfg["outreach"] > 0 and top:
         try:
             contacts = await find_contacts(top, intel, cfg["outreach"])
         except Exception as e:
             logger.exception(f"curator outreach failed: {e}")
+            _OUTREACH_ERRORS.append(f"outreach: {e}")
     # Job slots nobody filled go to people at companies with no posting for the user today.
     network_want = cfg["network"] + max(0, cfg["outreach"] - len(contacts)) if cfg["network"] > 0 else 0
     if outreach and network_want > 0:
@@ -560,6 +581,7 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
             network = await find_network_contacts(network_companies(ranked, top, cfg, network_want * 3), network_want)
         except Exception as e:
             logger.exception(f"curator network outreach failed: {e}")
+            _OUTREACH_ERRORS.append(f"network outreach: {e}")
     if send:
         try:
             await notify(top, contacts, network)
@@ -568,5 +590,7 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     summary = {"pool": len(pool_ids), "candidates": len(pool), "dropped": len(dropped),
                "llm_pool": len(shortlist), "saved": len(top), "ignored": ignored, "contacts": len(contacts),
                "network": len(network)}
+    if _OUTREACH_ERRORS:
+        summary["outreach_errors"] = list(_OUTREACH_ERRORS[:5])
     logger.info(f"curator done: {summary}")
     return summary

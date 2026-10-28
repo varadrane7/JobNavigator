@@ -525,7 +525,14 @@ async def lookup_after_scrape():
             db.close()
     try:
         async with tracked_run("linkedin_lookup", "after scrape") as run:
-            out = await ll.run_lookup(per_run=ll.PER_RUN)
+            db = SessionLocal()
+            try:
+                per_run = int(get_setting(db, "linkedin_lookup_max_per_scrape") or ll.PER_RUN)
+            except (TypeError, ValueError):
+                per_run = ll.PER_RUN
+            finally:
+                db.close()
+            out = await ll.run_lookup(per_run=per_run)
             run.summary = (f"{out['looked_up']} looked up - {out['employer']} employer links - "
                            f"{out['easy_apply']} Easy Apply - {out.get('closed', 0)} closed - "
                            f"{out['cached']} from earlier answers - "

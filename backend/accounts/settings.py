@@ -128,13 +128,15 @@ _SECTIONS = [
     ("curator", "Daily curator", POLICY, OWN, ["curator"], [
         "curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore",
         "curate_title_exclude", "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max",
-        "outreach_count", "outreach_network_count", "linkedin_people_daily_cap"]),
+        "outreach_count", "outreach_network_count",
+        "linkedin_mock_daily_cap", "linkedin_main_daily_cap", "linkedin_cooldown_hours"]),
     ("curator_llm", "Curator model", POLICY, INHERIT, ["curator"], [
         "curator_llm_provider", "curator_llm_model", "curator_llm_api_key", "curator_llm_effort",
         "curator_fallback_llm_provider", "curator_fallback_llm_model", "curator_fallback_llm_api_key",
         "curator_fallback_llm_effort"]),
     ("curator_infra", "Curator infrastructure", OWNER_ONLY, INHERIT, ["curator"], [
-        "curate_cron", "curate_concurrency", "curate_embed_model", "llm_local_base_url", "searxng_url"]),
+        "curate_cron", "curate_concurrency", "curate_embed_model", "llm_local_base_url", "llm_local_api_key", "searxng_url",
+        "linkedin_lookup_max_per_scrape"]),
     ("advanced", "Advanced", OWNER_ONLY, INHERIT, ["advanced"], ["proxy_url", "dashboard_api_key"]),
     # OIDC single sign-on (MT-20): the provider the install trusts; env OIDC_* are the defaults.
     ("oidc", "Single sign-on (OIDC)", OWNER_ONLY, INHERIT, ["advanced"], [

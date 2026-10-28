@@ -571,6 +571,9 @@ export default function Settings() {
         B('Local endpoint URL', 'Base URL for OpenAI (Local): an LM Studio, vLLM or text-generation-webui address.', 'llm_local_base_url', {
           info: 'Shared by every model setting on OpenAI (Local); no limit is placed on response length.' + usedLine('openai_local'),
           mono: true, w: '340px', placeholder: 'http://localhost:1234/v1', hide: () => member || !LOCAL_PROVIDER_KEYS.some((k) => val(k) === 'openai_local') }),
+        B('Local server token', 'Empty when the server takes no token.', 'llm_local_api_key', {
+          info: 'LM Studio: Developer › Server settings › Require API key. Sent by OpenAI (Local), LM Studio and the curator’s embeddings.',
+          secret: true, mono: true, w: '340px', hide: () => member || (!LOCAL_PROVIDER_KEYS.some((k) => ['openai_local', 'lmstudio'].includes(val(k))) && !val('curate_embed_model')) }),
         LLM('Scoring', 'Model that scores new jobs against your résumés.', 'scoring_llm'),
         LLM('Scoring fallback', 'Retries scoring once on error or rate limit — scoring only.', 'llm_fallback',
           { info: 'Used only when the scoring call fails or is rate-limited. One retry, then the job stays unscored until the next run. Choose a cheap model from a different provider than the primary.' }),
@@ -685,7 +688,10 @@ export default function Settings() {
         B('Curator parallel calls', 'Company research and drafts in parallel.', 'curate_concurrency', { mono: true, int: true, w: '135px' }),
         B('People per day', 'Founders, hiring managers and recruiters found for the top companies.', 'outreach_count', { mono: true, int: true, w: '135px' }),
         B('People to know per day', 'Engineering leaders at good companies with no posting for you today; job slots left unused add to this.', 'outreach_network_count', { mono: true, int: true, w: '135px' }),
-        B('LinkedIn searches · cap', 'People searches per day (mock account first, then personal).', 'linkedin_people_daily_cap', { mono: true, int: true, w: '135px' }),
+        B('Mock session · searches/day', 'People and post searches per day on the mock LinkedIn session.', 'linkedin_mock_daily_cap', { mono: true, int: true, w: '135px' }),
+        B('Main session · searches/day', 'Your own account: network (2nd/3rd) checks, and searches when the mock session is spent or throttled.', 'linkedin_main_daily_cap', { mono: true, int: true, w: '135px' }),
+        B('Cooldown after a 429', 'Hours a throttled LinkedIn session is left alone.', 'linkedin_cooldown_hours', { mono: true, int: true, w: '135px' }),
+        B('Link lookups per scrape', 'LinkedIn jobs the mock session is asked about after each scrape (employer link). Lower saves the mock session for people.', 'linkedin_lookup_max_per_scrape', { mono: true, int: true, w: '135px', hide: () => member }),
         B('SearXNG URL', 'Search service the curator uses.', 'searxng_url', { mono: true, w: '340px' }),
         BT('Test search', 'Runs one query through SearXNG.', 'Test', async () => { const { data } = await api.get('/search/test'); flash(`Search OK · ${data.count} results`) }),
         BT('Run now', 'Builds today\u2019s list now (a few minutes).', 'Run curator', () => api.post('/curator/run')),

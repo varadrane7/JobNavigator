@@ -243,6 +243,7 @@ async def call_autofill_llm_stream(prompt: str, system: str, max_tokens: int = 4
         base = {"openrouter": OPENROUTER_BASE_URL, "opencode_go": OPENCODE_GO_BASE_URL}.get(provider)
         if provider == "openai_local":
             base = _local_base_url()
+            api_key = api_key or local_api_key() or "local"
         # openai_local runs uncapped: local reasoning models need the room and cost nothing.
         async for c in _stream_openai(combined, system, model, api_key,
                                       None if provider == "openai_local" else cap, base, effort, feature="autofill"):
@@ -301,6 +302,16 @@ def _local_base_url() -> str:
     try:
         from backend.accounts.local_urls import member_override
         return member_override(db, "openai_local") or _get_setting(db, "llm_local_base_url", "http://localhost:1234/v1")
+    finally:
+        db.close()
+
+
+def local_api_key() -> str:
+    """The token of the owner's local model server (LM Studio with "Require API key" on), sent by
+    OpenAI (Local), LM Studio and the curator's embeddings; empty = the server takes none."""
+    db = SessionLocal()
+    try:
+        return str(_get_setting(db, "llm_local_api_key", "") or "").strip()
     finally:
         db.close()
 
@@ -507,7 +518,8 @@ async def _dispatch(provider: str, model: str, api_key: str,
     elif provider == "openai_local":
         # Same OpenAI-compatible call, pointed at a user-configured local server
         # (LM Studio, vLLM, ...) instead of api.openai.com; no key required, no output cap.
-        return await _call_openai(combined, system, model, api_key, None, base_url=_local_base_url(), effort=effort)
+        return await _call_openai(combined, system, model, api_key or local_api_key() or "local", None,
+                                  base_url=_local_base_url(), effort=effort)
     elif provider == "openrouter":
         # OpenRouter is OpenAI-API-compatible — same client, different base URL.
         # One key reaches every vendor's models (model slug is vendor-prefixed).
@@ -524,7 +536,7 @@ async def _dispatch(provider: str, model: str, api_key: str,
         # Thinking models (e.g. Qwen3) burn the whole max_tokens budget on reasoning and
         # return empty content; disable thinking for these structured-output calls.
         # LM Studio's OpenAI-compatible endpoint takes reasoning_effort="none" to turn it off.
-        return await _call_openai(combined, system, model, api_key or "lm-studio", max_tokens,
+        return await _call_openai(combined, system, model, api_key or local_api_key() or "lm-studio", max_tokens,
                                   base_url=base,
                                   extra_body={"reasoning_effort": "none"})
     elif provider == "ollama":

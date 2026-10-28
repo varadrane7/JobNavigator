@@ -363,6 +363,15 @@ async def _linkedin_pass(per_run: int, fetch, pause: float, resolve, check=None)
             todo = [i for i in ids if i not in cached][:per_run]
             if not todo:
                 return out
+            if fetch is None:
+                # the mock session is shared with the curator's people search (curator/li_budget.py)
+                from backend.accounts.background import acting_as
+                from backend.curator import li_budget
+                with acting_as(None):
+                    until = li_budget.cooling_until(li_budget.MOCK)
+                if until:
+                    out["stopped"] = f"the mock session is cooling down after a 429 until {until:%H:%M} UTC"
+                    return out
             async with _fetcher(fetch) as (fetch_one, why_not):
                 if fetch_one is None:
                     out["stopped"] = why_not
@@ -374,6 +383,13 @@ async def _linkedin_pass(per_run: int, fetch, pause: float, resolve, check=None)
                         await asyncio.sleep(pause)
                     d = await fetch_one(lid)
                     out["looked_up"] += 1
+                    if fetch is None and d and d.get("status") in (429, 999):
+                        from backend.accounts.background import acting_as
+                        from backend.curator import li_budget
+                        with acting_as(None):
+                            li_budget.cool(li_budget.MOCK, "throttled the link lookup")
+                        out["stopped"] = "LinkedIn throttled the mock session (429)"
+                        break
                     verdict = _verdict(d)
                     if verdict is None:
                         misses += 1

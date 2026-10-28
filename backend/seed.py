@@ -83,7 +83,11 @@ DEFAULT_SETTINGS = {
     "curate_embed_model": ("text-embedding-nomic-embed-text-v1.5", "Embedding model on the OpenAI (Local) server used to pre-filter by résumé similarity. Empty = skip"),
     "outreach_count": ("20", "How many people to find each day for the curated jobs (founders, hiring managers, recruiters)"),
     "outreach_network_count": ("10", "How many decision makers to find each day at good companies, open role or not (job slots left unused add to this)"),
-    "linkedin_people_daily_cap": ("25", "Max LinkedIn people searches per day (mock account first, then personal)"),
+    "llm_local_api_key": ("", "Token of the local model server (LM Studio: Developer › Server settings › Require API key). Empty = none"),
+    "linkedin_mock_daily_cap": ("60", "LinkedIn searches per day on the mock session (people, posts); the main session takes over when it is spent or throttled"),
+    "linkedin_main_daily_cap": ("15", "LinkedIn searches per day on the main (personal) session: network checks and mock fallback"),
+    "linkedin_cooldown_hours": ("6", "Hours a LinkedIn session is left alone after a 429, checkpoint or sign-in wall"),
+    "linkedin_lookup_max_per_scrape": ("40", "Most LinkedIn jobs the employer-link lookup asks the mock session about after one scrape"),
     "dedup_copy_link": ("ignored", "A copy of a posting under another link in the same city: ignored or new"),
     "dedup_copy_city": ("ignored", "A copy of a posting or role in another city: ignored or new"),
     "dedup_copy_repost": ("ignored", "The same role reposted under a new id in the same city: ignored or new"),
@@ -1228,6 +1232,8 @@ def cleanup_removed_settings(db):
         "linkedin_use_mock_account",
         # the employer-link lookup runs after every scrape at a fixed pace (3.2 had a cron)
         "linkedin_lookup_cron", "linkedin_lookup_per_run",
+        # one cap per LinkedIn session (mock / main) replaced the shared people-search cap
+        "linkedin_people_daily_cap",
         "followup_reminder_days",
         "h1b_exclusion_phrases",
         "language_exclude_phrases",

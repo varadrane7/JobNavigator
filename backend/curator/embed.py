@@ -30,13 +30,16 @@ async def embed(texts: list[str], kind: str = "document") -> list[list[float]] |
     base, model = _config()
     if not model or not texts:
         return None
+    from backend.analyzer.llm_client import local_api_key
+    key = local_api_key()
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
     prefix = "search_query: " if kind == "query" else "search_document: "
     out = []
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             for i in range(0, len(texts), _BATCH):
                 chunk = [prefix + (t or "")[:6000] for t in texts[i:i + _BATCH]]
-                resp = await client.post(f"{base}/embeddings", json={"model": model, "input": chunk})
+                resp = await client.post(f"{base}/embeddings", json={"model": model, "input": chunk}, headers=headers)
                 resp.raise_for_status()
                 data = sorted(resp.json()["data"], key=lambda d: d["index"])
                 out.extend(d["embedding"] for d in data)

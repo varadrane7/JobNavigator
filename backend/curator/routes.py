@@ -20,7 +20,8 @@ router = APIRouter(tags=["curator"])
 def _summary_text(s: dict) -> str:
     return (f"{s['saved']} saved from {s['candidates']} candidates ({s['dropped']} dropped, "
             f"{s['llm_pool']} ranked), {s['ignored']} ignored, {s['contacts']} contacts, "
-            f"{s.get('network', 0)} people to know")
+            f"{s.get('network', 0)} people to know"
+            + (f"; people search errors: {' | '.join(s['outreach_errors'])}"[:600] if s.get("outreach_errors") else ""))
 
 
 @router.post("/curator/run", status_code=202, summary="Run the daily curation now")
