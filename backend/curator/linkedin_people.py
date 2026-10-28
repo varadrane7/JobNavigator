@@ -76,7 +76,7 @@ def card_details(text: str, headline: str) -> dict:
 _GEO_URN = {"US": "103644278", "CA": "101174742", "GB": "101165590", "IN": "102713980", "DE": "101282230"}
 
 
-_POSTS_JS = """
+_POSTS_JS = r"""
 () => {
   // LinkedIn's content search has no stable class names: each result's text starts with
   // "Feed post", so a post is the nearest ancestor of an author link whose text does.

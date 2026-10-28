@@ -225,7 +225,7 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
     from backend.curator.linkedin_people import LinkedInPeople
     from backend.curator import li_budget
     want = _daily_target()
-    summary = {"candidates": 0, "scored": 0, "saved": 0, "follow_ups": 0, "posts": 0, "errors": []}
+    summary = {"candidates": 0, "scored": 0, "saved": 0, "follow_ups": 0, "posts": 0, "errors": [], "best": []}
     db = SessionLocal()
     try:
         summary["follow_ups"] = mark_follow_ups(db)
@@ -295,6 +295,8 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
         best = sorted((s for s in scored if isinstance(s, dict) and s["score"] >= MIN_SCORE),
                       key=lambda s: -s["score"])[:want]
         summary["scored"] = sum(1 for s in scored if isinstance(s, dict))
+        ranked = sorted((s for s in scored if isinstance(s, dict)), key=lambda s: -s["score"])
+        summary["best"] = [f"{s['name']} ({s['lead_kind']}) {s['score']}" for s in ranked[:5]]
 
         # network distance for the best few, on the main session
         for c in best[:DEGREE_CHECKS]:
@@ -335,4 +337,5 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
 def summary_text(s: dict) -> str:
     return (f"{s['saved']} new leads from {s['candidates']} candidates ({s['scored']} scored, {s['posts']} posts read), "
             f"{s['follow_ups']} follow-ups due"
+            + (f"; best scores: {', '.join(s['best'])}" if s.get("best") and not s["saved"] else "")
             + (f"; errors: {' | '.join(s['errors'])}"[:500] if s.get("errors") else ""))
