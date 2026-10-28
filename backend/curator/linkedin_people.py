@@ -78,19 +78,21 @@ _GEO_URN = {"US": "103644278", "CA": "101174742", "GB": "101165590", "IN": "1027
 
 _POSTS_JS = """
 () => {
-  const out = [], seen = new Set();
-  const posts = document.querySelectorAll('div.feed-shared-update-v2, div[data-urn*="urn:li:activity"], li.reusable-search__result-container');
-  for (const p of posts) {
-    const a = p.querySelector('a[href*="/in/"]');
-    if (!a) continue;
-    const url = (a.href || '').split('?')[0];
-    const urn = p.getAttribute('data-urn') || (p.querySelector('[data-urn]')?.getAttribute('data-urn')) || '';
-    const key = urn || url;
-    if (!url || seen.has(key)) continue;
-    seen.add(key);
-    const actor = (p.querySelector('.update-components-actor__meta, .update-components-actor') || a).innerText || '';
-    const body = (p.querySelector('.update-components-text, .feed-shared-text, .feed-shared-inline-show-more-text') || p).innerText || '';
-    out.push({url, urn, actor: actor.trim().slice(0, 300), text: body.trim().slice(0, 1200)});
+  // LinkedIn's content search has no stable class names: each result's text starts with
+  // "Feed post", so a post is the nearest ancestor of an author link whose text does.
+  const main = document.querySelector('main') || document.body;
+  const seen = new Set(), out = [];
+  for (const a of main.querySelectorAll('a[href*="/in/"]')) {
+    let el = a;
+    while (el && el !== main && !(el.innerText || '').trimStart().startsWith('Feed post')) el = el.parentElement;
+    if (!el || el === main || seen.has(el)) continue;
+    seen.add(el);
+    const text = (el.innerText || '').trim().replace(/^Feed post\s*/, '');
+    const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+    const follow = lines.findIndex((l) => /^(Follow|Connect|Following)$/.test(l));
+    const actor = (follow > 0 ? lines.slice(0, follow) : lines.slice(0, 4)).join('\n');
+    const body = (follow > 0 ? lines.slice(follow + 1) : lines.slice(4)).join('\n');
+    out.push({url: (a.href || '').split('?')[0], urn: '', actor: actor.slice(0, 400), text: body.slice(0, 1500)});
   }
   return out.slice(0, 15);
 }

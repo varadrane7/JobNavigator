@@ -84,7 +84,8 @@ async def test_run_saves_scored_leads_once(test_db, monkeypatch):
                      "text": "We're hiring backend engineers", "source": "linkedin_mock"}]
 
         async def search(self, kw, country=None, network=None):
-            return [{"url": "https://www.linkedin.com/in/bob", "degree": 2}]
+            return [{"url": "https://www.linkedin.com/in/bob", "degree": 2, "name": "Bob Lee",
+                     "headline": "CTO at Tiny AI", "source": "linkedin_mock"}]
 
     async def fake_search(q, n=10, **kw):
         return [{"url": "https://www.linkedin.com/in/amy", "title": "Amy Wu - Founder at DevCo | LinkedIn",
@@ -126,3 +127,13 @@ def test_networking_brief_lists_shown_projects():
     from backend.curator.projects_sync import networking_brief
     b = networking_brief(NET)
     assert "Pitch: Backend engineer" in b and "LazyCurl" in b and "dotfiles" not in b
+
+
+def test_parse_post_reads_the_2026_card_text():
+    from backend.curator.scout import parse_post
+    post = {"author_url": "https://www.linkedin.com/in/diana", "source": "linkedin_mock",
+            "actor": "Diana Romero\n• 3rd+\nTalent Acquisition Lead at Acme AI | SaaS Hiring\nView my services\nOct 21",
+            "text": "We're hiring a Python backend engineer in New York."}
+    lead = parse_post(post)
+    assert lead["name"] == "Diana Romero" and lead["company"] == "Acme AI"
+    assert lead["headline"].startswith("Talent Acquisition Lead")

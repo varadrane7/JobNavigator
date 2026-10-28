@@ -94,7 +94,8 @@ def company_from_headline(headline: str) -> str:
 def parse_post(p: dict) -> dict | None:
     """A lead from a LinkedIn post card: the actor block reads 'Name\\nHeadline\\n...'."""
     lines = [l.strip(" •·") for l in (p.get("actor") or "").splitlines() if l.strip(" •·")]
-    lines = [l for l in lines if not re.match(r"^(\d+[smhdw]|follow|.*followers|promoted|edited|\d(st|nd|rd))", l, re.I)]
+    lines = [l for l in lines if not re.match(r"^(\d+[smhdw]\b|follow|.*followers|promoted|edited|\d(st|nd|rd)|view my |"
+                                                r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* \d{1,2}$)", l, re.I)]
     if not lines or not p.get("author_url") or "/in/" not in p["author_url"]:
         return None
     name = re.sub(r"\s*(View .*|’s profile|'s profile).*$", "", lines[0]).strip()
@@ -124,7 +125,15 @@ def plan_queries(net: dict, contact: dict) -> dict:
     posts = [f'hiring "{r}"' for r in roles[:2]] + [f"hiring {d.replace('-', ' ')} engineer" for d in domains[:2]]
     project_fit = [f'site:linkedin.com/in {_LEAD_TITLES} "{d.replace("-", " ")}" startup {city}' for d in domains[:3]]
     affinity = [f'site:linkedin.com/in "{a}" {_LEAD_TITLES}' for a in (net.get("affinities") or [])[:4] if a]
-    return {"posts": posts, "project_fit": project_fit, "affinity": affinity}
+    # LinkedIn's own people search (mock session) takes plain keywords, one title at a time
+    words = [_DOMAIN_WORDS.get(d, d.replace("-", " ")) for d in domains[:3]]
+    li_people = [("project_fit", f"{t} {w}") for w in words for t in ("engineering manager", "founder")][:4]
+    li_people += [("alumni", f"{a} engineering manager") for a in (net.get("affinities") or [])[:2] if a]
+    return {"posts": posts, "project_fit": project_fit, "affinity": affinity, "li_people": li_people}
+
+
+_DOMAIN_WORDS = {"llm-infra": "LLM", "devtools": "developer tools", "healthtech": "health tech",
+                 "fintech": "fintech", "homelab": "self-hosted"}
 
 
 async def _searx_leads(queries: list[str], kind: str, n: int = 10) -> list[dict]:
@@ -254,8 +263,22 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
                 break
             summary["posts"] += len(posts)
             cands.extend({**lead, "lead_kind": "hiring_post"} for lead in (parse_post(p) for p in posts) if lead)
-        cands.extend(await _searx_leads(q["project_fit"], "project_fit"))
-        cands.extend(await _searx_leads(q["affinity"], "alumni"))
+        searx = await _searx_leads(q["project_fit"], "project_fit") + await _searx_leads(q["affinity"], "alumni")
+        cands.extend(searx)
+        if len(searx) < want:
+            # SearXNG's engines often ignore site: and return no profiles; ask LinkedIn instead
+            for kind, kw in q["li_people"]:
+                try:
+                    hits = await li.search(kw, country="US")
+                except Exception as e:
+                    summary["errors"].append(f"people: {e}")
+                    break
+                for h in hits:
+                    cands.append({"name": h["name"], "headline": h.get("headline") or "", "url": h["url"],
+                                  "company": h.get("current_text") or company_from_headline(h.get("headline") or ""),
+                                  "location": h.get("location"), "country": h.get("country"),
+                                  "degree": h.get("degree"), "evidence": h.get("headline") or "",
+                                  "lead_kind": kind, "source": h.get("source")})
 
         db = SessionLocal()
         try:
