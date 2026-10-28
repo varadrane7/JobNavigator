@@ -673,6 +673,7 @@ export default function Settings() {
       ]],
       ['curator', '', 'Daily curator', 'ranks the day\u2019s new jobs and saves the best · Today screen', [
         B('Curate · cron', 'When the Top list is built (app time zone) — 4:30 by default, after the CLI limits reset.', 'curate_cron', { mono: true, cron: true, w: '135px' }),
+        B('Lead scout · cron', 'When the lead scout looks for people to network with (app time zone). Empty = off.', 'network_scout_cron', { mono: true, cron: true, w: '135px' }),
         B('Jobs per day', 'How many jobs are saved and ranked.', 'curate_count', { mono: true, int: true, w: '135px' }),
         B('Window · hours', 'Only jobs posted or first seen this recently are considered.', 'curate_window_hours', { mono: true, int: true, w: '135px' }),
         B('LLM pool', 'Jobs scored by the LLM after the embedding pre-filter.', 'curate_llm_pool', { mono: true, int: true, w: '135px' }),
@@ -688,6 +689,8 @@ export default function Settings() {
         B('Curator parallel calls', 'Company research and drafts in parallel.', 'curate_concurrency', { mono: true, int: true, w: '135px' }),
         B('People per day', 'Founders, hiring managers and recruiters found for the top companies.', 'outreach_count', { mono: true, int: true, w: '135px' }),
         B('People to know per day', 'Engineering leaders at good companies with no posting for you today; job slots left unused add to this.', 'outreach_network_count', { mono: true, int: true, w: '135px' }),
+        B('Lead scout · people/day', 'New people the lead scout saves each morning (People screen), found from your persona, not today’s jobs.', 'scout_daily_leads', { mono: true, int: true, w: '135px' }),
+        B('GitHub token', 'Optional: lets the persona project sync read private repositories (read-only token).', 'github_token', { secret: true, mono: true, w: '340px' }),
         B('Mock session · searches/day', 'People and post searches per day on the mock LinkedIn session.', 'linkedin_mock_daily_cap', { mono: true, int: true, w: '135px' }),
         B('Main session · searches/day', 'Your own account: network (2nd/3rd) checks, and searches when the mock session is spent or throttled.', 'linkedin_main_daily_cap', { mono: true, int: true, w: '135px' }),
         B('Cooldown after a 429', 'Hours a throttled LinkedIn session is left alone.', 'linkedin_cooldown_hours', { mono: true, int: true, w: '135px' }),

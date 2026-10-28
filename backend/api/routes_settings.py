@@ -268,7 +268,7 @@ def update_settings(updates: dict, db: Session = Depends(get_db)):
 
     timing_keys = {
         "scrape_interval_minutes", "email_check_interval_minutes", "telemetry_level",
-        "backup_cron", "digest_cron", "h1b_cron", "cleanup_cron", "reject_cron", "curate_cron",
+        "backup_cron", "digest_cron", "h1b_cron", "cleanup_cron", "reject_cron", "curate_cron", "network_scout_cron",
     }
     if timing_keys & set(install_updated):
         _reconfigure("configure_scheduler", configure_scheduler)

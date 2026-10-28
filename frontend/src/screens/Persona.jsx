@@ -3,7 +3,7 @@ import api, { accountChanged, writeHeaders } from '../api'
 import { useFlushBeforeSwitch } from '../accounts'
 import { useToasts, ToastStack } from '../Toast'
 import { useSettled, NBSP } from '../hooks'
-import { Band, Button, Card, ChoiceCard, ChoiceModal, ChoiceRow, Heading, HeaderRow, Helper, Input, Label, PageTitle, Pill, SectionHead, Select } from '../ui'
+import { Band, Button, Card, ChoiceCard, ChoiceModal, ChoiceRow, Heading, HeaderRow, Helper, Input, Label, PageTitle, Pill, SectionHead, Select, Switch, Textarea } from '../ui'
 import { ago } from '../time'
 import '../theme.css'
 import {
@@ -145,6 +145,97 @@ function ColumnHead({ title, help }) {
       <Heading strong size={18}>{title}</Heading>
       <Helper title={help} style={{ cursor: 'help', borderBottom: '1px dotted var(--line-strong)' }}>what is this?</Helper>
     </div>
+  )
+}
+
+
+// ── Networking profile ─────────────────────────────────────────────────────
+// personas.networking: what the lead scout (backend/curator/scout.py) searches from and writes
+// outreach with. Projects sync from GitHub (POST /persona/networking/sync); an edited one-liner
+// marks the project `edited` so the sync never overwrites it.
+const NET_TEXT = [
+  ['github_user', 'GitHub user', 'Projects sync from this account’s repositories'],
+  ['blog_rss', 'Blog RSS', 'Latest posts become talking points'],
+  ['visa_note', 'Work authorization', 'e.g. F-1 STEM OPT; will need H-1B sponsorship'],
+]
+const NET_LISTS = [
+  ['target_roles', 'Target roles', 'backend engineer, AI engineer'],
+  ['target_domains', 'Domains', 'llm-infra, devtools, fintech'],
+  ['affinities', 'Schools & past employers', 'NJIT, University of Mumbai, Kotak Securities'],
+  ['asks', 'What you ask for', 'referral, intro to the hiring manager, feedback on a project'],
+]
+const splitList = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean)
+
+function NetworkingCard({ net, open, onToggle, save, onSynced, pushToast }) {
+  const [syncing, setSyncing] = useState(false)
+  const projects = Array.isArray(net.projects) ? net.projects : []
+  const set = (k, v) => { const next = { ...net }; if (v === '' || (Array.isArray(v) && !v.length)) delete next[k]; else next[k] = v; save(next) }
+  const setProject = (i, patch) => save({ ...net, projects: projects.map((x, j) => (j === i ? { ...x, ...patch } : x)) })
+  const sync = async () => {
+    setSyncing(true)
+    try {
+      const { data } = await api.post('/persona/networking/sync', null, { params: { force: false } })
+      if (data?.error) pushToast({ kind: 'error', msg: data.error })
+      else pushToast({ kind: 'success', msg: `GitHub: ${data.repos} repositories, ${data.read} read, ${data.hidden} hidden` })
+      onSynced()
+    } catch (e) {
+      pushToast({ kind: 'error', msg: 'Sync failed' + (typeof e?.response?.data?.detail === 'string' ? ' — ' + e.response.data.detail : '') })
+    } finally { setSyncing(false) }
+  }
+  const shown = projects.filter((x) => !x.hidden).length
+  return (
+    <Card style={{ padding: 0, display: 'flex', flexDirection: 'column' }}>
+      <SectionHead card open={open} onToggle={onToggle} hover="v2-clhead" style={{ padding: '11px 14px' }}>
+        <span style={{ flex: '0 0 auto', fontSize: 13, fontWeight: 600 }}>Networking</span>
+        <Helper style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>who the lead scout looks for, and what you show them</Helper>
+        <Helper size="xs" style={{ flex: '0 0 auto' }}>{shown} project{shown === 1 ? '' : 's'}</Helper>
+      </SectionHead>
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 14px 14px', borderTop: '1px solid var(--line-soft)' }}>
+          <Label size="xs">Pitch</Label>
+          <Textarea rows={2} value={net.pitch || ''} onChange={(v) => set('pitch', v)} placeholder="One or two sentences: what you build and what you want next" ariaLabel="Pitch" />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
+            {NET_TEXT.map(([k, label, ph]) => (
+              <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <Label size="xs">{label}</Label>
+                <Input value={net[k] || ''} onChange={(v) => set(k, v)} placeholder={ph} ariaLabel={label} />
+              </div>
+            ))}
+            {NET_LISTS.map(([k, label, ph]) => (
+              <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <Label size="xs">{label}</Label>
+                <Input defaultValue={(net[k] || []).join(', ')} onBlur={(e) => set(k, splitList(e.target.value))} placeholder={ph} ariaLabel={label} />
+              </div>
+            ))}
+          </div>
+          <Label size="xs">Talking points (one per line)</Label>
+          <Textarea rows={3} defaultValue={(net.talking_points || []).join('\n')}
+            onBlur={(e) => set('talking_points', e.target.value.split('\n').map((x) => x.trim()).filter(Boolean))}
+            placeholder="Things you can talk about: a hard bug, a benchmark result, a post" ariaLabel="Talking points" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Heading strong={600} size={13}>Projects</Heading>
+            <Helper size="xs">{net.projects_synced_at ? `synced ${new Date(net.projects_synced_at).toLocaleDateString()}` : 'not synced yet'}</Helper>
+            <Button size="xs" variant="secondary" busy={syncing} disabled={syncing} style={{ marginLeft: 'auto' }} onClick={sync}
+              title="Read every repository's README and summarise it (your edits are kept)">{syncing ? 'Syncing…' : 'Sync from GitHub'}</Button>
+          </div>
+          {projects.length === 0 && <Helper size="xs">No projects yet: set the GitHub user and sync, or add one.</Helper>}
+          {projects.map((x, i) => (
+            <div key={`${x.name}-${i}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, opacity: x.hidden ? 0.55 : 1 }}>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600 }}>
+                  {x.url ? <a href={x.url} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>{x.name}</a> : x.name}
+                  {x.private ? ' · private' : ''}{(x.stack || []).length ? ` · ${(x.stack || []).slice(0, 4).join(', ')}` : ''}
+                </span>
+                <Input value={x.one_liner || ''} onChange={(v) => setProject(i, { one_liner: v, edited: true })} placeholder="What it does" ariaLabel={`${x.name} summary`} />
+              </div>
+              <Switch on={!x.hidden} onChange={(on) => setProject(i, { hidden: !on, hidden_by_user: !on })} size="sm" ariaLabel={`Show ${x.name} in outreach`} title="Shown in outreach" />
+              <RemoveX onClick={() => save({ ...net, projects: projects.filter((_, j) => j !== i) })} title="Remove project" />
+            </div>
+          ))}
+          <DashedAdd onClick={() => save({ ...net, projects: [...projects, { name: 'New project', source: 'manual', one_liner: '' }] })}>+ Add project</DashedAdd>
+        </div>
+      )}
+    </Card>
   )
 }
 
@@ -374,6 +465,8 @@ export default function Persona() {
           <ColumnHead title="Autofill content"
             help="Details used to fill application forms: contact, work authorization, EEO answers, salary and reusable screener answers. Not used for résumés or scoring." />
           <div className="v2-scroll" style={{ flex: 1, overflow: 'auto', padding: '0 26px 24px', display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 }}>
+            <NetworkingCard net={p.networking || {}} open={groups.has('networking')} onToggle={() => toggleGroup('networking')}
+              save={(next) => saveNode('networking', next)} onSynced={loadPersona} pushToast={pushToast} />
             {GROUPS.map(([id, title, fields]) => {
               const open = groups.has(id)
               const counted = fields.filter((f) => !f[4]?.uncounted)

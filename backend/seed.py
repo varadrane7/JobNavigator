@@ -83,6 +83,9 @@ DEFAULT_SETTINGS = {
     "curate_embed_model": ("text-embedding-nomic-embed-text-v1.5", "Embedding model on the OpenAI (Local) server used to pre-filter by résumé similarity. Empty = skip"),
     "outreach_count": ("20", "How many people to find each day for the curated jobs (founders, hiring managers, recruiters)"),
     "outreach_network_count": ("10", "How many decision makers to find each day at good companies, open role or not (job slots left unused add to this)"),
+    "github_token": ("", "GitHub token (read-only, repo scope) so the persona project sync sees private repositories. Empty = public repositories only"),
+    "network_scout_cron": ("15 6 * * *", "Daily lead-scout cron (people to network with, independent of jobs). Empty = disabled"),
+    "scout_daily_leads": ("15", "How many new people the lead scout saves each day"),
     "llm_local_api_key": ("", "Token of the local model server (LM Studio: Developer › Server settings › Require API key). Empty = none"),
     "linkedin_mock_daily_cap": ("60", "LinkedIn searches per day on the mock session (people, posts); the main session takes over when it is spent or throttled"),
     "linkedin_main_daily_cap": ("15", "LinkedIn searches per day on the main (personal) session: network checks and mock fallback"),
@@ -887,6 +890,8 @@ END $$;""",
         # writing_samples retired — voice now comes from the paired resume + persona
         # preferences (see cover-letter feature). Idempotent drop for existing DBs.
         "ALTER TABLE personas DROP COLUMN IF EXISTS writing_samples",
+        # networking profile for the lead scout (curator/scout.py)
+        "ALTER TABLE personas ADD COLUMN IF NOT EXISTS networking JSONB DEFAULT '{}'::jsonb",
         # Tracer links can now belong to a cover letter too — add the FK + relax
         # resume_id to nullable. Idempotent for existing DBs.
         "ALTER TABLE tracer_links ADD COLUMN IF NOT EXISTS cover_letter_id UUID REFERENCES cover_letters(id) ON DELETE CASCADE",
@@ -922,6 +927,19 @@ END $$;""",
         "CREATE INDEX IF NOT EXISTS ix_jobs_discovered_at ON jobs(discovered_at)",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS location VARCHAR",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS purpose VARCHAR DEFAULT 'job'",
+        # the lead pipeline (curator/scout.py)
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS lead_kind VARCHAR",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS degree INTEGER",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS score INTEGER",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS why TEXT",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS talking_points JSON",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS project_ref VARCHAR",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS evidence TEXT",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS next_action_at DATE",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_action_at TIMESTAMPTZ",
+        "CREATE INDEX IF NOT EXISTS ix_contacts_next_action_at ON contacts(next_action_at)",
+        "UPDATE contacts SET lead_kind = purpose WHERE lead_kind IS NULL",
+        "UPDATE contacts SET status = 'requested' WHERE status = 'contacted'",
         # contacts belong to an account: the (company, url) dedup key is per account.
         "ALTER TABLE contacts DROP CONSTRAINT IF EXISTS uq_contact_company_url",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_contacts_account_company_url ON contacts(account_id, company, linkedin_url)",

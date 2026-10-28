@@ -14,8 +14,11 @@ import '../theme.css'
 
 const PARTS = [['fit', 'Fit'], ['fresh', 'Fresh'], ['visa_comp', 'Visa / pay'], ['reply', 'Reply odds'], ['stability', 'Stability']]
 const KIND = { founder: 'Founder', hiring_manager: 'Hiring manager', recruiter: 'Recruiter', engineer: 'Engineer' }
-const CONTACT_STATUS = [['new', 'New'], ['contacted', 'Contacted'], ['skip', 'Skip']]
-const CONTACT_DONE = new Set(['contacted', 'replied', 'skip'])   // 'replied' is legacy: shown as contacted
+// the lead pipeline's first steps; the rest (connected, messaged, replied, referral) live on People
+const CONTACT_STATUS = [['new', 'New'], ['requested', 'Requested'], ['skip', 'Skip']]
+const CONTACT_DONE = new Set(['requested', 'connected', 'messaged', 'replied', 'referral', 'snoozed', 'skip'])
+// the lead scout's people (curator/scout.py) are worked on the People screen, not here
+const SCOUTED = new Set(['hiring_post', 'project_fit', 'alumni', 'founder'])
 const DIM = 0.55   // dims the card's text, never the card: opacity would trap the status dropdown under later cards
 const SORTS = [['rank', 'Rank'], ['fit', 'Fit'], ['newest', 'Newest'], ['company', 'Company']]
 const SORT_BY = {
@@ -86,7 +89,7 @@ function ContactCard({ c, job, onStatus, push }) {
           {c.company_note && <Helper size="xs" title={c.company_note} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.company_note}</Helper>}
         </div>
         {c.kind && <Tag style={{ opacity: done ? DIM : 1 }} tone={c.kind === 'hiring_manager' || c.kind === 'founder' ? 'accent' : 'neutral'}>{KIND[c.kind] || c.kind}</Tag>}
-        <Select value={c.status === 'replied' ? 'contacted' : c.status} options={CONTACT_STATUS} onPick={(v) => onStatus(c, v)} width="120px" ariaLabel="Contact status" />
+        <Select value={CONTACT_STATUS.some(([k]) => k === c.status) ? c.status : 'requested'} options={CONTACT_STATUS} onPick={(v) => onStatus(c, v)} width="120px" ariaLabel="Contact status" />
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', opacity: done ? DIM : 1 }}>
         {c.email
@@ -109,6 +112,11 @@ export default function Today() {
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
   const [running, setRunning] = useState(false)
+  const [due, setDue] = useState(null)
+
+  useEffect(() => {
+    api.get('/contacts', { params: { due: true, limit: 200 } }).then(({ data }) => setDue((data || []).length)).catch(() => setDue(null))
+  }, [])
 
   const load = useCallback(() => {
     api.get('/curator/today', { params: { day } })
@@ -168,7 +176,7 @@ export default function Today() {
   const openCoverLetter = (j) => navigate(`/cover-letters?job=${j.id}${j.best_cv_id ? `&resume=${encodeURIComponent(j.best_cv_id)}` : ''}`)
 
   const allJobs = data?.jobs || []
-  const allContacts = data?.contacts || []
+  const allContacts = useMemo(() => (data?.contacts || []).filter((c) => !SCOUTED.has(c.lead_kind)), [data])
   const jobContacts = useMemo(() => allContacts.filter((c) => c.purpose !== 'network'), [allContacts])
   const network = useMemo(() => allContacts.filter((c) => c.purpose === 'network' && !CONTACT_DONE.has(c.status)), [allContacts])
   const applied = allJobs.filter((j) => j.status === 'applied').length
@@ -198,6 +206,7 @@ export default function Today() {
           <Helper>{allJobs.length ? `${allJobs.length} picks · ${applied} applied · ${allContacts.length} people · ranked in ${TZ_SHORT}` : 'The curator runs every morning and saves the best jobs here'}</Helper>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {due ? <Button variant="ghost" onClick={() => navigate('/people')} title="People whose next step is due">{due} network action{due === 1 ? '' : 's'} due</Button> : null}
           <Select value={day} options={dayOpts} onPick={setDay} width="170px" ariaLabel="Day" />
           <Button variant="ai" busy={running} onClick={runNow} disabled={running}>{running ? 'Curating…' : 'Run now'}</Button>
         </div>
@@ -241,7 +250,7 @@ export default function Today() {
               )}
               {doneContacts.length > 0 && (
                 <>
-                  <Heading strong={600} size={16} style={{ marginTop: 14 }}>Contacted / skipped · {doneContacts.length}</Heading>
+                  <Heading strong={600} size={16} style={{ marginTop: 14 }}>Requested / skipped · {doneContacts.length}</Heading>
                   {doneContacts.map((c) => <ContactCard key={c.id} c={c} job={jobById[c.job_id]} onStatus={setContactStatus} push={push} />)}
                 </>
               )}

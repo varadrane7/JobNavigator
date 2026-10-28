@@ -73,6 +73,7 @@ def configure_scheduler():
         cleanup_cron = str(get_setting(db, "cleanup_cron", "") or "").strip()
         reject_cron = str(get_setting(db, "reject_cron", "") or "").strip()
         curate_cron = str(get_setting(db, "curate_cron", "") or "").strip()
+        scout_cron = str(get_setting(db, "network_scout_cron", "") or "").strip()
     finally:
         db.close()
 
@@ -83,7 +84,7 @@ def configure_scheduler():
     # context itself, see `scheduled_job`.)
     run_in_clean_context(
         _register_jobs, scrape_interval, email_interval,
-        backup_cron, digest_cron, h1b_cron, cleanup_cron, reject_cron, curate_cron)
+        backup_cron, digest_cron, h1b_cron, cleanup_cron, reject_cron, curate_cron, scout_cron)
 
 
 OVERDUE_DELAY = timedelta(minutes=2)
@@ -156,7 +157,7 @@ async def run_telemetry_daily():
 
 
 def _register_jobs(scrape_interval, email_interval, backup_cron, digest_cron, h1b_cron,
-                   cleanup_cron, reject_cron, curate_cron=""):
+                   cleanup_cron, reject_cron, curate_cron="", scout_cron=""):
     def _add_cron_job(func, job_id, cron_expr):
         """Parse a 5-field cron expression and add to scheduler. Empty = skip.
         Install-level jobs carry `as_owner` themselves; per-account jobs set their own
@@ -215,6 +216,7 @@ def _register_jobs(scrape_interval, email_interval, backup_cron, digest_cron, h1
     _add_cron_job(run_job_cleanup_auto, "job_cleanup", cleanup_cron)         # per account
     _add_cron_job(run_auto_reject, "auto_reject", reject_cron)               # per account
     _add_cron_job(run_curation, "curate", curate_cron)                       # per account
+    _add_cron_job(run_network_scout, "network_scout", scout_cron)            # per account
 
     logger.info(
         f"Scheduler configured: scrape every {scrape_interval}m, "
@@ -572,6 +574,23 @@ async def run_curation():
     """Daily Top-N curation + outreach (backend/curator/run.py), once per account, in turn:
     each account's own pool, résumés, settings and curator model."""
     await for_each_account("curate", _curate_for_account)
+
+
+@scheduled_job
+async def run_network_scout():
+    """Daily lead scout (backend/curator/scout.py): people to network with, from the persona's
+    networking profile rather than today's jobs; once per account, in turn."""
+    await for_each_account("network_scout", _scout_for_account)
+
+
+async def _scout_for_account():
+    from backend.job_monitor import tracked_run, JobAlreadyRunningError
+    from backend.curator.scout import run_network_scout as _scout, summary_text
+    try:
+        async with tracked_run("network_scout", "scheduler") as run:
+            run.summary = summary_text(await _scout())
+    except JobAlreadyRunningError:
+        logger.info("Lead scout already running, skipping")
 
 
 async def _curate_for_account():

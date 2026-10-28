@@ -392,7 +392,7 @@ async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[d
                               "location": p.get("location"),
                               "email": email, "email_confidence": conf, "source": p.get("source"),
                               "note": d.get("note"), "email_draft": d.get("email_draft"), "found_on": today,
-                              "purpose": "job"})
+                              "purpose": "job", "lead_kind": "job"})
     db = SessionLocal()
     try:
         saved = []
@@ -477,7 +477,7 @@ async def find_network_contacts(companies: list[str], want_total: int) -> list[d
                               "kind": p.get("kind"), "linkedin_url": p["url"], "location": p.get("location"),
                               "email": email, "email_confidence": conf, "source": p.get("source"),
                               "note": d.get("note"), "email_draft": d.get("email_draft"), "found_on": today,
-                              "purpose": "network"})
+                              "purpose": "network", "lead_kind": "network"})
     db = SessionLocal()
     try:
         saved = []

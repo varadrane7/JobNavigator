@@ -25,6 +25,7 @@ _NODES = {
     "preferences",
     "resume_content",
     "qa_bank",
+    "networking",
 }
 
 
@@ -38,6 +39,7 @@ def _to_dict(p: Persona) -> dict:
         "preferences": p.preferences or {},
         "resume_content": p.resume_content or {},
         "qa_bank": p.qa_bank or [],
+        "networking": p.networking or {},
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
     }

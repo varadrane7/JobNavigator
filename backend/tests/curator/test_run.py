@@ -116,7 +116,7 @@ def test_today_endpoint_and_contact_patch(api_client, test_db):
     assert body["timezone"] and body["jobs"][0]["rank"] == 1 and body["jobs"][0]["apply_window"] == "now"
     assert body["contacts"][0]["name"] == "Jane Doe"
     r = api_client.patch(f"/api/contacts/{c.id}", json={"status": "contacted"})
-    assert r.status_code == 200 and r.json()["status"] == "contacted"
+    assert r.status_code == 200 and r.json()["status"] == "requested"   # the old name maps to the pipeline step
     assert api_client.patch(f"/api/contacts/{c.id}", json={"status": "bogus"}).status_code == 422
     assert api_client.patch("/api/contacts/not-a-uuid", json={"status": "skip"}).status_code == 404
 

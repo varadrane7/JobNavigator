@@ -58,7 +58,16 @@ def _contact_out(c: Contact) -> dict:
         "email_confidence": c.email_confidence, "source": c.source, "location": c.location, "note": c.note,
         "email_draft": c.email_draft, "status": c.status, "purpose": c.purpose or "job",
         "found_on": c.found_on.isoformat() if c.found_on else None,
+        "lead_kind": c.lead_kind or c.purpose or "job", "degree": c.degree, "score": c.score, "why": c.why,
+        "talking_points": c.talking_points or [], "project_ref": c.project_ref, "evidence": c.evidence,
+        "next_action_at": c.next_action_at.isoformat() if c.next_action_at else None,
+        "last_action_at": c.last_action_at.isoformat() if c.last_action_at else None,
     }
+
+
+# The lead pipeline (People screen). "contacted" is the old name of "requested".
+CONTACT_STATUSES = ("new", "requested", "connected", "messaged", "replied", "referral", "snoozed", "skip")
+_SNOOZE_DAYS = 14
 
 
 @router.get("/curator/today", summary="A day's curated Top list and contacts")
@@ -86,28 +95,79 @@ class ContactPatch(BaseModel):
     email: Optional[str] = None
     note: Optional[str] = None
     email_draft: Optional[str] = None
+    next_action_at: Optional[date] = None
+    talking_points: Optional[list[str]] = None
 
 
-@router.patch("/contacts/{contact_id}", summary="Update a contact")
+@router.patch("/contacts/{contact_id}", summary="Update a contact (status moves the lead along the pipeline)")
 def patch_contact(contact_id: str, body: ContactPatch, db: Session = Depends(get_db)):
+    from datetime import timedelta
     from backend.accounts.owned import get_owned_or_404
+    from backend.models.db import utcnow
     c = get_owned_or_404(db, Contact, contact_id, "Contact not found")
     data = body.model_dump(exclude_unset=True)
-    if "status" in data and data["status"] not in ("new", "contacted", "replied", "skip"):
-        raise HTTPException(422, "status must be new, contacted, replied or skip")
+    if data.get("status") == "contacted":
+        data["status"] = "requested"
+    if "status" in data and data["status"] not in CONTACT_STATUSES:
+        raise HTTPException(422, "status must be one of " + ", ".join(CONTACT_STATUSES))
+    if "status" in data and data["status"] != c.status:
+        c.last_action_at = utcnow()
+        if "next_action_at" not in data:
+            # a step taken clears what was due; snoozing brings it back later; the scout's
+            # follow-up pass (curator/scout.py) sets the next one when nothing happens
+            data["next_action_at"] = (local_today() + timedelta(days=_SNOOZE_DAYS)
+                                      if data["status"] == "snoozed" else None)
     for k, v in data.items():
         setattr(c, k, v)
     db.commit()
     return _contact_out(c)
 
 
-@router.get("/contacts", summary="Contacts, newest first")
-def list_contacts(status: Optional[str] = None, limit: Annotated[int, Query(ge=1, le=500)] = 100,
+@router.get("/contacts", summary="Contacts and leads")
+def list_contacts(status: Optional[str] = None, kind: Optional[str] = None, due: bool = False,
+                  purpose: Optional[str] = None, limit: Annotated[int, Query(ge=1, le=500)] = 200,
                   db: Session = Depends(get_db)):
+    """`due`: leads whose next step is due today or earlier (the People screen's first tab);
+    `kind`: lead_kind (hiring_post, project_fit, alumni, job, network)."""
+    from sqlalchemy import or_
     q = db.query(Contact)
     if status:
-        q = q.filter(Contact.status == status)
-    return [_contact_out(c) for c in q.order_by(Contact.created_at.desc()).limit(limit).all()]
+        q = q.filter(Contact.status.in_(status.split(",")))
+    if kind:
+        q = q.filter(or_(Contact.lead_kind.in_(kind.split(",")), Contact.purpose.in_(kind.split(","))))
+    if purpose:
+        q = q.filter(Contact.purpose == purpose)
+    if due:
+        q = q.filter(Contact.next_action_at.isnot(None), Contact.next_action_at <= local_today(),
+                     Contact.status.notin_(("skip", "referral")))
+        q = q.order_by(Contact.next_action_at, Contact.score.desc().nullslast())
+    else:
+        q = q.order_by(Contact.created_at.desc())
+    return [_contact_out(c) for c in q.limit(limit).all()]
+
+
+@router.post("/scout/run", status_code=202, summary="Run the lead scout now")
+async def scout_run():
+    from backend.curator.scout import run_network_scout, summary_text
+
+    async def _do():
+        return summary_text(await run_network_scout())
+    try:
+        return {"run_id": launch_background("network_scout", _do, trigger="manual"), "status": "running"}
+    except JobAlreadyRunningError as e:
+        return JSONResponse(status_code=409, content={"detail": f"{e.job_type} is already running"})
+
+
+@router.get("/linkedin/usage", summary="Today's LinkedIn requests and cooldowns per session")
+def linkedin_usage():
+    from backend.curator import li_budget
+    return li_budget.status()
+
+
+@router.post("/persona/networking/sync", summary="Refresh the persona's projects from GitHub")
+async def persona_sync(force: bool = False):
+    from backend.curator.projects_sync import sync_projects
+    return await sync_projects(force=force)
 
 
 @router.get("/search/test", summary="Run one SearXNG query (checks the search service)")

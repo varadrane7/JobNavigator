@@ -1390,6 +1390,7 @@ SCHEDULE_NAMES = {
     "auto_reject": "Auto-reject stale applications",
     "telemetry_daily": "Send telemetry (what Settings › Telemetry allows)",
     "curate": "Curate today's Top jobs + contacts",
+    "network_scout": "Scout people to network with (persona, not jobs)",
 }
 
 
@@ -1409,6 +1410,7 @@ def get_scheduler_jobs():
         "job_cleanup": ("/db/cleanup", "job_cleanup"),
         "auto_reject": ("/auto-reject/run", "auto_reject"),
         "curate": ("/curator/run", "curate"),
+        "network_scout": ("/scout/run", "network_scout"),
     }
 
     jobs = scheduler.get_jobs()

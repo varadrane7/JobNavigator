@@ -329,8 +329,20 @@ class Contact(AccountScoped, Base):
     location = Column(String, nullable=True)             # as the profile shows it ("New York City Metropolitan Area")
     note = Column(Text, nullable=True)                   # draft LinkedIn note (<300 chars)
     email_draft = Column(Text, nullable=True)            # draft cold email
-    status = Column(String, default="new")               # new | contacted | replied | skip
+    # new | requested (connection sent) | connected | messaged | replied | referral | snoozed | skip
+    # ("contacted", from before the lead pipeline, reads as requested)
+    status = Column(String, default="new")
     purpose = Column(String, default="job")              # job | network
+    # The lead scout (curator/scout.py) finds people independent of jobs:
+    lead_kind = Column(String, nullable=True)            # job | network | hiring_post | project_fit | alumni | founder
+    degree = Column(Integer, nullable=True)              # 1 / 2 / 3 in the user's own network (main session), None unknown
+    score = Column(Integer, nullable=True)               # 0..100, how worth the time this person is
+    why = Column(Text, nullable=True)                    # one line: why this person
+    talking_points = Column(JSON, nullable=True)         # ["...", ...]
+    project_ref = Column(String, nullable=True)          # the persona project to show them
+    evidence = Column(Text, nullable=True)               # the post / snippet that surfaced them
+    next_action_at = Column(Date, nullable=True, index=True)   # due date of the next step (follow-up)
+    last_action_at = Column(DateTime(timezone=True), nullable=True)
     found_on = Column(Date, nullable=True, index=True)   # APP_TZ date
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
@@ -796,6 +808,9 @@ class Persona(AccountScoped, Base):
     preferences = Column(JSON, default=dict)
     resume_content = Column(JSON, default=dict)
     qa_bank = Column(JSON, default=list)
+    # Who the user is to the people they network with (curator/scout.py): every project with what it
+    # shows, pitch, affinities (schools, past employers), asks, visa note. Projects sync from GitHub.
+    networking = Column(JSON, default=dict)
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
