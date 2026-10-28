@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
+import { track } from '../telemetry'
 import { useToasts, ToastStack } from '../Toast'
 import ConfirmDialog from '../ConfirmDialog'
 import CopyFrom from '../CopyFrom'
@@ -8,6 +9,7 @@ import { useSettled, useWarm, NBSP, DASH } from '../hooks'
 import { Button, Card, Check, CopyGlyph, Dot, FlaskGlyph, FooterRow, HeaderRow, Heading, Helper, IconButton, Input, Label, Link, Menu, MenuItem, ModalPanel, PageTitle, Pill, Rule, Segmented, Select, Spinner, TableHead, Tag } from '../ui'
 import { BLOCKED_BADGE, MODE_BLOCKS, MODE_TERMS, SOURCE_BLOCKS } from '../sourceBlocks'
 import { useApifyBoards, boardLabel, testCost, usd } from '../apifyBoards'
+import { MODE_OPTIONS, defaultSources, isExtensionMode, isTestable, modeBadge, needsQuery } from '../searchModes'
 import '../theme.css'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -43,41 +45,17 @@ const errText = (e, fallback) => {
   return fallback
 }
 
-// mode → [badge label, badge class]. The legacy `url` mode was removed from the
-// backend dispatch, so it is no longer rendered here either.
-const MODES = {
-  keyword: ['JOBSPY', 'sm-keyword'],
-  levels_fyi: ['LEVELS.FYI', 'sm-levels'],
-  linkedin_personal: ['LINKEDIN PERSONAL', 'sm-lipersonal'],
-  jobright: ['JOBRIGHT.AI', 'sm-jobright'],
-  freehire: ['FREEHIRE.ME', 'sm-freehire'],
-  apify: ['APIFY', 'sm-apify'],
-  caribbeanjobs: ['CARIBBEANJOBS.COM', 'sm-caribbeanjobs'],
-  trulyremote: ['TRULYREMOTEWORK.COM', 'sm-trulyremote'],
-  linkedin_extension: ['EXTENSION', 'sm-extension'],
-  extension: ['EXTENSION', 'sm-extension'],
-}
-const MODE_OPTIONS = [
-  ['keyword', 'Keyword (JobSpy)'],
-  ['levels_fyi', 'Levels.fyi'],
-  ['linkedin_personal', 'LinkedIn Personal'],
-  ['jobright', 'Jobright.ai'],
-  ['freehire', 'freehire.me'],
-  ['apify', 'Apify'],
-  ['caribbeanjobs', 'CaribbeanJobs.com'],
-  ['trulyremote', 'TrulyRemoteWork.com'],
-]
+// Labels, badges, the Mode list and which modes are built in, testable or need a query
+// come from src/searchModes.js (the backend's table is backend/scraper/search_modes.py).
+
 // /monitor/active carries every background job; only POST /searches/{id}/run
 // tags its run with job_type 'search_run' (routes_searches.py) — filter on that.
 const isSearchRun = (r) => r?.job_type === 'search_run'
-const EXT_MODES = ['linkedin_extension', 'extension']
-const isExt = (m) => EXT_MODES.includes(m)
-const TESTABLE = ['keyword', 'levels_fyi', 'linkedin_personal', 'jobright', 'freehire', 'apify', 'caribbeanjobs', 'trulyremote']
+const isExt = isExtensionMode
 // Keyword sources have no account-based "recommended" feed, so a term or a pre-filtered URL is
 // what there is to search for. Run/Test are blocked until one is set, rather than launching a
 // run that quietly finds nothing.
-const NEEDS_QUERY = ['freehire', 'caribbeanjobs']
-const configError = (s) => (NEEDS_QUERY.includes(s.search_mode)
+const configError = (s) => (needsQuery(s.search_mode)
   && !(`${s.search_term || ''}`.trim() || `${s.direct_url || ''}`.trim())
   ? 'Add a search term or a URL before running' : null)
 
@@ -124,6 +102,12 @@ const noteFor = (mode) => {
   return null
 }
 
+// share of the search's jobs (last 90 days) with a direct link to the employer; said from five jobs on
+const directRate = (s) => {
+  const r = s.direct_rate
+  return r && r.total >= 5 ? ` · ${Math.round((100 * r.direct) / r.total)}% direct links` : ''
+}
+
 // one-line summary of what this search does; `boards` names the Apify boards
 const summaryOf = (s, boards = []) => {
   const last = s.last_run_at ? ` · last run ${ago(s.last_run_at)}` : ''
@@ -137,7 +121,7 @@ const summaryOf = (s, boards = []) => {
     if ((s.sources || []).length) bits.push((s.sources || []).join(', '))
     return bits.join(' · ') + last
   }
-  if (m === 'levels_fyi') return `${short(s.direct_url)} · ${s.max_pages || 50} pages${last}`
+  if (m === 'levels_fyi') return `${s.direct_url ? short(s.direct_url) : 'No levels.fyi URL yet'} · ${s.max_pages || 50} pages${last}`
   if (m === 'linkedin_personal') return `Collections: ${((s.sources || []).length ? s.sources : ['recommended', 'top-applicant']).join(', ')} · credentials in Settings${last}`
   if (m === 'jobright') {
     const bits = [s.search_term ? `“${s.search_term}”` : 'AI recommendations', `max ${s.results_wanted || 100}`]
@@ -187,7 +171,7 @@ const draftOf = (s) => ({
 })
 // New search opens on Light, matching the Add-company modal — keeps the one
 // control that spends money per scraped job consistent across creation flows.
-const NEW_DRAFT = draftOf({ sources: ['linkedin', 'indeed', 'zip_recruiter', 'google'], title_exclude_keywords: ['intern', 'junior', 'associate'], auto_scoring_depth: 'light' })
+const NEW_DRAFT = draftOf({ sources: defaultSources('keyword'), title_exclude_keywords: ['intern', 'junior', 'associate'], auto_scoring_depth: 'light' })
 
 // Numeric bounds live in one place so an input's min/max and the payload clamp
 // can't drift apart.
@@ -301,10 +285,7 @@ function ConfigForm({ d, set }) {
   } else {
     fields.push(<Cell key="mode" label="Mode" value={m} options={MODE_OPTIONS} onChange={(v) => {
       const patch = { search_mode: v }
-      if (v === 'linkedin_personal') patch.sources = ['recommended', 'top-applicant']
-      else if (v === 'jobright') patch.sources = ['recommended']
-      else if (v === 'keyword') patch.sources = ['linkedin', 'indeed', 'zip_recruiter', 'google']
-      else if (v === 'apify') patch.sources = apifyBoards.slice(0, 1).map((b) => b.value)
+      patch.sources = v === 'apify' ? apifyBoards.slice(0, 1).map((b) => b.value) : defaultSources(v)
       set(patch)
     }} />)
   }
@@ -315,7 +296,8 @@ function ConfigForm({ d, set }) {
         sub="A city or a region. Country adds the country. For remote work set Remote and leave this empty." />,
       <Cell key="ctry" label="Country" value={d.country} options={countries} onChange={(v) => set({ country: v })}
         sub="The only country source. Every board receives it." />,
-      <Cell key="rem" label="Remote" value={d.is_remote} options={[['', 'Any'], ['true', 'Remote only'], ['false', 'On-site only']]} onChange={(v) => set({ is_remote: v })} />,
+      <Cell key="rem" label="Remote" value={d.is_remote} options={[['', 'Any'], ['true', 'Remote only'], ['false', 'On-site only']]} onChange={(v) => set({ is_remote: v })}
+        sub="Indeed, Glassdoor and Google apply it. LinkedIn ignores it without login, so LinkedIn rows can be on-site." />,
       <Cell key="jt" label="Job type" value={d.job_type} options={[['fulltime', 'Full-time'], ['parttime', 'Part-time'], ['contract', 'Contract']]} onChange={(v) => set({ job_type: v })} />,
       <Cell key="ho" label="Hours old · 0–720" mono type="number" min={BOUNDS.hours_old[0]} max={BOUNDS.hours_old[1]} value={d.hours_old} onChange={(v) => set({ hours_old: v })} />,
       <Cell key="rw" label="Results wanted · 1–500" mono type="number" min={BOUNDS.results_wanted[0]} max={BOUNDS.results_wanted[1]} value={d.results_wanted} onChange={(v) => set({ results_wanted: v })} />,
@@ -347,7 +329,8 @@ function ConfigForm({ d, set }) {
       <Cell key="loc" label="Location" value={d.location} onChange={(v) => set({ location: v })} placeholder="e.g. Austin"
         sub="A city or a region. Empty = the whole country." />,
       <Cell key="ctry" label="Country" value={d.country} options={countries} onChange={(v) => set({ country: v })} />,
-      <Cell key="rem" label="Remote" value={d.is_remote} options={[['', 'Any'], ['true', 'Remote only']]} onChange={(v) => set({ is_remote: v })} />,
+      <Cell key="rem" label="Remote" value={d.is_remote} options={[['', 'Any'], ['true', 'Remote only']]} onChange={(v) => set({ is_remote: v })}
+        sub="LinkedIn ignores it without login. On LinkedIn, Remote only drops the postings that say hybrid or on-site." />,
       <Cell key="ho" label="Hours old · 0–720" mono type="number" min={BOUNDS.hours_old[0]} max={BOUNDS.hours_old[1]} value={d.hours_old} onChange={(v) => set({ hours_old: v })}
         sub="Rounded up to the steps of each board (see Boards)" />,
       <Cell key="rw" label="Results wanted · 1–200 per board" mono type="number" min={BOUNDS.results_wanted_apify[0]} max={BOUNDS.results_wanted_apify[1]} value={d.results_wanted} onChange={(v) => set({ results_wanted: v })} />,
@@ -433,8 +416,8 @@ function ConfigForm({ d, set }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <Label>Import rules</Label>
           <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 6, minHeight: 31 }}>
-            <Check checked={d.exclude_active_companies} label="Skip active companies"
-              title="Their Company scrapes already bring these postings"
+            <Check checked={d.exclude_active_companies} label="Skip my active companies"
+              title="Leaves out jobs from companies you scrape (active in Companies, aliases included): their own careers page already brings those in"
               onChange={(v) => set({ exclude_active_companies: v })} />
             {m === 'jobright' && <Check checked={d.require_salary} label="Require salary" title="Drop results without a listed salary"
               onChange={(v) => set({ require_salary: v })} />}
@@ -492,7 +475,7 @@ export default function Searches() {
   const { ready } = useSettled([
     () => load(),
     () => loadAux(),
-    () => api.get('/monitor/active').then(({ data }) => { const m = {}; (data || []).filter(isSearchRun).forEach((r) => { if (r.scope_key) m[r.scope_key] = true }); setRunning(m) }).catch(() => { /* silent: poller — the interval below retries */ }),
+    () => api.get('/monitor/active').then(({ data }) => { const m = {}; (data || []).filter(isSearchRun).forEach((r) => { if (r.scope_key) m[r.scope_key] = r.waiting ? 'waiting' : true }); setRunning(m) }).catch(() => { /* silent: poller — the interval below retries */ }),
   ], reload)
 
   // One interval for the life of the screen — state and callbacks are read via
@@ -507,13 +490,13 @@ export default function Searches() {
       try {
         const { data } = await api.get('/monitor/active')
         if (!mounted.current) return
-        const m = {}; (data || []).filter(isSearchRun).forEach((r) => { if (r.scope_key) m[r.scope_key] = true })
+        const m = {}; (data || []).filter(isSearchRun).forEach((r) => { if (r.scope_key) m[r.scope_key] = r.waiting ? 'waiting' : true })
         setRunning((prev) => {
           const pk = Object.keys(prev)
           if (pk.some((k) => !m[k])) { cbRef.current.load(); cbRef.current.loadAux() }
           // keep the same object when nothing changed - otherwise every tick
           // re-rendered the whole list for nothing
-          return (pk.length === Object.keys(m).length && pk.every((k) => m[k])) ? prev : m
+          return (pk.length === Object.keys(m).length && pk.every((k) => m[k] === prev[k])) ? prev : m
         })
       } catch { /* retry */ }
     }, 3000)
@@ -609,7 +592,7 @@ export default function Searches() {
     if (busy) return
     if (!newDraft.name.trim()) { pushToast({ kind: 'error', msg: 'Name is required' }); return }
     setBusy('new')
-    try { const { data } = await api.post('/searches', toPayload(newDraft)); setNewOpen(false); setNewDraft(NEW_DRAFT); load(); loadAux(); bumpCounts(); notePaused(data, 'created') }
+    try { const { data } = await api.post('/searches', toPayload(newDraft)); track('search_created', { mode: newDraft.search_mode }); setNewOpen(false); setNewDraft(NEW_DRAFT); load(); loadAux(); bumpCounts(); notePaused(data, 'created') }
     catch (e) { fail(e, 'Could not create this search') }
     finally { if (mounted.current) setBusy(null) }
   }
@@ -632,7 +615,7 @@ export default function Searches() {
   const runNow = async (s) => {
     if (running[s.id] || configError(s)) return
     setRunning((m) => ({ ...m, [s.id]: true }))
-    try { await api.post(`/searches/${s.id}/run`) } catch (e) {
+    try { await api.post(`/searches/${s.id}/run`); track('search_run', { mode: s.search_mode }) } catch (e) {
       // The scheduled scrape is running: nothing was started, so drop the spinner.
       if (e.response?.data?.detail === 'scheduled_scrape_running') {
         pushToast({ kind: 'error', msg: 'The scheduled scrape is running — try again when it finishes' })
@@ -720,6 +703,7 @@ export default function Searches() {
   const runTest = async (s) => {
     if (testingId || configError(s)) return               // one Test at a time
     setMenuFor(null); setTestingId(s.id); setTestTab('all')
+    track('search_tested', { mode: s.search_mode })
     writeTestRec({ id: s.id, name: s.name })    // in flight, no run id yet (the inline modes never get one)
     try {
       const res = await api.post(`/searches/${s.id}/test`, null, { timeout: 30000 })
@@ -753,7 +737,7 @@ export default function Searches() {
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           <CopyFrom kind="searches" pushToast={pushToast} onCloned={async (row) => {
-            await load(); loadAux(); bumpCounts()
+            await load(); loadAux(); bumpCounts(); notePaused(row, 'was copied')   // R30 I-04
             setNewOpen(false); setMenuFor(null); setEditing(row.id); setDraft(draftOf(row))
           }} />
           <Button onClick={() => { setNewOpen((v) => !v); setEditing(null); setMenuFor(null) }}>+ New search</Button>
@@ -787,14 +771,14 @@ export default function Searches() {
           const warn = warnOf(s)
           const ext = isExt(s.search_mode)
           const spin = !!running[s.id]
-          const [badge, badgeCls] = MODES[s.search_mode] || [String(s.search_mode || '?').toUpperCase(), 'sm-extension']
+          const [badge, badgeCls] = modeBadge(s.search_mode)
           const depth = s.auto_scoring_depth || 'off'
           const dep = DEPTHS.find((x) => x.id === depth)
           const isOpen = editing === s.id
           const testBlocked = !!testingId && testingId !== s.id
           const mutedWarn = mutedWarnOf(s)
           const cfgErr = configError(s)
-          const summary = spin ? 'running now. Results appear in the Job Feed as they are found.' : (cfgErr || warn || mutedWarn || summaryOf(s, apifyBoards))
+          const summary = spin ? 'running now. Results appear in the Job Feed as they are found.' : (cfgErr || warn || mutedWarn || summaryOf(s, apifyBoards) + directRate(s))
           const summaryFg = spin ? 'var(--accent)' : (cfgErr || warn) ? 'var(--warn)' : 'var(--muted)'
           return (
             /* Same card hover as Résumés/Cover Letters, suppressed while open; a warned
@@ -850,13 +834,13 @@ export default function Searches() {
                   <span style={{ flex: '0 0 169px', marginLeft: -11, display: 'flex', justifyContent: 'flex-end', gap: 3, position: 'relative' }} onClick={(e) => e.stopPropagation()}>
                     {/* ui: keep — running-state box: these 25px pills are padded 0 9, and the running "Running" pill was measured at that width; canonical 0 10 would widen it 2px. */}
                     <Pill size="xs" line="inherit" disabled={!!cfgErr} onClick={() => runNow(s)}
-                      title={cfgErr || (spin ? 'Run in progress — the summary line updates when it finishes' : `Run ${s.name} now, outside the schedule`)}
+                      title={cfgErr || (running[s.id] === 'waiting' ? 'Queued: another scrape is running, this one starts when it finishes' : spin ? 'Run in progress — the summary line updates when it finishes' : `Run ${s.name} now, outside the schedule`)}
                       style={{ padding: '0 9px', ...(spin ? { color: 'var(--pill-busy-ink)' } : null) }}>
                       {spin ? <Spinner /> : <span style={{ fontSize: 11 }}>↻</span>}
-                      {spin ? 'Running' : 'Run'}
+                      {running[s.id] === 'waiting' ? 'Waiting' : spin ? 'Running' : 'Run'}
                     </Pill>
                     {/* ui: keep — running-state box: 0 9 like its twin above, so the spinner branch keeps the width it was measured at. */}
-                    {TESTABLE.includes(s.search_mode) && (
+                    {isTestable(s.search_mode) && (
                       <Pill size="xs" line="inherit" disabled={testBlocked || !!cfgErr} onClick={() => askTest(s)}
                         title={cfgErr || (testBlocked ? 'A test is already running' : 'Preview run. Shows results and why each job was kept or filtered. Saves nothing.')}
                         style={{ padding: '0 9px' }}>
@@ -1070,7 +1054,7 @@ function TestModal({ test, tab, setTab, onClose }) {
                       {j.reason && <Helper title={j.reason} style={{ minWidth: 0, color: ok ? 'var(--muted)' : 'var(--bad)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{j.reason}</Helper>}
                       {/* A kept row the body scan couldn't run on isn't a promise — say which
                           check is missing rather than let the run silently mark it `ignored`. */}
-                      {ok && needsDesc(j) && <Helper title="The run scans the description for body_exclusion_phrases; this preview didn’t have one" style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>body check needs the description</Helper>}
+                      {ok && needsDesc(j) && <Helper title="The preview had no posting text, so the body exclusion phrases were not checked; a run checks them" style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>posting body text check was skipped</Helper>}
                     </span>
                     <Helper title={j.location} style={{ flex: '0 0 116px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 8 }}>{j.location}</Helper>
                     <span title={j.salary || ''} style={{ flex: '0 0 120px', textAlign: 'right', fontFamily: 'var(--numeral-face)', fontSize: 9.5, color: 'var(--text-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{j.salary || '—'}</span>
@@ -1104,7 +1088,7 @@ function TestModal({ test, tab, setTab, onClose }) {
                 )}
                 {nBodyExcluded > 0 && <> · <b style={{ color: 'var(--warn)' }}>{nBodyExcluded} would be ignored (body phrases)</b></>}
                 {' · '}{nRaw} found{d.duration != null && <span style={{ color: 'var(--muted)' }}> · {d.duration}s</span>}
-                {nBodyUnchecked > 0 && <span style={{ color: 'var(--muted)' }}> · {nBodyUnchecked} not body-checked (needs the description)</span>}
+                {nBodyUnchecked > 0 && <span style={{ color: 'var(--muted)' }}> · {nBodyUnchecked} with the posting body text check skipped</span>}
               </span>
               <Pill onClick={onClose} style={{ marginLeft: 'auto' }}>Close</Pill>
             </FooterRow>

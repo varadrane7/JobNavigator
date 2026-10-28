@@ -10,6 +10,8 @@ from sqlalchemy.exc import IntegrityError
 
 from backend.models.db import SessionLocal, Job, Search, get_existing_external_ids
 from backend.scraper._shared.dedup import make_external_id, make_content_hash
+from backend.scraper._shared.posting_links import counts_as_new
+from backend.scraper._shared.postings import resolve_short_links
 from backend.scraper._shared.browser import _get_browser, _new_page, _close_page
 from backend.scraper._shared.urls import _clean_application_url
 from backend.scraper._shared.filters import _apply_company_filters
@@ -57,6 +59,17 @@ def _parse_levelsfyi_salary(location_text: str) -> tuple[str, str | None, int | 
     return (location, work_arrangement, salary_min, salary_max)
 
 
+# Ids were 18 digits until 2026-10-09 and are base-36 since ("2ci7r6weraiqb"); \d+ kept only the
+# leading digits, which gave a 404 job page and merged unrelated jobs into one id.
+_JOB_ID_RE = re.compile(r"[?&]jobId=([A-Za-z0-9]+)")
+
+
+def _levelsfyi_job_id(href: str) -> str | None:
+    """The job id from a levels.fyi link, or None."""
+    m = _JOB_ID_RE.search(href or "")
+    return m.group(1) if m else None
+
+
 async def _levelsfyi_extract_jobs_from_card(card, page, seen_ids: set, debug: bool = False):
     """Extract all job links from a single company card. Returns (jobs, rejected)."""
     jobs = []
@@ -78,10 +91,9 @@ async def _levelsfyi_extract_jobs_from_card(card, page, seen_ids: set, debug: bo
         if not href:
             continue
 
-        job_id_match = re.search(r'jobId=(\d+)', href)
-        if not job_id_match:
+        job_id = _levelsfyi_job_id(href)
+        if not job_id:
             continue
-        job_id = job_id_match.group(1)
         if job_id in seen_ids:
             continue
         seen_ids.add(job_id)
@@ -329,10 +341,10 @@ async def _scrape_levelsfyi(url: str, browser=None, debug: bool = False, max_pag
                 async def _worker(_tab_idx, pg, job_slice):
                     nonlocal enriched
                     for j in job_slice:
-                        job_id_match = re.search(r'jobId=(\d+)', j["url"])
-                        if not job_id_match:
+                        job_id = _levelsfyi_job_id(j["url"])
+                        if not job_id:
                             continue
-                        detail_url = f"https://www.levels.fyi/jobs?jobId={job_id_match.group(1)}"
+                        detail_url = f"https://www.levels.fyi/jobs?jobId={job_id}"
                         try:
                             detail = await _levelsfyi_extract_detail(pg, detail_url)
                             if detail.get("application_url"):
@@ -515,6 +527,7 @@ async def run(search: Search, shared=None) -> dict:
                 j["company"] for j in kept_jobs
                 if make_external_id(j["company"], j["title"], j.get("application_url") or j["url"]) not in existing_ids
             ])
+            landed = await resolve_short_links([j.get("application_url") or j["url"] for j in kept_jobs])
             for j in kept_jobs:
                 # Use application_url as primary URL if available, fallback to levels.fyi URL
                 apply_url = j.get("application_url") or ""
@@ -539,6 +552,7 @@ async def run(search: Search, shared=None) -> dict:
                     company=j["company"],
                     title=j["title"],
                     url=job_url,
+                    apply_url=landed.get(job_url),
                     source="levels_fyi",
                     search_id=search.id,
                     location=j.get("location") or None,
@@ -580,7 +594,7 @@ async def run(search: Search, shared=None) -> dict:
                     with db.begin_nested():
                         db.add(job)
                         db.flush()
-                    new_jobs += 1
+                    new_jobs += counts_as_new(job)
                     existing_ids.add(ext_id)
                 except IntegrityError:
                     logger.debug(f"Duplicate external_id for '{j['title']}' at {j.get('company')}, skipping")

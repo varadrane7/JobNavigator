@@ -21,6 +21,7 @@ from backend.accounts.settings import get_setting
 from backend.api._input import str_field
 from backend.analyzer.model_json import UNPARSEABLE_MESSAGE, ModelReplyError, parse_model_json
 from backend.job_monitor import launch_background, JobAlreadyRunningError
+from backend.scraper._shared.link_kinds import job_link
 
 
 # ── Persona experience merge helpers ─────────────────────────────────────────
@@ -265,6 +266,11 @@ def _load_template_fonts(fonts_dir_str: str) -> dict:
     return fonts
 
 
+# The sections a new résumé has (frontend ResumeSections.jsx EMPTY): what a template may read.
+_EMPTY_RESUME = {"header": {"name": "", "contact_items": []}, "summary": "", "experience": [],
+                 "skills": {}, "education": [], "projects": [], "publications": []}
+
+
 # Reorderable/renamable body sections, in their historical default order. The
 # header is not included here because it is fixed at the top of every template.
 DEFAULT_SECTION_ORDER = [
@@ -332,6 +338,12 @@ def _render_html(json_data: dict, template_name: str, page_format: str,
     # json_data may carry internal metadata under "_"-prefixed keys (_tailor_context,
     # _score) that are never résumé content — keep them out of the template namespace so they can't render or collide with a template global.
     content = {k: v for k, v in (json_data or {}).items() if not str(k).startswith("_")}
+    # A résumé made through the API or an import may lack sections the templates read: render
+    # them empty, as the editor's new résumé has them, instead of failing with a 500.
+    content = {**_EMPTY_RESUME, **content}
+    if not isinstance(content.get("header"), dict):
+        content["header"] = dict(_EMPTY_RESUME["header"])
+    content["header"] = {**_EMPTY_RESUME["header"], **content["header"]}
     content = _render_safe_links(content)
     html = template.render(
         **content,
@@ -812,6 +824,24 @@ def resume_shelf(db: Session = Depends(get_db)):
             "persona": persona, "archived": archived, "archived_count": len(archived)}
 
 
+# R30 D-09: a résumé is a JSON object of a few dozen KB; an import or paste of hundreds of KB
+# made every preview render take 20 s, and a non-object broke the editor and the templates.
+JSON_DATA_MAX_BYTES = 512 * 1024
+
+
+def checked_json_data(value) -> dict:
+    """`json_data` as stored, or 400: an object (None means empty) of at most 512 KB."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=400, detail="json_data must be an object")
+    size = len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+    if size > JSON_DATA_MAX_BYTES:
+        raise HTTPException(status_code=400,
+                            detail=f"Résumé too large ({size // 1024} KB, max {JSON_DATA_MAX_BYTES // 1024} KB)")
+    return value
+
+
 @router.post("", status_code=201)
 def create_resume(body: dict, db: Session = Depends(get_db)):
     """Create a new resume from name/is_base/parent_id/job_id/template/page_format/json_data."""
@@ -829,7 +859,7 @@ def create_resume(body: dict, db: Session = Depends(get_db)):
         job_id=owned_id_or_404(db, Job, body.get("job_id")),
         template=body.get("template", _default_template_id()),
         page_format=body.get("page_format", "letter"),
-        json_data=body.get("json_data", {}),
+        json_data=checked_json_data(body.get("json_data")),
     )
     db.add(resume)
     db.commit()
@@ -903,7 +933,7 @@ async def tailor_resume(body: dict, db: Session = Depends(get_db)):
     # text (description → live fetch → cached page) later, so this just confirms something exists without the slow fetch.
     if job_id:
         job = get_owned_or_404(db, Job, job_id)
-        if not ((job.description or "").strip() or (job.url or "").strip() or (job.cached_page_text or "").strip()):
+        if not ((job.description or "").strip() or (job_link(job) or "").strip() or (job.cached_page_text or "").strip()):
             raise HTTPException(400, "Job has no description, URL, or cached page to tailor from")
 
     # Fast-fail: the prompt template must exist
@@ -966,9 +996,9 @@ async def _resolve_tailoring_jd(job, db=None) -> str:
     """
     if (job.description or "").strip():
         return job.description
-    if (job.url or "").strip():
+    if (job_link(job) or "").strip():
         from backend.scraper.ats._descriptions import _fetch_job_description
-        fetched = await _fetch_job_description(job.url)
+        fetched = await _fetch_job_description(job_link(job))
         if fetched and fetched.strip():
             job.description = fetched
             if db is not None:
@@ -1038,7 +1068,7 @@ async def _tailor_impl(base_resume_id: str, job_id: str | None, job_description_
                     raise RuntimeError(f"Tailor: job {job_id} missing at execution time")
                 job_name = f"{job.company} \u2014 {job.title}" if job.company else (job.title or "")
                 job_ref = SimpleNamespace(id=job.id, description=job.description,
-                                          url=job.url, cached_page_text=job.cached_page_text)
+                                          url=job_link(job), cached_page_text=job.cached_page_text)
 
             # Persona-as-base uses a constrained prompt (select 3-5 bullets per role from the
             # rich pool); falls back to the standard cv_tailor_prompt if unconfigured.
@@ -1212,6 +1242,11 @@ def update_resume(resume_id: str, body: dict, db: Session = Depends(get_db)):
         validate_template_name(body["template"], TEMPLATES_DIR)
     # Re-linking a résumé: the new parent / job must be the account's own (MT-5).
     body = dict(body)
+    # A rename gets the same check as a create: a blank or non-string name is a 400.
+    if "name" in body:
+        body["name"] = str_field(body, "name", required=True)
+    if "json_data" in body:
+        body["json_data"] = checked_json_data(body["json_data"])
     if "parent_id" in body:
         body["parent_id"] = owned_id_or_404(db, Resume, body["parent_id"], "Parent resume not found")
     if "job_id" in body:
@@ -1452,9 +1487,23 @@ def _ascii_filename_stem(stem: str) -> str:
     return "_".join(part for part in folded.split("_") if part) or "Resume"
 
 
+# R30 D-10: a download name is built from free text (header name, résumé name, company), so
+# it is cut to a length every file system takes and has no path separator or "..".
+FILENAME_STEM_MAX = 120
+
+
+def _safe_filename_stem(stem: str) -> str:
+    """`stem` without path separators, `..`, reserved characters or leading dots, at most
+    FILENAME_STEM_MAX characters; "Resume" when nothing is left."""
+    stem = re.sub(r'[\\/:*?<>|"\x00-\x1f\x7f]', "_", stem or "")
+    stem = re.sub(r"\.{2,}", "_", stem).strip(" ._")
+    return stem[:FILENAME_STEM_MAX].rstrip(" ._") or "Resume"
+
+
 def _content_disposition(stem: str, ext: str) -> str:
     """An attachment header that keeps a non-ASCII name: an ASCII `filename=` for old
     clients plus the RFC 5987 `filename*=UTF-8''…` every current browser prefers."""
+    stem = _safe_filename_stem(stem)
     return (f'attachment; filename="{_ascii_filename_stem(stem)}.{ext}"; '
             f"filename*=UTF-8''{_url_quote(f'{stem}.{ext}', safe='')}")
 
@@ -1816,7 +1865,7 @@ async def _score_resume_impl(resume_id: str, depth: str):
             job_title = job.title
             job_ref = SimpleNamespace(id=job.id, company=job.company, title=job.title,
                                       description=job.description,
-                                      cached_page_text=job.cached_page_text, url=job.url)
+                                      cached_page_text=job.cached_page_text, url=job_link(job))
         else:
             jd_text = _tailor_context_jd(resume.json_data or {})
             if not jd_text:

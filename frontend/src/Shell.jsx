@@ -1,14 +1,16 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Newspaper, Search, Building2, Send, FileUser, Mail, Target,
   Fingerprint, ChartLine, Settings as SettingsIcon,
 } from 'lucide-react'
 import api, { authFailure } from './api'
-import { useTheme, themeAttrs, appearanceTitle, MODE_ICON } from './theme'
+import { useTheme, themeAttrs, appearanceTitle, MODE_ICON, MODES } from './theme'
+import { initTelemetry, track, trackPage } from './telemetry'
 import { Avatar, CheckGlyph, Helper, Menu, MenuHead, MenuItem, kb } from './ui'
 import { useToasts, ToastStack } from './Toast'
 import { useVersionWarning } from './versionCheck'
+import { loadDemo } from './demoHooks'
 import {
   useAccounts, switchAccount, finishSwitch, openPicker, takeSwitchedNote,
   switchShortcutIndex, roleLabel, SWITCH_MOD, MAX_SHORTCUTS, MAX_ACCOUNTS,
@@ -68,6 +70,10 @@ const sameWarn = (a, b) => (a.companies || 0) === (b.companies || 0) && (a.searc
 const sameHealth = (a, b) => (!a && !b) || !!(a && b && a.status === b.status && a.started_at === b.started_at && a.finished_at === b.finished_at)
 
 // ── account switcher (MT-12) ────────────────────────────────────────────────
+// The demo marker lives in the demo layer; the import is dead code (and so left out) in the normal build.
+let demoMarker
+const getDemoMarker = () => (demoMarker ||= lazy(() => loadDemo('DemoMarker.jsx')))
+
 // Rail footer row: avatar + name + role + ▴, opening a menu of the install's
 // accounts (✓ on this browser's, ⌘⇧1–5 hints), "Add account…" (owner) and
 // "Manage accounts". Collapsed rail: the avatar alone, same menu. ⌘⇧1–5 /
@@ -97,7 +103,7 @@ function AccountSwitcher({ open }) {
 
   const switchTo = useCallback(async (a) => {
     setMenu(null)
-    if (!a || !me || a.id === me.id || busy) return
+    if (!a || !me || a.id === me.id || busy || a.disabled) return
     if (a.has_pin) { openPicker(a); return }
     setBusy(true)
     try {
@@ -165,7 +171,7 @@ function AccountSwitcher({ open }) {
           {accounts.map((a, i) => {
             const cur = a.id === me.id
             return (
-              <MenuItem key={a.id} selected={cur} onClick={() => switchTo(a)}
+              <MenuItem key={a.id} selected={cur} onClick={() => switchTo(a)} disabled={!!a.disabled}
                 hint={i < MAX_SHORTCUTS ? `${SWITCH_MOD}${i + 1}` : undefined} hintMono
                 ariaLabel={`${a.name}, ${roleLabel(a)}${cur ? ', current' : ''}`}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
@@ -233,6 +239,19 @@ export default function Shell() {
     return () => window.removeEventListener('jn:account-required', on)
   }, [])
   const toggleRail = () => setOpen((v) => { const n = !v; try { localStorage.setItem('jobnavigator_v2_rail', n ? 'expanded' : 'collapsed') } catch {} return n })
+
+  // Telemetry (telemetry.js): what the owner allowed; page views carry no ids or query.
+  const [telemetry, setTelemetry] = useState(null)
+  useEffect(() => {
+    initTelemetry().then((s) => {
+      setTelemetry(s)
+      const w = window.innerWidth
+      track('session_start', { appearance: look.mode, theme: look.theme, device: w < 700 ? 'phone' : w < 1100 ? 'tablet' : 'desktop' })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => { if (telemetry) trackPage(loc.pathname) }, [telemetry, loc.pathname])
+  const cycleLook = () => { const next = MODES[(MODES.indexOf(look.mode) + 1) % MODES.length]; look.cycle(); track('theme_changed', { appearance: next }) }
 
   const loadCounts = useCallback(() => {
     const len = (d) => (Array.isArray(d) ? d.length : undefined)
@@ -403,6 +422,7 @@ export default function Shell() {
           ))}
         </nav>
 
+        {__DEMO__ && <Suspense fallback={null}>{React.createElement(getDemoMarker(), { open })}</Suspense>}
         <AccountSwitcher open={open} />
 
         {/* pipeline pulse — the dot yields its slot to the theme toggle when collapsed */}
@@ -414,7 +434,7 @@ export default function Shell() {
               ? <span style={{ width: 7, height: 7, borderRadius: 'var(--radius-control)', background: healthy ? 'var(--rail-accent)' : down ? 'var(--bad)' : 'var(--warn)' }} />
               /* the ◐ cycles Light -> Dark -> System; glyph names the current
                  mode, tooltip spells it out */
-              : <span onClick={(e) => { e.stopPropagation(); look.cycle() }} title={appearanceTip} style={{ fontSize: 13, color: 'var(--rail-dim)', cursor: 'pointer' }}>{MODE_ICON[look.mode]}</span>}
+              : <span onClick={(e) => { e.stopPropagation(); cycleLook() }} title={appearanceTip} style={{ fontSize: 13, color: 'var(--rail-dim)', cursor: 'pointer' }}>{MODE_ICON[look.mode]}</span>}
           </span>
           <span style={{ fontSize: 11.5, lineHeight: '18px', color: 'var(--rail-dim)', opacity: open ? 1 : 0, transition: 'opacity .2s', overflow: 'hidden', textOverflow: 'ellipsis' }}>{healthText}</span>
         </div>
@@ -423,7 +443,7 @@ export default function Shell() {
           <span onClick={toggleRail} title={open ? 'Collapse to icons' : 'Expand navigation'} className="v2-navdark" style={{ flex: '0 0 24px', fontSize: 13, color: 'var(--rail-dim)', cursor: 'pointer', display: 'flex', justifyContent: open ? 'flex-start' : 'center' }}>{open ? '‹' : '›'}</span>
           <span onClick={toggleRail} className="v2-navdark" style={{ flex: 1, fontSize: 12, lineHeight: '18px', color: 'var(--rail-dim)', cursor: 'pointer', opacity: open ? 1 : 0, transition: 'opacity .2s' }}>Collapse</span>
           {/* ui: keep — rail-dark theme toggle (--rail-dim ink, v2-navdark + v2-appearancebtn rail hovers); IconButton reads the light-surface tokens */}
-          <span onClick={look.cycle} title={appearanceTip} className="v2-navdark v2-appearancebtn" style={{ flex: '0 0 auto', width: 26, height: 26, borderRadius: 'var(--radius-control)', display: open ? 'flex' : 'none', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: 'var(--rail-dim)', cursor: 'pointer' }}>{MODE_ICON[look.mode]}</span>
+          <span onClick={cycleLook} title={appearanceTip} className="v2-navdark v2-appearancebtn" style={{ flex: '0 0 auto', width: 26, height: 26, borderRadius: 'var(--radius-control)', display: open ? 'flex' : 'none', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: 'var(--rail-dim)', cursor: 'pointer' }}>{MODE_ICON[look.mode]}</span>
         </div>
       </aside>
       <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

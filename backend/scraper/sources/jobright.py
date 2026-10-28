@@ -14,6 +14,8 @@ from backend.scraper._shared.posted import parse_posted
 from backend.models.db import SessionLocal, Job, Search, get_existing_external_ids
 from backend.accounts.settings import get_setting, set_setting
 from backend.scraper._shared.dedup import make_external_id, make_content_hash
+from backend.scraper._shared.posting_links import counts_as_new
+from backend.scraper._shared.postings import resolve_short_links
 
 logger = logging.getLogger("jobnavigator.jobright")
 
@@ -424,6 +426,15 @@ async def run(search: Search) -> dict:
             await prefetch_h1b([j["company"] for j in kept_jobs
                                 if make_external_id(j["company"], j["title"], j["url"]) not in existing_ids])
 
+            landed = await resolve_short_links([j["url"] for j in kept_jobs])
+            # Jobright's description is its own AI summary: new jobs get the employer's text
+            # from their own link, so copies of one role can be proven (employer_text.py).
+            from backend.scraper._shared.employer_text import employer_descriptions
+            fresh = [j for j in kept_jobs
+                     if make_external_id(j["company"], j["title"], j["url"]) not in existing_ids]
+            swapped = await employer_descriptions(fresh, landed)
+            if swapped:
+                logger.info(f"Jobright: employer description for {swapped}/{len(fresh)} new jobs")
             for j in kept_jobs:
                 job_url = j["url"]
                 ext_id = make_external_id(j["company"], j["title"], job_url)
@@ -444,6 +455,7 @@ async def run(search: Search) -> dict:
                     company=j["company"],
                     title=j["title"],
                     url=job_url,
+                    apply_url=landed.get(job_url),
                     source="jobright",
                     search_id=search.id,
                     location=j.get("location") or None,
@@ -487,7 +499,7 @@ async def run(search: Search) -> dict:
                     with db.begin_nested():
                         db.add(job)
                         db.flush()
-                    new_jobs += 1
+                    new_jobs += counts_as_new(job)
                     existing_ids.add(ext_id)
                 except IntegrityError:
                     logger.debug(f"Duplicate external_id for '{j['title']}' at {j.get('company')}, skipping")

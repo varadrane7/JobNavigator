@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react'
 import ConfirmDialog, { PromptDialog } from '../ConfirmDialog'
 import { useEscape, useSettled, useSingleOpen, NBSP } from '../hooks'
 import { Button, FooterRow, GlyphBadge, Heading, HeaderRow, Helper, IconButton, Input, Label, Link, Menu, MenuHead, MenuItem, ModalPanel, Mono, PageTitle, Pill, Select, Spinner, Surface, Switch, Textarea, ToolbarTrigger, VisuallyHidden } from '../ui'
@@ -6,25 +6,28 @@ import { useTheme, MODE_OPTIONS, themeOptions } from '../theme'
 import { describeCron, whenShort, CRON_PRESETS, TZ_SHORT } from '../time'
 import api, { authFailure } from '../api'
 import { MAX_ACCOUNTS, useFlushBeforeSwitch } from '../accounts'
+import { PURPOSE, SENT_SUMMARY, TelemetrySettingRow } from '../TelemetryChoice'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useToasts, ToastStack } from '../Toast'
 import {
   AccountsTable, AddAccountModal, YourAccount, accountsChanged, errorText,
-  LockCard, PolicyToggle, ScopeTag, UnlockPill, hhmm, indexSections, memberGroup, rowLocked, scopeTag,
+  LockCard, PolicyToggle, ScopeTag, UnlockPill, hhmm, indexSections, rowLocked, scopeTag,
 } from './SettingsAccounts'
 import '../theme.css'
+import { loadDemo } from '../demoHooks'
 
 // QA F7 / R6-06: a locked row stays in the accessibility tree (read-only, aria-disabled);
 // its controls are taken out of the tab order and marked read-only, and given back
 // when the row unlocks. `data-jn-tab` remembers a control's own tabindex.
 const LOCKABLE = 'a[href], button, input, select, textarea, [tabindex]'
-function lockControls(el, locked) {
+function lockControls(el, locked, hard) {
   el.querySelectorAll(LOCKABLE).forEach((c) => {
     if (locked) {
       if (!c.hasAttribute('data-jn-tab')) c.setAttribute('data-jn-tab', c.getAttribute('tabindex') ?? '')
       c.setAttribute('tabindex', '-1')
       c.setAttribute('aria-disabled', 'true')
       if ('readOnly' in c && c.tagName !== 'BUTTON') c.readOnly = true
+      if (hard && 'disabled' in c) c.disabled = true   // the demo: nothing is written
     } else if (c.hasAttribute('data-jn-tab')) {
       const t = c.getAttribute('data-jn-tab')
       if (t === '') c.removeAttribute('tabindex'); else c.setAttribute('tabindex', t)
@@ -33,6 +36,10 @@ function lockControls(el, locked) {
     }
   })
 }
+
+// demo build only: the not-affiliated line (dead code, so left out, in the normal build)
+let demoNote
+const getDemoNote = () => (demoNote ||= lazy(() => loadDemo('DemoMarker.jsx').then((m) => ({ default: m.DemoNote }))))
 
 const CAP_TEXT = (n) => `This install already has ${n} accounts — remove one to add another.`
 
@@ -54,6 +61,11 @@ const PROVIDER_LABEL = Object.fromEntries(PROVIDERS)
 const SEARCHABLE = ['openrouter', 'openai', 'claude_api', 'claude_code', 'opencode_go']
 // providers that need no key
 const KEYLESS = ['claude_code', 'codex_cli', 'antigravity_cli', 'ollama', 'lmstudio', 'openai_local', '']
+// One API key per provider (backend accounts/settings.py PROVIDER_KEY_SETTINGS): every slot on a
+// provider shows and saves the same key, so switching a slot's provider back keeps its key.
+const PROVIDER_KEY = { claude_api: 'anthropic_api_key', openai: 'openai_api_key', openrouter: 'openrouter_api_key', opencode_go: 'opencode_api_key' }
+const keyHelp = (prov, member) => `Saved for ${PROVIDER_LABEL[prov] || prov}: every model slot on it uses this key.`
+  + (member || !PROVIDER_KEY[prov] ? '' : ` Empty uses ${PROVIDER_KEY[prov].toUpperCase()} from .env.`)
 // Provider settings whose value 'claude_code' makes the Claude Code token row relevant.
 const CLAUDE_CODE_SLOTS = ['llm_provider', 'scoring_llm_provider', 'llm_fallback_provider', 'cv_tailor_llm_provider',
   'cover_letter_llm_provider', 'autofill_llm_provider', 'email_llm_provider']
@@ -222,7 +234,7 @@ export default function Settings() {
   const [editFor, setEditFor] = useState(null)
   const [modelsOpen, setModelsOpen] = useState(false)
   const [efforts, setEfforts] = useState({})  // provider -> reasoning-effort values, from GET /llm/efforts
-  const [li, setLi] = useState(null)          // linkedin session status
+  const [li, setLi] = useState({})            // {main, mock}: each LinkedIn session's status
   const [gmail, setGmail] = useState(null)    // MT-19: GET /gmail/status {status, source, configured}
   const [toast, setToast] = useState(null)
   const [loadErr, setLoadErr] = useState(null)   // set on a failed GET /settings
@@ -396,7 +408,8 @@ export default function Settings() {
     // This is the Default résumé picker's entire option list — empty, it looks like a setting with nothing to choose.
     () => api.get('/resumes', { params: { is_base: true } }).then(({ data }) => setResumes(data || [])).catch((e) => { console.error(e); flash('Could not load your résumés — the default-résumé picker is empty', true) }),
     () => api.get('/persona').then(({ data }) => setPersonaAvailable(Object.keys(data?.resume_content || {}).length > 0)).catch(() => { /* silent: Persona is one optional entry in that picker */ }),
-    () => api.get('/linkedin/session').then(({ data }) => setLi(data)).catch(() => { /* silent: the LinkedIn row reads “unknown” and its own actions report their failures */ }),
+    () => Promise.all(['main', 'mock'].map((which) => api.get('/linkedin/session', { params: { which } }).then(({ data }) => [which, data])))
+      .then((pairs) => setLi(Object.fromEntries(pairs))).catch(() => { /* silent: the LinkedIn rows read “unknown” and their own actions report their failures */ }),
     () => loadAccounts(),
     () => api.get('/gmail/status').then(({ data }) => setGmail(data || null)).catch(() => { /* silent: the Gmail row stays hidden */ }),
   ])
@@ -506,51 +519,58 @@ export default function Settings() {
       : [['account', 'You', 'Your account', '', [], 'account']]
     // which LLM slots currently run on a given provider (override slots default to empty = follow Primary)
     const usedBy = (prov) => CLAUDE_CODE_SLOTS.filter((k) => val(k, k === 'llm_provider' ? 'claude_api' : '') === prov).map((k) => SLOT_NAMES[k])
+    // the (i) line that says why a provider row is showing: which model settings below use it
+    const usedLine = (prov) => { const s = usedBy(prov); return s.length ? ` Model settings using ${(PROVIDER_LABEL[prov] || prov).replace(/\s*\(.*\)$/, '')}: ${s.join(', ')}.` : '' }
+    const primaryProv = val('llm_provider', 'claude_api')
     return [
       ...people,
-      // The one group that isn't a DB setting: both rows live in this browser's localStorage (theme.js), so they take no `key` and never PATCH /settings.
+      // Appearance and Theme live in this browser's localStorage (theme.js): no `key`, never PATCH /settings.
       // They sit first because they change what every screen below looks like.
       ['appearance', 'General', 'Display', '', [
         { kind: 'appearance', label: 'Appearance', help: 'Light, dark, or follow your OS. Saved in this browser.' },
         { kind: 'theme', label: 'Theme', help: 'The app’s look: colours, fonts and shapes. Saved in this browser.' },
-      ]],
-      ['feed', '', 'Feed', '', [
+        // a DB setting (feed_zoom_floater, the backend's "feed" section) shown with the look rows
         SW('Zoom control on postings', 'The small + / − floater top-right of a posting.', 'Hidden — postings open at last selected zoom level.', 'feed_zoom_floater',
           { dflt: true, info: 'Zoom is remembered per browser, not per job: set it once and every posting opens at that size. Both the live page and the cached copy are frames, so zoom scales the frame and the page reflows to the new width.' }),
       ]],
       ['models', 'AI', 'Models', '', [
         { kind: 'pair', label: 'Primary provider · model', help: 'Every AI feature uses this pair unless overridden below.',
           pKey: 'llm_provider', mKey: 'llm_model', eKey: 'llm_effort',
-          info: "Providers: Claude API, Claude Code, Codex CLI (your ChatGPT subscription), Antigravity CLI (Google subscription), OpenCode Go (subscription), OpenAI, Ollama (local), LM Studio (local), OpenRouter. The model list shows that provider's models, including any you added under Model catalog. OpenRouter covers every vendor with one key but has no prompt-cache discount. The subscription CLIs are meant for attended use and have plan limits; a limit hit fails over to the fallback without retrying. Reasoning effort sets how much the model thinks before it answers: higher is slower and costs more. 'default effort' keeps the model's own default. Not every model takes every level; Claude Code steps down to the nearest level, the APIs return an error. Antigravity CLI sets effort in the model name, and Ollama and LM Studio have no effort setting." },
-        B('API key', 'API key for the primary provider.', 'llm_api_key', { secret: true, mono: true, w: '340px', hide: () => KEYLESS.includes(val('llm_provider', 'claude_api')) }),
+          info: "Providers: Claude API, Claude Code, Codex CLI (your ChatGPT subscription), Antigravity CLI (Google subscription), OpenCode Go (subscription), OpenAI, Ollama (local), LM Studio (local), OpenRouter. The model list shows that provider's models, including any you added under Model catalog. OpenRouter covers every vendor with one key but has no prompt-cache discount. The subscription CLIs are meant for attended use and have plan limits; a limit hit fails over to the fallback without retrying. Reasoning effort sets how much the model thinks before it answers: higher is slower and costs more. 'default effort' keeps the model's own default. Not every model takes every level; Claude Code steps down to the nearest level, the APIs return an error. Antigravity CLI sets effort in the model name, and Ollama and LM Studio have no effort setting. Antigravity's -high models can think for 5 minutes on a tailoring or a PDF import; -medium answers in under a minute." },
+        B('API key', keyHelp(primaryProv, member), PROVIDER_KEY[primaryProv] || 'anthropic_api_key', { secret: true, mono: true, w: '340px', hide: () => !PROVIDER_KEY[primaryProv] }),
         // MT-15: the Claude Code login per account. Shown while some slot uses Claude Code, to the owner and to a member whose Models section is its own.
-        B('Claude Code token', (member ? 'Your own Claude subscription: paste the token from claude setup-token.' : 'Token from claude setup-token. Empty uses CLAUDE_CODE_OAUTH_TOKEN from .env.')
-            + (usedBy('claude_code').length ? ` Used by: ${usedBy('claude_code').join(', ')}.` : ''),
+        B('Claude Code token', member ? 'Your own Claude subscription token.' : 'Empty uses CLAUDE_CODE_OAUTH_TOKEN from .env.',
           'claude_code_oauth_token', { secret: true, mono: true, w: '340px',
+            info: 'Run claude setup-token once in a terminal signed in to your Claude subscription and paste the token it prints.' + usedLine('claude_code'),
             hide: () => !usedBy('claude_code').length || (member && sidx?.byId?.models?.mode !== 'own') }),
         // The other two subscription CLIs keep their login in a folder, not a token: show how to log in.
-        { kind: 'clilogin', provider: 'codex', label: 'Codex CLI login',
-          help: `Your ChatGPT subscription: run \`codex login\` on your own computer, then upload ~/.codex/auth.json here. Used by: ${usedBy('codex_cli').join(', ')}.`,
+        { kind: 'clilogin', provider: 'codex', label: 'Codex CLI login', help: 'Upload the ChatGPT subscription login.',
+          info: 'Run `codex login` on your own computer, then upload ~/.codex/auth.json here; the login is kept for this account.' + usedLine('codex_cli'),
           hide: () => !usedBy('codex_cli').length || (member && sidx?.byId?.models?.mode !== 'own') },
-        { kind: 'clilogin', provider: 'agy', label: 'Antigravity CLI login',
-          help: `Your Google subscription: sign in to agy on your own computer, zip the ~/.gemini folder and upload it here. Used by: ${usedBy('antigravity_cli').join(', ')}.`,
+        { kind: 'clilogin', provider: 'agy', label: 'Antigravity CLI login', help: 'Upload the Google subscription login.',
+          info: 'Sign in to agy on your own computer, zip the ~/.gemini folder and upload it here; the login is kept for this account.' + usedLine('antigravity_cli'),
           hide: () => !usedBy('antigravity_cli').length || (member && sidx?.byId?.models?.mode !== 'own') },
         // MT-21: a member the owner allowed points Ollama / LM Studio / OpenAI (Local) at its own server.
-        B('My LM Studio address', 'Your own LM Studio server (LAN or VPN address the install can reach), instead of the owner’s.', 'member_lmstudio_base_url',
-          { mono: true, w: '340px', placeholder: 'http://192.168.1.50:1234/v1', hide: () => !memberLocalOk || !usedBy('lmstudio').length }),
-        B('My Ollama address', 'Your own Ollama server (LAN or VPN address the install can reach), instead of the owner’s.', 'member_ollama_base_url',
-          { mono: true, w: '340px', placeholder: 'http://192.168.1.50:11434', hide: () => !memberLocalOk || !usedBy('ollama').length }),
-        B('My local endpoint URL', 'Your own OpenAI-compatible server, instead of the owner’s.', 'member_llm_local_base_url',
-          { mono: true, w: '340px', placeholder: 'http://192.168.1.50:1234/v1', hide: () => !memberLocalOk || !LOCAL_PROVIDER_KEYS.some((k) => val(k) === 'openai_local') }),
-        // The local model servers' addresses: owner-only settings (one host per install), shown to the owner while some slot uses that provider.
-        B('LM Studio address', 'Empty uses LMSTUDIO_BASE_URL from .env, else http://localhost:1234/v1. From Docker: http://host.docker.internal:1234/v1.'
-            + (usedBy('lmstudio').length ? ` Used by: ${usedBy('lmstudio').join(', ')}.` : ''),
-          'lmstudio_base_url', { mono: true, w: '340px', placeholder: effective.lmstudio_base_url, hide: () => member || !usedBy('lmstudio').length }),
-        B('Ollama address', 'Empty uses OLLAMA_BASE_URL from .env, else http://localhost:11434. From Docker: http://host.docker.internal:11434.'
-            + (usedBy('ollama').length ? ` Used by: ${usedBy('ollama').join(', ')}.` : ''),
-          'ollama_base_url', { mono: true, w: '340px', placeholder: effective.ollama_base_url, hide: () => member || !usedBy('ollama').length }),
-        B('Local endpoint URL', "Base URL for OpenAI (Local) — your LM Studio / vLLM / text-generation-webui address. Shared by every section set to OpenAI (Local); no limit is placed on response length.", 'llm_local_base_url',
-          { mono: true, w: '340px', placeholder: 'http://localhost:1234/v1', hide: () => !LOCAL_PROVIDER_KEYS.some((k) => val(k) === 'openai_local') }),
+        B('My LM Studio address', 'Empty uses the owner’s LM Studio.', 'member_lmstudio_base_url', {
+          info: 'Your own LM Studio server, at a LAN or VPN address the install can reach.' + usedLine('lmstudio'),
+          mono: true, w: '340px', placeholder: 'http://192.168.1.50:1234/v1', hide: () => !memberLocalOk || !usedBy('lmstudio').length }),
+        B('My Ollama address', 'Empty uses the owner’s Ollama.', 'member_ollama_base_url', {
+          info: 'Your own Ollama server, at a LAN or VPN address the install can reach.' + usedLine('ollama'),
+          mono: true, w: '340px', placeholder: 'http://192.168.1.50:11434', hide: () => !memberLocalOk || !usedBy('ollama').length }),
+        B('My local endpoint URL', 'Empty uses the owner’s local endpoint.', 'member_llm_local_base_url', {
+          info: 'Your own OpenAI-compatible server, at a LAN or VPN address the install can reach.' + usedLine('openai_local'),
+          mono: true, w: '340px', placeholder: 'http://192.168.1.50:1234/v1', hide: () => !memberLocalOk || !LOCAL_PROVIDER_KEYS.some((k) => val(k) === 'openai_local') }),
+        // The local model servers' addresses: owner-only settings (one host per install), shown to the owner while some slot uses that provider,
+        // and always with several accounts, since a member's own slots may use it and the owner sets the address (R30 L-10).
+        B('LM Studio address', 'Empty uses LMSTUDIO_BASE_URL from .env.', 'lmstudio_base_url', {
+          info: 'With neither set: http://localhost:1234/v1. The app runs in Docker, so LM Studio on this computer is http://host.docker.internal:1234/v1.' + usedLine('lmstudio'),
+          mono: true, w: '340px', placeholder: effective.lmstudio_base_url, hide: () => member || (!multi && !usedBy('lmstudio').length) }),
+        B('Ollama address', 'Empty uses OLLAMA_BASE_URL from .env.', 'ollama_base_url', {
+          info: 'With neither set: http://localhost:11434. The app runs in Docker, so Ollama on this computer is http://host.docker.internal:11434.' + usedLine('ollama'),
+          mono: true, w: '340px', placeholder: effective.ollama_base_url, hide: () => member || (!multi && !usedBy('ollama').length) }),
+        B('Local endpoint URL', 'Base URL for OpenAI (Local): an LM Studio, vLLM or text-generation-webui address.', 'llm_local_base_url', {
+          info: 'Shared by every model setting on OpenAI (Local); no limit is placed on response length.' + usedLine('openai_local'),
+          mono: true, w: '340px', placeholder: 'http://localhost:1234/v1', hide: () => member || !LOCAL_PROVIDER_KEYS.some((k) => val(k) === 'openai_local') }),
         LLM('Scoring', 'Model that scores new jobs against your résumés.', 'scoring_llm'),
         LLM('Scoring fallback', 'Retries scoring once on error or rate limit — scoring only.', 'llm_fallback',
           { info: 'Used only when the scoring call fails or is rate-limited. One retry, then the job stays unscored until the next run. Choose a cheap model from a different provider than the primary.' }),
@@ -636,6 +656,8 @@ export default function Settings() {
       ]],
       ['scheduler', 'Pipeline', 'Scheduler', 'intervals in minutes (0 = off) · crons empty = off', [
         B('Scrape all companies', 'Runs every active company scrape on this interval.', 'scrape_interval_minutes', { mono: true, int: true, w: '135px' }),
+        B('Scrapes at once', '1 or 2. Run all, one company, one search and the scheduled scrape wait their turn beyond this.', 'scrape_max_concurrent', { mono: true, int: true, w: '135px',
+          info: 'Each scrape can start its own Chromium, so 1 keeps memory low: a second Run all, from you or another account, waits until the first finishes. A fetch another run made in the last 10 minutes is reused instead of downloaded again.' }),
         B('Email check', 'Polls Gmail for replies to your applications.', 'email_check_interval_minutes', { mono: true, int: true, w: '135px' }),
         B('Cleanup after', 'Days before ignored and skipped job postings are removed.', 'job_archive_after_days', { mono: true, int: true, w: '135px' }),
         B('Auto-reject threshold', 'Days of silence before an application is auto-moved to Rejected.', 'auto_reject_after_days', { mono: true, int: true, w: '135px',
@@ -675,6 +697,13 @@ export default function Settings() {
       ]],
       ['dedup', '', 'Dedup tracking params', '', [
         E('Stripped params', 'Query params removed from job URLs before duplicate detection. All utm_* are always stripped.', 'dedup_tracking_params', { list: true, sub: 'one param per line' }),
+      ]],
+      // where each kind of copy of a posting goes (backend posting_links.py); every copy stays
+      // listed on its original under Also listed
+      ['copies', '', 'Copies of a posting', '', [
+        SEL('Same posting, another link', 'The same posting found again under another link, in the same city.', 'dedup_copy_link', [['ignored', 'Ignored — listed under ‘Also listed’'], ['new', 'New — stays in the feed']], { w: '260px', dflt: 'ignored' }),
+        SEL('Same role, another city', 'The same posting or role listed in another city: the same job number, or a word-for-word identical description.', 'dedup_copy_city', [['ignored', 'Ignored — listed under ‘Also listed’'], ['new', 'New — stays in the feed']], { w: '260px', dflt: 'ignored' }),
+        SEL('Same role, new posting', 'The same role posted again under a new id in the same city, with a word-for-word identical description (repost).', 'dedup_copy_repost', [['ignored', 'Ignored — listed under ‘Also listed’'], ['new', 'New — stays in the feed']], { w: '260px', dflt: 'ignored' }),
       ]],
       ['notifications', 'Integrations', 'Notifications', '', [
         SW('Telegram', 'New high-scoring jobs and the daily digest are sent to your chat. The digest schedule is under Scheduler.', 'Off — no push notifications.', 'telegram_enabled'),
@@ -752,15 +781,15 @@ export default function Settings() {
             info: 'Jobright hands out a 60-day cookie. The scraper stores it, reuses it across restarts and renews it on its own when it expires or is rejected; nothing here needs doing unless you want to force a fresh sign-in.' }),
       ]],
       ['linkedin', '', 'LinkedIn', '', [
-        B('Personal email', 'Used by LinkedIn Personal collections.', 'linkedin_email', { w: '260px' }),
-        B('Personal password', 'Stored locally.', 'linkedin_password', { secret: true, w: '260px' }),
-        { kind: 'linkedin', lockKey: 'linkedin_email', label: 'Session cookie', help: 'The extension import reuses a signed-in session. LinkedIn asks for an emailed PIN at login.' },
-        SW('Use a mock account', 'The session signs in with the mock account below.', 'Off — the session signs in with the personal account above.', 'linkedin_use_mock_account',
-          { dflt: !!val('linkedin_mock_email'), info: 'Optional. The extension captures jobs while you browse LinkedIn collections. A separate account keeps rate limits, CAPTCHAs or bans off your real profile.' }),
-        ...(isOn('linkedin_use_mock_account', !!val('linkedin_mock_email')) ? [
-          B('Mock account email', 'The extension browses specific jobs with this mock account.', 'linkedin_mock_email', { w: '260px' }),
-          B('Mock account password', 'Stored locally only.', 'linkedin_mock_password', { secret: true, w: '260px' }),
-        ] : []),
+        // Two sessions, each signed in on its own (no switch): the main account for LinkedIn
+        // Personal, the mock account for the extension import and the employer-link lookup.
+        B('Main account email', 'Your own LinkedIn account. LinkedIn Personal searches use it.', 'linkedin_email', { w: '260px' }),
+        B('Main account password', 'Stored locally.', 'linkedin_password', { secret: true, w: '260px' }),
+        { kind: 'linkedin', which: 'main', lockKey: 'linkedin_email', label: 'Main session', help: 'Signed in with the main account. LinkedIn emails a PIN at sign-in.' },
+        B('Mock account email', 'A separate account for the extension import and the employer-link lookup.', 'linkedin_mock_email',
+          { w: '260px', info: 'Optional. Keeps rate limits, CAPTCHAs or bans off your real profile. Without a mock account the extension import uses the main session, and the employer-link lookup stays off: it never uses your own account.' }),
+        B('Mock account password', 'Stored locally only.', 'linkedin_mock_password', { secret: true, w: '260px' }),
+        { kind: 'linkedin', which: 'mock', lockKey: 'linkedin_email', label: 'Mock session', help: 'Signed in with the mock account. The extension import uses it, and after every scrape it finds the direct apply link.' },
       ]],
       ['advanced', 'System', 'Advanced', '', [
         B('Proxy URL', 'Used by scrapes that hit rate limits or geo-blocks. Empty = direct.', 'proxy_url', { mono: true, w: '340px', placeholder: 'socks5://127.0.0.1:9050' }),
@@ -773,6 +802,10 @@ export default function Settings() {
         B('SSO public URL', 'Optional: https://jobs.example.com, for the redirect URI when the dashboard sits behind a proxy.', 'oidc_public_url', { mono: true, w: '260px' }),
         B('SSO button name', 'Optional label, e.g. Authentik.', 'oidc_provider_name', { w: '200px' }),
         BT('DB backup', 'DB snapshot now, outside the cron.', 'Run backup', () => api.post('/db/backup'), { ownerOnly: true }),
+      ]],
+      ['telemetry', 'System', 'Telemetry', '', [
+        { kind: 'telemetry', label: 'Allow anonymous telemetry', help: PURPOSE,
+          info: SENT_SUMMARY },
       ]],
     ]
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -829,21 +862,9 @@ export default function Settings() {
   const q = query.trim().toLowerCase()
   const matches =(sec) => !q || sec[2].toLowerCase().includes(q) ||
     sec[4].some((r) => `${r.label} ${r.help || ''}`.toLowerCase().includes(q))
-  // MT-14 · a member's nav regroups into You · AI · yours · Yours · Shared · <owner> 🔒
-  // (contiguous groups, the page's own order inside each); everyone else keeps the page.
-  const MEMBER_GROUPS = ['You', 'AI · yours', 'Yours']
-  const ordered = useMemo(() => {
-    if (!member) return sections
-    const tagged = sections.map((s) => ({ s, g: memberGroup(s[0], sidx, ownerName, unlocked) }))
-    const rank = (g) => { const i = MEMBER_GROUPS.indexOf(g); return i < 0 ? MEMBER_GROUPS.length : i }
-    const out = []
-    let last = null
-    tagged.map((t, i) => ({ ...t, i })).sort((a, b) => rank(a.g) - rank(b.g) || a.i - b.i).forEach(({ s, g }) => {
-      out.push([s[0], g !== last ? g : '', ...s.slice(2)])
-      last = g
-    })
-    return out
-  }, [sections, member, sidx, ownerName, unlocked])  // eslint-disable-line react-hooks/exhaustive-deps
+  // Everyone sees the page's own order; each section's tag says whose it is (Yours, Inherited from
+  // <owner>, Owner only) and locked ones are dimmed (MT-14's member regrouping is gone).
+  const ordered = sections
   // T7-01: at the top (nothing jumped to yet) the first section of the page is the current one
   const cur = (active && ordered.some((s) => s[0] === active)) ? active : ordered[0]?.[0]
   const lockCtx = { member, unlocked, meta, idx: sidx }
@@ -969,15 +990,16 @@ export default function Settings() {
                   // `_meta.set_by_owner` (the value is blanked); the row says so, read-only.
                   const r = member && r0.key && meta?.[r0.key]?.set_by_owner ? { ...r0, kind: 'ownerset', ownerName } : r0
                   const row = <Row key={r.label} r={r} ctx={{ S, val, isOn, save, info, setInfo, ovr, setOvr, trig, runAction, setEditFor, setModelsOpen, modelsFor, effortsFor, li, setLi, flash, defaults, narrow }} />
-                  if (!member && !meErr) return row
+                  const demo = !!S._demo && id !== 'appearance'   // the demo build's read-only settings; Display stays live (the demo answers the zoom switch's write itself)
+                  if (!member && !meErr && !demo) return row
                   // MT-14: a row the member cannot edit shows its (owner's) value, dimmed and
                   // read-only. R6-06: not `inert` — that hid the value from screen readers; the
                   // row is aria-disabled and its controls leave the tab order instead.
                   // R6-10: with no answer from /auth/me every row is read-only.
-                  const locked = meErr || rowLocked(r, lockCtx)
+                  const locked = meErr || demo || rowLocked(r, lockCtx)
                   return (
                     <div key={r.label} data-locked={locked ? 'true' : undefined} aria-disabled={locked || undefined}
-                      ref={(el) => { if (el) lockControls(el, locked) }}
+                      ref={(el) => { if (el) lockControls(el, locked, demo) }}
                       style={locked ? { opacity: 0.55, pointerEvents: 'none' } : undefined}>{row}</div>
                   )
                 })}
@@ -1010,6 +1032,7 @@ export default function Settings() {
                   style={{ color: 'var(--muted)', fontSize: 'inherit', lineHeight: 'inherit', fontWeight: 400, textDecoration: 'none' }}>viktoresadze.com ↗</Link>
               </span>
             </Helper>
+            {__DEMO__ && <Suspense fallback={null}>{React.createElement(getDemoNote())}</Suspense>}
           </div>
         </div>
       </div>
@@ -1078,9 +1101,9 @@ function Row({ r, ctx }) {
             {on && <Select value={p} options={PROVIDERS} onPick={(v) => pickProvider(`${r.base}_provider`, `${r.base}_effort`, v)} width="200px" placeholder="pick provider…" ariaLabel={`${r.label} — provider`} />}
             {on && <Select value={val(`${r.base}_model`)} options={modelsFor(p || primary)} onPick={(v) => save(`${r.base}_model`, v)} width="260px" mono placeholder="pick model…" ariaLabel={`${r.label} — model`} emptyText={NO_MODELS} />}
             {on && eff.length > 0 && <Select value={val(`${r.base}_effort`)} options={effortOptions(eff, effortEmpty)} onPick={(v) => save(`${r.base}_effort`, v)} width="150px" ariaLabel={`${r.label} — reasoning effort`} />}
-            {on && p && !KEYLESS.includes(p) && (
-              <span title="API key for this override's provider" style={{ display: 'flex', flex: '0 1 150px', minWidth: 0 }}>
-                <TextBox value={val(`${r.base}_api_key`)} onSave={(v) => save(`${r.base}_api_key`, v)} width="150px" mono secret ariaLabel={`${r.label} — API key`} />
+            {on && p && PROVIDER_KEY[p] && (
+              <span title={`API key for ${PROVIDER_LABEL[p] || p}, shared by every model slot on it`} style={{ display: 'flex', flex: '0 1 150px', minWidth: 0 }}>
+                <TextBox value={val(PROVIDER_KEY[p])} onSave={(v) => save(PROVIDER_KEY[p], v)} width="150px" mono secret ariaLabel={`${r.label} — API key`} />
               </span>
             )}
             {/* ui: keep — a Tag: uppercase on a --surface-2 r99 chip, not a Label */}
@@ -1093,12 +1116,11 @@ function Row({ r, ctx }) {
                 if (!next) {
                   // `ovr` is local state the PATCHes don't own — if any clear fails, reopen the row or it reads
                   // "inherits Primary" while the server still holds an override.
-                  // The key goes too: it belongs to the override's provider, and a key left behind is hidden once the row closes (L-01).
+                  // The key stays: it is the provider's, shared by every slot on it.
                   const a = await save(`${r.base}_provider`, '')
                   const b = a && await save(`${r.base}_model`, '')
                   const c = b && await save(`${r.base}_effort`, '')
-                  const d = c && (!val(`${r.base}_api_key`) || await save(`${r.base}_api_key`, ''))
-                  if (!a || !b || !c || !d) setOvr((o) => ({ ...o, [r.base]: true }))
+                  if (!a || !b || !c) setOvr((o) => ({ ...o, [r.base]: true }))
                 }
               }} />
             </span>
@@ -1148,6 +1170,8 @@ function Row({ r, ctx }) {
         return <Mono style={{ fontSize: 11.5, userSelect: 'all', overflowWrap: 'anywhere' }}>{r.text}</Mono>
       case 'apikey':
         return <ApiKeyRow value={val('dashboard_api_key')} save={save} flash={flash} />
+      case 'telemetry':
+        return <TelemetrySettingRow />
       case 'readonly': {
         const set = !!val(r.key)
         if (!set) return <Helper style={{ flex: 1, minWidth: 0 }}>{r.emptyText || 'Not set'}</Helper>
@@ -1181,7 +1205,7 @@ function Row({ r, ctx }) {
       case 'ownerset':
         return <Helper style={{ flex: 1, minWidth: 0 }}>Set by {r.ownerName}</Helper>
       case 'linkedin':
-        return <LinkedInRow li={li} setLi={setLi} flash={flash} />
+        return <LinkedInRow which={r.which} li={li[r.which]} setLi={(data) => setLi((prev) => ({ ...prev, [r.which]: data }))} flash={flash} />
       default:
         return null
     }
@@ -1314,18 +1338,18 @@ function CliLoginRow({ provider, flash }) {
   )
 }
 
-function LinkedInRow({ li, setLi, flash }) {
+function LinkedInRow({ which, li, setLi, flash }) {
   const [pin, setPin] = useState('')
   const poll = useRef(null)
   useEffect(() => () => clearInterval(poll.current), [])
 
   const start = async () => {
     try {
-      await api.post('/linkedin/session/refresh')
+      await api.post('/linkedin/session/refresh', null, { params: { which } })
       clearInterval(poll.current)
       poll.current = setInterval(async () => {
         try {
-          const { data } = await api.get('/linkedin/session')
+          const { data } = await api.get('/linkedin/session', { params: { which } })
           setLi(data)
           if (!['running', 'awaiting_pin'].includes(data.phase)) clearInterval(poll.current)
         } catch { /* keep polling */ }
@@ -1343,7 +1367,7 @@ function LinkedInRow({ li, setLi, flash }) {
         {phase === 'awaiting_pin' ? (li?.detail || 'LinkedIn emailed a PIN.')
           : phase === 'running' ? (li?.detail || 'Signing in…')
             : phase === 'failed' && li?.detail ? li.detail
-            : (li?.summary || 'Unknown')}
+            : (li?.signed_in_as ? `${li.signed_in_as} · ` : '') + (li?.summary || 'Unknown')}
       </Helper>
       {phase === 'awaiting_pin' && (
         <>
@@ -1351,14 +1375,14 @@ function LinkedInRow({ li, setLi, flash }) {
             ariaLabel="LinkedIn sign-in PIN" mono style={{ ...MONO_FIELD, flex: '0 1 120px' }} />
           <ActionBtn label="Submit PIN" state="" onClick={async () => {
             try {
-              const { data } = await api.post('/linkedin/session/pin', { pin })
+              const { data } = await api.post('/linkedin/session/pin', { pin }, { params: { which } })
               if (!data.ok) flash(data.detail || 'Enter the digits from the email', true)
               else { setPin(''); flash('PIN sent') }
             } catch (e) { flash(errorText(e, 'Could not send the PIN'), true) }
           }} />
         </>
       )}
-      {phase !== 'awaiting_pin' && <ActionBtn label="Refresh cookie" state={busy ? 'running' : ''} onClick={start} />}
+      {phase !== 'awaiting_pin' && <ActionBtn label={li?.exists ? 'Refresh session' : 'Sign in'} state={busy ? 'running' : ''} onClick={start} />}
     </>
   )
 }

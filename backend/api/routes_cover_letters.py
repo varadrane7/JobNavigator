@@ -17,6 +17,7 @@ from backend.accounts.settings import get_setting
 from backend.api._input import str_field, uuid_filter
 from backend.job_monitor import launch_background, JobAlreadyRunningError
 from backend.api.routes_resumes import _content_disposition, _header_name, _render_pdf, _rewrite_urls_with_tracers, _resolve_tailoring_jd  # shared with resumes
+from backend.scraper._shared.link_kinds import job_link
 
 logger = logging.getLogger("jobnavigator.cover_letters")
 
@@ -77,7 +78,20 @@ def _render_html(json_data: dict, template_name: str, page_format: str) -> str:
 
     fonts = _load_template_fonts(str(template_dir / "fonts"))
 
-    return template.render(**_render_safe_links(json_data or {}), page_format=page_format, fonts=fonts)
+    # A letter made through the API may lack sections the templates read: render them empty
+    # (the editor's new letter has them all) instead of failing with a 500.
+    content = {**_EMPTY_LETTER, **(json_data or {})}
+    for part in ("header", "recipient"):
+        if not isinstance(content.get(part), dict):
+            content[part] = dict(_EMPTY_LETTER[part])
+        content[part] = {**_EMPTY_LETTER[part], **content[part]}
+    return template.render(**_render_safe_links(content), page_format=page_format, fonts=fonts)
+
+
+# The sections a new letter has (frontend CoverLetterEditor.jsx EMPTY): what a template may read.
+_EMPTY_LETTER = {"header": {"name": "", "contact_items": []},
+                 "recipient": {"company": "", "manager": "", "address": ""},
+                 "date": "", "greeting": "", "body_paragraphs": [], "closing": "", "signature": ""}
 
 
 @router.get("/templates")
@@ -141,7 +155,7 @@ def _build_ctx(rows: list[CoverLetter], db: Session) -> dict:
         out[cl.id] = {
             "company": j.company if j else None,
             "title": j.title if j else None,
-            "job_url": j.url if j else None,
+            "job_url": job_link(j) if j else None,
             "job_status": j.status if j else None,
             "stage": stages.get(cl.job_id),
             "source_name": names.get(cl.resume_id) or ("Persona" if cl.from_persona else None),
@@ -344,7 +358,7 @@ async def generate_cover_letter(body: dict, db: Session = Depends(get_db)):
     # Fast-fail: the job needs some JD source; _generate_inner resolves the actual
     # text (description -> live fetch -> cached page) later, so this skips the slow fetch.
     # A hand-logged job (Log application) arrives with a URL and no description.
-    if not ((job.description or "").strip() or (job.url or "").strip() or (job.cached_page_text or "").strip()):
+    if not ((job.description or "").strip() or (job_link(job) or "").strip() or (job.cached_page_text or "").strip()):
         raise HTTPException(400, "Job has no description, URL, or cached page to write from")
 
     if not (get_setting(db, "cover_letter_prompt") or "").strip():
@@ -412,7 +426,7 @@ async def _generate_inner(resume_id, job_id, voice, length, template, page_forma
         # Detached snapshot: phase 1b resolves the JD after this session closes,
         # so no pooled connection is held across a live page fetch.
         job_ref = SimpleNamespace(id=job.id, description=job.description,
-                                  url=job.url, cached_page_text=job.cached_page_text)
+                                  url=job_link(job), cached_page_text=job.cached_page_text)
 
         # Resolve the evidence source: Persona.resume_content or a Resume row.
         persona_as_base = (resume_id == "persona")

@@ -5,6 +5,7 @@ import AccountPicker from './AccountPicker'
 import AccountChanged from './AccountChanged'
 import { listenForSwitches } from './accounts'
 import WelcomeModal from './WelcomeModal'
+import { TelemetryAsk } from './TelemetryChoice'
 import NewUiModal from './NewUiModal'
 import Shell from './Shell'
 import JobFeed from './screens/JobFeed'
@@ -22,6 +23,7 @@ import Today from './screens/Today'
 import axios from 'axios'
 import { TitleSync } from './useTitle'
 import { alreadyWelcomed, newUiPending, markWelcomed, markNewUiSeen } from './onboarding'
+import { ROUTER_BASENAME } from './demoHooks'
 
 // design-base/ (lab pages) is git-ignored and may not exist on a clone.
 // import.meta.glob yields an empty map when it matches nothing, so an absent folder costs the two routes rather than breaking the build.
@@ -77,6 +79,7 @@ function App() {
 
   // On startup, sync localStorage API key to backend session cookie.
   useEffect(() => {
+    if (__DEMO__) return   // the demo has no session, login or PIN
     const key = localStorage.getItem('jobnavigator_api_key') || ''
     axios.post('/api/auth/set-session', { api_key: key }, { withCredentials: true }).catch((err) => {
       if (err.response?.status !== 401) return
@@ -116,7 +119,7 @@ function App() {
     window.addEventListener('jn:account-changed', onChanged)
     return () => { stop(); window.removeEventListener('jn:account-changed', onChanged) }
   }, [])
-  const showPicker = !!picker && !showLogin && !changed
+  const showPicker = !__DEMO__ && !!picker && !showLogin && !changed
 
   const handleLoginSuccess = () => {
     setShowLogin(false)
@@ -124,7 +127,7 @@ function App() {
   }
 
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={ROUTER_BASENAME}>
       <TitleSync />
       <Routes>
         {/* the app */}
@@ -162,7 +165,7 @@ function App() {
         <Route path="*" element={<Navigate to="/feed" replace />} />
       </Routes>
 
-      {showLogin && <LoginModal onSuccess={handleLoginSuccess} />}
+      {!__DEMO__ && showLogin && <LoginModal onSuccess={handleLoginSuccess} />}
       {showPicker && (
         // R6-04: keyed on the account, so a second shortcut while a PIN pad is up
         // opens a fresh picker on the NEW account's pad (not the old target's)
@@ -185,6 +188,8 @@ function App() {
           setShowNewUi(false)
         }} />
       )}
+      {/* telemetry: asked of the owner once, after the other overlays are gone */}
+      {!showNewUi && !showWelcome && !showLogin && !showPicker && !changed && <TelemetryAsk />}
     </BrowserRouter>
   )
 }

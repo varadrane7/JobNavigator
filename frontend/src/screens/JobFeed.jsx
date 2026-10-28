@@ -4,7 +4,9 @@ import api from '../api'
 import { useToasts, ToastStack } from '../Toast'
 import ConfirmDialog from '../ConfirmDialog'
 import { useEscape, useSettled, useSingleOpen, useWarm, NBSP, DASH } from '../hooks'
-import { Button, Card, Check as UICheck, CheckGlyph, CopyGlyph, CrossGlyph, FooterRow, GlyphBadge, Heading, HeaderRow, Helper, IconButton, Input, kb, Label, Link, Menu, MenuItem, Meter, ModalPanel, NavLink, PageTitle, Pill, Row, Rule, ScoreRing, SearchInput, SectionHead, Segmented, Spinner, TableHead, TableRow, ZOOM_MAX, ZOOM_MIN, ZoomFloater } from '../ui'
+import { LINK_KINDS, closedTag, linkKindParam, linkTag, openLink } from '../linkKinds'
+import { isShortcut, track } from '../telemetry'
+import { Button, Card, Check as UICheck, CheckGlyph, CopyGlyph, CrossGlyph, Dot, FooterRow, GlyphBadge, HeaderRow, Heading, Helper, IconButton, Input, kb, Label, Link, Menu, MenuItem, Meter, ModalPanel, NavLink, PageTitle, Pill, Row, Rule, ScoreRing, SearchInput, SectionHead, Segmented, Spinner, TableHead, TableRow, Tag, ZOOM_MAX, ZOOM_MIN, ZoomFloater } from '../ui'
 import { ANALYZE, NO_BASES_HINT, SCORE_RESUME, TAILOR, activityText, noScoreSource,feedActivity, flightDetail, flightTypes, ghostTabs, tabBusy, tabBusyHint, tailorMarkTitle } from './feedActivity'
 import { PICK_KEY, clickMods, clickSelection } from './rowSelect'
 import { useApifyBoards, apifySourceLabel } from '../apifyBoards'
@@ -15,6 +17,8 @@ const UI_KEY = 'v2_feed_ui'   // persisted panel open/collapse prefs
 const loadUI = () => { try { return JSON.parse(localStorage.getItem(UI_KEY)) || {} } catch { return {} } }
 // A grab-line above the detail header folds the whole right-side top (metadata header + score/report band) away.
 // Its own key, deliberately not part of UI_KEY — survives reloads and job selection.
+// The server's reason for a refused start (409 already running, 400 nothing to score with…), when it gave one.
+const detailSuffix = (e) => (typeof e?.response?.data?.detail === 'string' ? ' — ' + e.response.data.detail : '')
 const ANA_KEY = 'jn_feed_analysis_collapsed'
 const loadAnaCollapsed = () => { try { return localStorage.getItem(ANA_KEY) === '1' } catch { return false } }
 // Per-host frame-check cache ({host: 1 embeddable | 0 blocked}). A known host answers instantly;
@@ -95,6 +99,7 @@ const SOURCE_LABELS = {
 }
 // `boards` (useApifyBoards) names the `apify_<board>` sources.
 const srcLabel = (s, boards = []) => SOURCE_LABELS[s] || apifySourceLabel(boards, s) || s || ''
+// `duplicate`: a copy of a posting the feed already has (posting_links.py); the posting lists it under "Also on".
 const STATUS_OPTS = [['new', 'New'], ['saved', 'Saved'], ['applied', 'Applied'], ['skip', 'Skip'], ['ignored', 'Ignored']]
 const SORT_OPTS = [['score', 'Top score'], ['date', 'Newest first'], ['salary', 'Salary, high to low'], ['company', 'Company A–Z']]
 // "45 minutes", "1 hour", "2 hours 30 minutes" — the scrape interval in the never-scraped empty state
@@ -104,7 +109,7 @@ const everyText = (min) => {
   if (!h) return part(r, 'minute')
   return r ? `${part(h, 'hour')} ${part(r, 'minute')}` : part(h, 'hour')
 }
-const DEFAULTS = { status: ['new'], company: [], source: [], h1b_verdict: [], location: [], arrangement: [], min_score: '', min_salary: '', max_salary: '' }
+const DEFAULTS = { status: ['new'], company: [], source: [], h1b_verdict: [], location: [], arrangement: [], link_kind: [], open_state: [], min_score: '', min_salary: '', max_salary: '' }
 
 // small dropdown shell (trigger pill + panel + backdrop). Flips to right-align
 // when the panel would overflow the viewport's right edge.
@@ -208,11 +213,11 @@ export default function V2JobFeed() {
   const [reportTab, setReportTab] = useState(0)   // per-job: reports differ per résumé, so this resets
   const [reqFilter, setReqFilter] = useState(() => loadUI().reqFilter ?? 'all')
   const [showMatched, setShowMatched] = useState(() => loadUI().showMatched ?? false)
-  const [breakdownOpen, setBreakdownOpen] = useState(() => loadUI().breakdownOpen ?? false)
-  const [keywordOpen, setKeywordOpen] = useState(() => loadUI().keywordOpen ?? false)
-  const [reqOpen, setReqOpen] = useState(() => loadUI().reqOpen ?? false)
+  const [breakdownOpen, setBreakdownOpen] = useState(() => loadUI().breakdownOpen ?? true)
+  const [keywordOpen, setKeywordOpen] = useState(() => loadUI().keywordOpen ?? true)
+  const [reqOpen, setReqOpen] = useState(() => loadUI().reqOpen ?? true)
   useEffect(() => { try { localStorage.setItem(UI_KEY, JSON.stringify({ headOpen, reportOpen, breakdownOpen, keywordOpen, reqOpen, reqFilter, showMatched })) } catch {} }, [headOpen, reportOpen, breakdownOpen, keywordOpen, reqOpen, reqFilter, showMatched])
-  const [viewCached, setViewCached] = useState(false)
+  const [viewCached, setViewCached] = useState(__DEMO__)
   const [cachedHtml, setCachedHtml] = useState(null)
   // Posting zoom. `postZoom` is what the frames render at whether or not the
   // floater is shown — turning the control off hides the affordance, it does not
@@ -249,6 +254,8 @@ export default function V2JobFeed() {
   const [sourceList, setSourceList] = useState([])
   const [sourceCounts, setSourceCounts] = useState({}); const [verdictCounts, setVerdictCounts] = useState({})
   const [verdictList, setVerdictList] = useState([])
+  const [openCounts, setOpenCounts] = useState({})        // {open, closed}: the Posting menu (still_open.py)
+  const [linkKindCounts, setLinkKindCounts] = useState({})   // {direct|board|easy_apply: n}, own filter lifted
   const [statusCounts, setStatusCounts] = useState({})   // {status: n} — counted with the Status filter itself lifted
   const [facetsOk, setFacetsOk] = useState(false)        // the facets answered at least once (T7-08)
   const [scrapeEvery, setScrapeEvery] = useState(null)   // scrape_interval_minutes, for the never-scraped empty state
@@ -320,6 +327,8 @@ export default function V2JobFeed() {
     if (filters.h1b_verdict.length) p.h1b_verdict = filters.h1b_verdict.join(',')
     if (filters.location.length) p.location = filters.location.join(',')
     if (filters.arrangement.length) p.arrangement = filters.arrangement.join(',')
+    if (filters.link_kind.length) p.link_kind = linkKindParam(filters.link_kind)
+    if (filters.open_state.length === 1) p.open_state = filters.open_state[0]   // both = no filter
     if (filters.min_score !== '') p.min_score = filters.min_score
     if (filters.min_salary) p.min_salary = Number(filters.min_salary) * 1000
     if (filters.max_salary) p.max_salary = Number(filters.max_salary) * 1000
@@ -345,6 +354,8 @@ export default function V2JobFeed() {
     setVerdictList(named(data.h1b_verdicts).map((x) => x.name))
     setVerdictCounts(Object.fromEntries(named(data.h1b_verdicts).map((x) => [x.name, x.count])))
     setStatusCounts(Object.fromEntries(named(data.statuses).map((x) => [x.name, x.count])))
+    setLinkKindCounts(Object.fromEntries(named(data.link_kinds).map((x) => [x.name, x.count])))
+    setOpenCounts(Object.fromEntries(named(data.open_states).map((x) => [x.name, x.count])))
     setFacetsOk(true)
     setScoreBands(Object.fromEntries(named(data.score_bands).map((x) => [x.name, x.count])))
   }).catch(() => { /* silent: the filter menus; the list itself shows its own error state */ }), [])
@@ -470,7 +481,7 @@ export default function V2JobFeed() {
     pinnedRef.current = null                 // picking from the list releases a ?job= pin
     deadPinRef.current = false
     setSel(idx); lastIdx.current = idx
-    setDetail(j); setReportTab(0); setViewCached(false); setCachedHtml(null); setFrameOk(frameGuess(j.url)); setFrameDeadId(null)
+    setDetail(j); setReportTab(0); setViewCached(__DEMO__); setCachedHtml(null); setFrameOk(frameGuess(openLink(j))); setFrameDeadId(null)
     api.get(`/jobs/${j.id}`).then(({ data }) => setDetail((c) => (c && c.id === data.id ? data : c))).catch(() => { /* silent: a background refresh of an already-rendered panel — the row data stays */ })
   }, [frameGuess])
   const focusAt = useCallback((idx) => {
@@ -557,8 +568,9 @@ export default function V2JobFeed() {
       } catch (e) { console.error(e); pushToast({ kind: 'error', msg: `Couldn't undo that — "${job.title}" is unchanged` }); fetchJobs() }
     } })
   }, [pushToast, fetchJobs, refreshStats])
-  const saveJob = async (j) => { const willSave = !j.saved, ps = j.status, pv = j.saved; if (willSave && scoredCount(j) === 0) watchForScore(j.id); if (await patchRemote(j, { saved: willSave, status: willSave ? 'saved' : 'new' })) showUndo(j, ps, pv, `${willSave ? 'Saved' : 'Unsaved'} "${j.title}"`) }
-  const skipJob = async (j) => { const ps = j.status, pv = j.saved; if (await patchRemote(j, { status: 'skip' })) showUndo(j, ps, pv, `Skipped "${j.title}"`) }
+  const saveJob = async (j) => { const willSave = !j.saved, ps = j.status, pv = j.saved; if (willSave && scoredCount(j) === 0) watchForScore(j.id); if (await patchRemote(j, { saved: willSave, status: willSave ? 'saved' : 'new' })) { showUndo(j, ps, pv, `${willSave ? 'Saved' : 'Unsaved'} "${j.title}"`); if (willSave) track('job_saved') } }
+  const skipJob = async (j) => { const ps = j.status, pv = j.saved; if (await patchRemote(j, { status: 'skip' })) { showUndo(j, ps, pv, `Skipped "${j.title}"`); track('job_skipped') } }
+  const opened = (j) => track('job_opened', { link_kind: j?.link_kind || 'none' })
   const applyJob = async (j) => {
     const ps = j.status, pv = j.saved
     const res = await patchRemote(j, { status: 'applied' })
@@ -615,7 +627,7 @@ export default function V2JobFeed() {
     // the one-click path sends no cv_ids, so the run covers every base résumé
     api.post(`/analyze/${job.id}?depth=${defaultDepth}`, {}).then(() => {
       markFlight(job.id, ANALYZE, { resume_names: resumes.map((r) => r.name).filter(Boolean), depth: defaultDepth })
-    }).catch((e) => { delete pendingRef.current[job.id]; pushToast({ kind: 'error', msg: `Scoring failed for "${job.title}"` }); console.error(e) })
+    }).catch((e) => { delete pendingRef.current[job.id]; pushToast({ kind: 'error', msg: `Scoring failed for "${job.title}"${detailSuffix(e)}` }); console.error(e) })
   }, [pushToast, defaultDepth, resumes, markFlight])
 
   // rescoreJob holds { label, jobs:[...] } — one job or a bulk set
@@ -669,7 +681,7 @@ export default function V2JobFeed() {
           await api.post('/resumes/tailor', { base_resume_id: baseId, job_id: job.id })
           markFlight(job.id, TAILOR, { base_name: baseName, replaces: !!job.tailored_resume_id })
         }
-      } catch (e) { delete pendingRef.current[job.id]; pushToast({ kind: 'error', msg: `${mode === 'copy' ? 'Copy' : 'Tailor'} failed for "${job.title}"` }); console.error(`${mode} failed`, e.response?.data?.detail || e.message) }
+      } catch (e) { delete pendingRef.current[job.id]; pushToast({ kind: 'error', msg: `${mode === 'copy' ? 'Copy' : 'Tailor'} failed for "${job.title}"${detailSuffix(e)}` }); console.error(`${mode} failed`, e.response?.data?.detail || e.message) }
     }
     setChecked(new Set())
   }, [pushToast, resumes, markFlight, navigate])
@@ -770,6 +782,7 @@ export default function V2JobFeed() {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return
       if (e.ctrlKey || e.metaKey || e.altKey) return  // let browser shortcuts (Ctrl+Shift+R etc.) through
       const list = jobsRef.current, idx = selRef.current, job = list[idx]
+      if (isShortcut(e.key)) track('feed_shortcut', { key: e.key })
       switch (e.key) {
         case 'f': case 'j': case 'ArrowDown': e.preventDefault(); focusAt(Math.min(idx + 1, list.length - 1)); break
         case 'g': case 'k': case 'ArrowUp': e.preventDefault(); focusAt(Math.max(idx - 1, 0)); break
@@ -778,7 +791,7 @@ export default function V2JobFeed() {
         case 's': if (job) { const nextStatus = job.saved ? 'new' : 'saved'; saveJob(job); if (!leavesView(nextStatus)) focusAt(Math.min(idx + 1, list.length - 1)) } break
         case 'x': if (job) { skipJob(job); if (!leavesView('skip')) focusAt(Math.min(idx + 1, list.length - 1)) } break
         case 'a': if (job) applyJob(job); break
-        case 'e': case 'o': if (job?.url) window.open(job.url, '_blank', 'noopener,noreferrer'); break
+        case 'e': case 'o': if (openLink(job)) { opened(job); window.open(openLink(job), '_blank', 'noopener,noreferrer') } break
         case 'r': if (job) openRescore(job); break
         case 't': if (job) setPicker({ mode: 'tailor', jobs: [job] }); break   // the ⋯ menus hint t
         case 'c': if (job) navigate(`/cover-letters?job=${job.id}`); break   // and c
@@ -805,8 +818,8 @@ export default function V2JobFeed() {
   // Extension off: probe whether the posting will embed (X-Frame-Options / CSP frame-ancestors).
   // Always try the live iframe first — only a confident block routes to the extension message; the probe runs once per host and is cached.
   useEffect(() => {
-    if (!detail || !detail.url || viewCached || extActive) return
-    const host = hostOf(detail.url)
+    if (!detail || !openLink(detail) || viewCached || extActive) return
+    const host = hostOf(openLink(detail))
     if (!host || frameCache.current[host] !== undefined) return
     const id = detail.id
     api.get(`/jobs/${id}/frame-check`).then(({ data }) => {
@@ -822,9 +835,9 @@ export default function V2JobFeed() {
 
   // The src the live posting frame gets. Any route away from it (cached snapshot, confirmed block,
   // a load that never arrived) makes it null, and the pane renders the cached or fallback branch.
-  const cachedAvail = !!(detail && detail.status === 'applied' && detail.has_cached_page)
+  const cachedAvail = __DEMO__ ? !!detail : !!(detail && detail.status === 'applied' && detail.has_cached_page)
   const frameJobId = detail?.id || null
-  const frameSrc = (detail?.url && !(viewCached && cachedAvail) && (extActive || frameOk !== false) && frameDeadId !== detail.id) ? detail.url : null
+  const frameSrc = (openLink(detail) && !(viewCached && cachedAvail) && (extActive || frameOk !== false) && frameDeadId !== detail.id) ? openLink(detail) : null
   // Cover goes up when a frame mounts/src changes, down on load/error or the safety timeout (closed-over id
   // guards a stale timer). Layout effect so the cover paints with the frame's first frame, not one paint late.
   useLayoutEffect(() => {
@@ -870,6 +883,23 @@ export default function V2JobFeed() {
     }).catch(() => { /* silent: the light default already applies */ })
   }, [])
 
+  // Is the posting still open: checked when a job is opened, the answer kept a day (still_open.py).
+  // Paging through jobs quickly asks nothing: the check waits 400 ms on a job.
+  const detailId = detail?.id
+  const [recheck, setRecheck] = useState(0)   // a click on Closed checks again, ignoring the day-old answer
+  useEffect(() => {
+    if (!detailId || __DEMO__) return undefined
+    let gone = false
+    const t = setTimeout(() => {
+      api.post(`/jobs/${detailId}/open-check`, null, { params: recheck ? { force: 1 } : {} }).then(({ data }) => {
+        if (gone) return
+        setDetail((d) => (d && d.id === detailId ? { ...d, ...data } : d))
+        setJobs((js) => js.map((x) => (x.id === detailId ? { ...x, ...data } : x)))
+      }).catch(() => { /* silent: the Closed marker is a hint; nothing shows when the check fails */ })
+    }, recheck ? 0 : 400)
+    return () => { gone = true; clearTimeout(t) }
+  }, [detailId, recheck])
+
   // ?job=<id> is the job permalink — open that job's detail. The param is kept in
   // the URL (and re-synced below) so the link survives a refresh or a copy-paste.
   useEffect(() => {
@@ -878,7 +908,7 @@ export default function V2JobFeed() {
     pinnedRef.current = jid
     api.get(`/jobs/${jid}`).then(({ data }) => {
       if (pinnedRef.current !== jid) return
-      setDetail(data); setReportTab(0); setViewCached(false); setCachedHtml(null); setFrameOk(frameGuess(data.url)); setFrameDeadId(null)
+      setDetail(data); setReportTab(0); setViewCached(__DEMO__); setCachedHtml(null); setFrameOk(frameGuess(openLink(data))); setFrameDeadId(null)
     }).catch(() => {
       if (pinnedRef.current !== jid) return
       pinnedRef.current = null; deadPinRef.current = true   // don't fall through to an unrelated job
@@ -1037,7 +1067,7 @@ export default function V2JobFeed() {
   const dCached = cachedAvail   // hoisted above the frame effects, which need it too
   // T7-08: no job in any status under the other (default, empty) filters = never scraped into
   const neverScraped = facetsOk && !dSearch && !searchId
-    && ['company', 'source', 'h1b_verdict', 'location', 'arrangement'].every((k) => !(filters[k] || []).length)
+    && ['company', 'source', 'h1b_verdict', 'location', 'arrangement', 'link_kind', 'open_state'].every((k) => !(filters[k] || []).length)
     && filters.min_score === '' && !filters.min_salary && !filters.max_salary
     && Object.values(statusCounts).reduce((a, n) => a + (Number(n) || 0), 0) === 0
 
@@ -1133,6 +1163,10 @@ export default function V2JobFeed() {
         <Drop label={`H-1B${filters.h1b_verdict.length ? ` · ${filters.h1b_verdict.length}` : ''}`} active={filters.h1b_verdict.length > 0} onClear={() => setF({ h1b_verdict: [] })} open={menu === 'h1b'} onToggle={() => setMenu(menu === 'h1b' ? null : 'h1b')} width={196}>
           {['likely', 'possible', 'unlikely', 'unknown'].filter((v) => facetVerdicts.includes(v)).map((v) => <Check key={v} on={filters.h1b_verdict.includes(v)} label={H1B[v].label.replace('H-1B ', '')} count={facetVerdictCounts[v]} onClick={() => togF('h1b_verdict', v)} />)}
         </Drop>
+        {/* whether the job reaches the employer's own site (linkKinds.js) */}
+        <Drop label={`Link${filters.link_kind.length ? ` · ${filters.link_kind.length}` : ''}`} active={filters.link_kind.length > 0} onClear={() => setF({ link_kind: [] })} open={menu === 'link'} onToggle={() => setMenu(menu === 'link' ? null : 'link')} width={196}>
+          {LINK_KINDS.map((k) => <Check key={k.key} on={filters.link_kind.includes(k.key)} label={k.label} count={k.kinds.reduce((n, kind) => n + (linkKindCounts[kind] ?? 0), 0)} onClick={() => togF('link_kind', k.key)} />)}
+        </Drop>
         <Drop inset label={filters.min_score !== '' ? `Score ≥ ${filters.min_score}` : 'Score ≥'} active={filters.min_score !== ''} onClear={() => setF({ min_score: '' })} open={menu === 'score'} onToggle={() => setMenu(menu === 'score' ? null : 'score')} width={234}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
             {/* each preset carries what it would leave, counted over the other active filters */}
@@ -1173,6 +1207,12 @@ export default function V2JobFeed() {
           }}>
           {STATUS_OPTS.map(([v, label]) => <Check key={v} on={filters.status.includes(v)} label={label} count={statusCounts[v] ?? 0} onClick={() => togF('status', v)} />)}
         </Drop>
+        {/* the last menu, once a check has found a closed posting (still_open.py) */}
+        {((openCounts.closed ?? 0) > 0 || filters.open_state.length > 0) && (
+          <Drop label={`Posting${filters.open_state.length ? ` · ${filters.open_state.length}` : ''}`} active={filters.open_state.length > 0} onClear={() => setF({ open_state: [] })} open={menu === 'posting'} onToggle={() => setMenu(menu === 'posting' ? null : 'posting')} width={170}>
+            {[['open', 'Open'], ['closed', 'Closed']].map(([v, label]) => <Check key={v} on={filters.open_state.includes(v)} label={label} count={openCounts[v] ?? 0} onClick={() => togF('open_state', v)} />)}
+          </Drop>
+        )}
         <div style={{ marginLeft: 'auto', flex: '0 0 auto' }}>
           <Drop width={172} open={menu === 'sort'} onToggle={() => setMenu(menu === 'sort' ? null : 'sort')}
             trigger={(t) => /* ui: keep — the Sort control is a text trigger (muted 12.5 + bold value + caret), not a Pill or a Link */ <div onClick={t} className="v2-hover-accent-text" style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: 'var(--muted)', cursor: 'pointer' }}>Sort<span style={{ color: 'var(--text-2)', fontWeight: 500 }}>{SORT_OPTS.find((o) => o[0] === sortBy)?.[1]}</span><span style={{ fontSize: 10 }}>▾</span></div>}>
@@ -1251,7 +1291,7 @@ export default function V2JobFeed() {
               // ui: keep — the "Try again" link runs inline inside a 13px sentence; Link's 11.5/500 would break the run
               : loadError ? <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>Couldn't load jobs · <span onClick={fetchJobs} style={{ color: 'var(--accent)', cursor: 'pointer' }}>Try again</span></div>
               : jobs.length === 0 ? (
-                  (!filters.status.length && !filters.company.length && !filters.source.length && !filters.h1b_verdict.length && filters.min_score === '' && !filters.min_salary && !dSearch && !searchId)
+                  (!filters.status.length && !filters.company.length && !filters.source.length && !filters.h1b_verdict.length && !filters.link_kind.length && filters.min_score === '' && !filters.min_salary && !dSearch && !searchId)
                     ? <div style={{ padding: '48px 40px', textAlign: 'center', color: 'var(--muted)', fontSize: 13, lineHeight: '20px' }}>   {/* first-run / nothing open */}
                         <Heading style={{ display: 'block', marginBottom: 6 }}>No open roles yet</Heading>
                         Jobs come from <a href="/searches" onClick={(e) => { e.preventDefault(); navigate('/searches') }}>Searches</a> and <a href="/companies" onClick={(e) => { e.preventDefault(); navigate('/companies') }}>Companies</a>. Activate one, or change the Status filter to include skipped and applied jobs.
@@ -1316,6 +1356,7 @@ export default function V2JobFeed() {
                               the list row's own rhythm, so it stays with the call site */}
                           {/* `v2-rowink` lets a SELECTED row's --row-selected-ink reach the text (theme.css); it marks
                               reading content only — the status badge keeps its own ground/ink, and doesn't match in the default theme. */}
+                          {closedTag(j) && <Dot tone="bad" title={closedTag(j).title} />}
                           <Heading strong size={16} className="v2-rowink" title={j.title} style={{ flex: 1, minWidth: 0, lineHeight: 1.15, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: isIgnored ? 'line-through' : 'none', textDecorationColor: 'var(--muted)' }}>{j.title}</Heading>
                           {/* the ✦ mark: the same 18px box either way, so a tailor starting
                               swaps the glyph for a spinner without moving the title. Busy is
@@ -1367,7 +1408,7 @@ export default function V2JobFeed() {
                         <>
                           <div onClick={() => setRowMenu(null)} style={{ position: 'fixed', inset: 0, zIndex: 59 }} />
                           <Menu ariaLabel="Job actions" style={{ position: 'fixed', left: rowMenu.left, top: rowMenu.top, bottom: rowMenu.bottom, zIndex: 60, width: 228 }}>
-                            {[['Mark applied', 'a', () => applyJob(j)], ['Tailor résumé', 't', () => setPicker({ mode: 'tailor', jobs: [j] })], ['Rescore', 'r', () => openRescore(j)], ['Open posting ↗', 'e', () => j.url && window.open(j.url, '_blank', 'noopener,noreferrer')]].map(([label, key, act]) => (
+                            {[['Mark applied', 'a', () => applyJob(j)], ['Tailor résumé', 't', () => setPicker({ mode: 'tailor', jobs: [j] })], ['Rescore', 'r', () => openRescore(j)], [__DEMO__ ? 'Open posting ↗ · original may have expired' : 'Open posting ↗', 'e', () => openLink(j) && window.open(openLink(j), '_blank', 'noopener,noreferrer')]].map(([label, key, act]) => (
                               <MenuItem key={label} hint={key} hintMono onClick={() => { setRowMenu(null); act() }}
                                 style={label === 'Tailor résumé' ? { fontWeight: 600 } : undefined}>{label}</MenuItem>
                             ))}
@@ -1425,6 +1466,17 @@ export default function V2JobFeed() {
                         {[fmtSalary(d.salary_min, d.salary_max) && <span key="sal" style={{ maxWidth: 230, fontFamily: 'var(--numeral-face)', fontSize: 12.5, color: 'var(--text-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fmtSalary(d.salary_min, d.salary_max)}</span>,
                           d.location && <span key="loc" style={{ maxWidth: 270, color: 'var(--text-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.location}</span>,
                           visaText && <span key="visa" title={visaTitle} style={{ color: visaCol }}>{visaText}</span>,
+                          // where else this posting was found; each copy opens its own listing
+                          // a copy from this job's own source is the same posting or role under another
+                          // link: named by its city when that differs, else "another link"
+                          d.also_on?.length > 0 && <span key="also" style={{ whiteSpace: 'nowrap' }}>Also listed:{' '}
+                            {d.also_on.map((a, i) => <React.Fragment key={a.url}>{i ? '; ' : ''}<Link href={a.url} target="_blank" title={a.url} style={{ fontSize: 'inherit', lineHeight: 'inherit' }}>{a.source !== d.source ? srcLabel(a.source, apifyBoards) : (a.location && a.location !== d.location ? a.location : 'another link')}</Link></React.Fragment>)}
+                          </span>,
+                          // the same role, skipped elsewhere: shown again because this place may fit
+                          d.same_role_skipped && <span key="skipped" style={{ whiteSpace: 'nowrap' }}>Skipped in{' '}
+                            <Link onClick={() => setSearchParams(p => { p.set('job', d.same_role_skipped.id); return p })} title="The same role, which you skipped in another place" style={{ fontSize: 'inherit', lineHeight: 'inherit' }}>{d.same_role_skipped.location || 'another place'}</Link></span>,
+                          // a copy links back to its original (backend posting_links.py: link | city | repost)
+                          d.copy_of && <span key="copy" style={{ whiteSpace: 'nowrap' }}><Link onClick={() => setSearchParams((p) => { p.set('job', d.copy_of.id); return p })} title="Open the original posting" style={{ fontSize: 'inherit', lineHeight: 'inherit' }}>{d.copy_kind === 'city' ? `Same role in ${d.copy_of.location || 'another city'}` : d.copy_kind === 'repost' ? 'Reposted: see the earlier posting' : 'Copy of a posting in your feed'} ↗</Link></span>,
                         ].filter(Boolean).flatMap((el, i) => i ? [<span key={`sep${i}`} style={{ color: 'var(--line)' }}>|</span>, el] : [el])}
                       </div>
                     ) : <Helper style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{[d.company, fmtSalary(d.salary_min, d.salary_max), d.location, visaText, srcLabel(d.source, apifyBoards), timeAgo(d.discovered_at)].filter(Boolean).join(' · ')}</Helper>}
@@ -1435,7 +1487,10 @@ export default function V2JobFeed() {
                         (⌘/middle-click still opens the posting) with the secondary
                         button's own paint; the override is the height, which tracks
                         the collapsing detail header (36/30) like the ✦ button beside it. */}
-                    {d.url && <Button variant="secondary" size="sm" href={d.url} target="_blank" style={{ height: headOpen ? 36 : 30 }}>Open ↗</Button>}
+                    {/* the employer's own posting when there is one (linkKinds.js openLink), else the job's link */}
+                    {closedTag(d) && <span title={closedTag(d).title} onClick={() => setRecheck((n) => n + 1)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--dot-bad)', cursor: 'pointer' }}><Dot tone="bad" />{closedTag(d).text}</span>}
+                    {linkTag(d) && <Tag title={linkTag(d).title}>{linkTag(d).text}</Tag>}
+                    {openLink(d) && <Button variant="secondary" size="sm" href={openLink(d)} target="_blank" title={openLink(d)} onClick={() => opened(d)} style={{ height: headOpen ? 36 : 30 }}>Open ↗</Button>}
                     {/* Routed through Button (not hand-drawn) so it reads --btn-shadow/--btn-weight/--btn-primary-bg/-ink
                         and the hover/pressed rules; the style override only restores height/padding/line-height, which track the collapsing header. */}
                     {/* while a tailor runs the button says so and does nothing: `disabled`
@@ -1697,7 +1752,7 @@ export default function V2JobFeed() {
               <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: reportCovers ? 'none' : 'flex', flexDirection: 'column' }} className="v2-scroll">
                   {/* live / cached posting — full-bleed iframe */}
                   <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                    {dCached && (
+                    {dCached && !__DEMO__ && (
                       <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 30px', borderBottom: '1px solid var(--line)', background: 'var(--surface-2)' }}>
                         <span style={{ fontSize: 12, color: viewCached ? 'var(--accent)' : 'var(--muted)' }}>{viewCached ? 'Cached snapshot · captured when you applied' : 'Live posting'}</span>
                         <Segmented variant="inset" ariaLabel="Posting view" value={viewCached ? 'cached' : 'live'}
@@ -1745,7 +1800,7 @@ export default function V2JobFeed() {
                           </div>
                         )}
                       </div>
-                    ) : d.url ? (
+                    ) : openLink(d) ? (
                       /* frame-blocked — canonical design panel */
                       <div style={{ flex: '1 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '44px 30px', minHeight: 0 }}>
                         <div style={{ maxWidth: '44ch', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 11, textAlign: 'center' }}>
@@ -1757,7 +1812,7 @@ export default function V2JobFeed() {
                             {/* round 9: `Button href` renders the real anchor this
                                 needed, on the primary button's own paint (which is
                                 the --accent / --accent-ink pair it drew by hand) */}
-                            <Button size="sm" href={d.url} target="_blank" style={{ height: 34 }}>Open in new tab ↗</Button>
+                            <Button size="sm" href={openLink(d)} target="_blank" style={{ height: 34 }}>Open in new tab ↗{__DEMO__ ? ' · original may have expired' : ''}</Button>
                             {/* ui: keep — h34 to match the native anchor it sits beside (which stays inline) */}
                             {dCached && <Button variant="secondary" size="sm" hover="v2-act" onClick={() => setViewCached(true)} style={{ height: 34 }}>View cached snapshot</Button>}
                           </div>
