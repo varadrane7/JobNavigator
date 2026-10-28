@@ -9,6 +9,7 @@ the day's planned post or task (the online presence plan). Scheduled by `nag_cro
 """
 import json
 import logging
+import os
 import random
 from datetime import timedelta
 
@@ -75,7 +76,7 @@ def _settings() -> dict:
             cal = {}
         return {"apply_t": i("nag_apply_target", 10), "req_t": i("nag_request_target", 5),
                 "calendar": cal if isinstance(cal, dict) else {},
-                "url": (get_setting(db, "oidc_public_url") or "").rstrip("/")}
+                "url": (get_setting(db, "oidc_public_url") or os.environ.get("OIDC_PUBLIC_URL") or "").rstrip("/")}
     finally:
         db.close()
 
