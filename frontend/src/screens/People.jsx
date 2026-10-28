@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import { useToasts, ToastStack } from '../Toast'
-import { Button, Card, HeaderRow, Helper, Link, Mono, PageTitle, Select, Segmented, Tag, Heading, Notice, Spinner, scoreTone } from '../ui'
+import { Button, Card, HeaderRow, Helper, Link, Mono, PageTitle, Select, Tag, Heading, Notice, Spinner, scoreTone } from '../ui'
 import { agoShort } from '../time'
 import { fetchRunOutcome, runFailed, runFailureReason } from '../hooks'
 import '../theme.css'
@@ -14,14 +14,14 @@ import '../theme.css'
 
 const KIND = {
   hiring_post: ['Hiring post', 'accent'], project_fit: ['Project fit', 'accent'], alumni: ['Alumni', 'good'],
-  founder: ['Founder', 'accent'], job: ['About a job', 'neutral'], network: ['Good company', 'neutral'],
+  founder: ['Founder', 'accent'], job: ['For a Today pick', 'neutral'], network: ['Good company', 'neutral'],
 }
 const ROLE = { founder: 'Founder', hiring_manager: 'Hiring manager', recruiter: 'Recruiter', engineer: 'Engineer', other: '' }
 const STATUS = [['new', 'New'], ['requested', 'Requested'], ['connected', 'Connected'], ['messaged', 'Messaged'],
   ['replied', 'Replied'], ['referral', 'Referral'], ['snoozed', 'Snoozed'], ['skip', 'Skip']]
 const NEXT = { new: ['requested', 'Sent request'], requested: ['connected', 'Accepted'], connected: ['messaged', 'Messaged'],
   messaged: ['replied', 'Replied'], replied: ['referral', 'Got referral'] }
-const TABS = [['due', 'Due'], ['new', 'New leads'], ['pipeline', 'Pipeline'], ['all', 'All']]
+const TABS = [['due', 'Due today'], ['new', 'New leads (not contacted)'], ['pipeline', 'In progress'], ['all', 'Everyone']]
 const PIPELINE = new Set(['requested', 'connected', 'messaged', 'replied', 'referral'])
 const DEGREE = { 1: '1st', 2: '2nd', 3: '3rd+' }
 
@@ -38,13 +38,26 @@ function SessionChip({ which, s, onRefresh }) {
   const text = cooling ? `cooling until ${cooling.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : `${s.used}/${s.cap} today`
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      <Tag tone={tone} title={`LinkedIn ${which} session: searches today and cooldown after a 429`}>{which === 'mock' ? 'Mock' : 'Main'} · {text}</Tag>
+      <Tag tone={tone} title={which === 'mock' ? 'LinkedIn searches used today on the mock (fake) account, which does the searching' : 'LinkedIn searches used today on your real account (only when the mock one is throttled, and for 2nd/3rd checks)'}>{which === 'mock' ? 'Mock account' : 'Your account'} · {text}</Tag>
       {cooling && <Button size="xs" variant="ghost" onClick={onRefresh} title="Sign this session in again (Settings › LinkedIn)">Refresh</Button>}
     </span>
   )
 }
 
-function LeadCard({ c, onStatus, push }) {
+const daysSince = (iso) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)) : null)
+// One line on why this person is on the Due list: the step that is waiting.
+function dueReason(c) {
+  const d = daysSince(c.last_action_at || c.found_on)
+  const ago = d == null ? '' : ` ${d} day${d === 1 ? '' : 's'} ago`
+  if (c.status === 'new') return 'New lead: send a connection request.'
+  if (c.status === 'requested') return `Request sent${ago}, no answer. Accepted on LinkedIn? Press Accepted. Otherwise drop it.`
+  if (c.status === 'connected') return `Accepted${ago}: send one message with one ask.`
+  if (c.status === 'messaged') return `Messaged${ago}, no reply: nudge once, or drop it.`
+  if (c.status === 'snoozed') return 'Snooze is over: decide now.'
+  return null
+}
+
+function LeadCard({ c, onStatus, push, showDue }) {
   const [open, setOpen] = useState(false)
   const [label, tone] = KIND[c.lead_kind] || [c.lead_kind || 'Lead', 'neutral']
   const next = NEXT[c.status]
@@ -63,8 +76,10 @@ function LeadCard({ c, onStatus, push }) {
         {ROLE[c.kind] ? <Tag tone="neutral">{ROLE[c.kind]}</Tag> : null}
         {c.degree ? <Tag tone={c.degree === 2 ? 'good' : 'neutral'} title="Distance in your own network">{DEGREE[c.degree]}</Tag> : null}
         {next && <Button size="xs" variant="primary" onClick={() => onStatus(c, next[0])}>{next[1]}</Button>}
+        {(c.status === 'requested' || c.status === 'messaged') && <Button size="xs" variant="ghost" onClick={() => onStatus(c, 'skip')} title="They never answered: take them off your list">No reply, drop</Button>}
         <Select value={c.status === 'contacted' ? 'requested' : c.status} options={STATUS} onPick={(v) => onStatus(c, v)} width="120px" ariaLabel="Lead status" />
       </div>
+      {showDue && dueReason(c) && <Helper size="xs" style={{ color: 'var(--warn)' }}>{dueReason(c)}</Helper>}
       {c.why && <Helper size="xs">{c.why}</Helper>}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         {c.note && <Button size="xs" variant="ghost" onClick={() => copy(c.note, push, 'Connection note')}>Copy note</Button>}
@@ -146,7 +161,7 @@ export default function People() {
   const setStatus = async (c, status) => {
     try {
       const { data } = await api.patch(`/contacts/${c.id}`, { status })
-      setRows((rs) => rs.map((x) => (x.id === c.id ? data : x)))
+      setRows((rs) => (tab === 'due' && !data.next_action_at ? rs.filter((x) => x.id !== c.id) : rs.map((x) => (x.id === c.id ? data : x))))
     } catch { push({ kind: 'error', msg: 'Could not update' }) }
   }
 
@@ -166,7 +181,7 @@ export default function People() {
       <HeaderRow as="header" variant="screen" align="flex-end" style={{ gap: 18, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
           <PageTitle>People</PageTitle>
-          <Helper>People who can hire, refer or vouch for you, found from your persona and projects. Work the Due tab daily.</Helper>
+          <Helper>People who can hire, refer or vouch for you. Work "Due today" top to bottom every day.</Helper>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <SessionChip which="mock" s={usage?.mock} onRefresh={() => navigate('/settings#linkedin')} />
@@ -175,7 +190,7 @@ export default function People() {
         </div>
       </HeaderRow>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '10px 30px 0', flexWrap: 'wrap' }}>
-        <Segmented value={tab} options={TABS.map(([v, l]) => ({ value: v, label: l }))} onChange={setTab} grow={false} ariaLabel="Which leads" />
+        <Select value={tab} options={TABS} onPick={setTab} width="190px" ariaLabel="Which people" />
         <Select value={kind} options={[['', 'Every source'], ...Object.entries(KIND).map(([k, [l]]) => [k, l])]} onPick={setKind} width="170px" ariaLabel="Lead source" />
         {tab === 'all' && rows && <Helper size="xs">{STATUS.filter(([k]) => counts[k]).map(([k, l]) => `${l} ${counts[k]}`).join(' · ')}</Helper>}
       </div>
@@ -186,7 +201,7 @@ export default function People() {
           <Helper>{tab === 'due' ? 'Nothing due. Scout now, or wait for the morning run.' : 'Nobody here yet.'}</Helper>
         )}
         {tab === 'due' && rows?.length > 0 && <Heading strong={600} size={16}>Do these today · {rows.length}</Heading>}
-        {sorted.map((c) => <LeadCard key={c.id} c={c} onStatus={setStatus} push={push} />)}
+        {sorted.map((c) => <LeadCard key={c.id} c={c} onStatus={setStatus} push={push} showDue={tab === 'due'} />)}
       </div>
       <ToastStack toasts={toasts} onClose={dismiss} />
     </div>
