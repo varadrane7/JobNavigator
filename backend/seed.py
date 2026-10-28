@@ -98,6 +98,7 @@ DEFAULT_SETTINGS = {
     "nag_calendar": ("{}", "JSON {\"YYYY-MM-DD\": \"task\"}: the day's planned post or task, added to the nag"),
     "network_scout_cron": ("15 6 * * *", "Daily lead-scout cron (people to network with, independent of jobs). Empty = disabled"),
     "scout_daily_leads": ("15", "How many new people the lead scout saves each day"),
+    "scout_min_score": ("50", "Lowest model score (0-100) a scouted person needs to be saved"),
     "llm_local_api_key": ("", "Token of the local model server (LM Studio: Developer › Server settings › Require API key). Empty = none"),
     "linkedin_mock_daily_cap": ("60", "LinkedIn searches per day on the mock session (people, posts); the main session takes over when it is spent or throttled"),
     "linkedin_main_daily_cap": ("15", "LinkedIn searches per day on the main (personal) session: network checks and mock fallback"),

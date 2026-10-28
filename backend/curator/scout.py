@@ -31,7 +31,7 @@ logger = logging.getLogger("jobnavigator.curator.scout")
 FOLLOW_UP_AFTER = {"requested": 7, "connected": 3, "messaged": 7}
 MAX_SCORED = 40          # candidates the model scores per run
 DEGREE_CHECKS = 5        # main-session lookups per run (also capped by the session's own budget)
-MIN_SCORE = 55
+MIN_SCORE = 50
 
 _DEFAULT_ROLES = ["backend engineer", "software engineer"]
 _LEAD_TITLES = '("founder" OR "co-founder" OR "CTO" OR "engineering manager" OR "head of engineering" OR "technical recruiter")'
@@ -122,7 +122,9 @@ def plan_queries(net: dict, contact: dict) -> dict:
         domains = seen
     domains = domains[:4]
     city = (contact.get("city") or "New York").strip()
-    posts = [f'hiring "{r}"' for r in roles[:2]] + [f"hiring {d.replace('-', ' ')} engineer" for d in domains[:2]]
+    # posts are worldwide unless a place is named: the user's city, and US remote
+    posts = [f'hiring "{r}" {city}' for r in roles[:2]] + [f'hiring "{roles[0]}" remote US'] \
+        + [f"hiring {_DOMAIN_WORDS.get(d, d.replace('-', ' '))} engineer {city}" for d in domains[:2]]
     project_fit = [f'site:linkedin.com/in {_LEAD_TITLES} "{d.replace("-", " ")}" startup {city}' for d in domains[:3]]
     affinity = [f'site:linkedin.com/in "{a}" {_LEAD_TITLES}' for a in (net.get("affinities") or [])[:4] if a]
     # LinkedIn's own people search (mock session) takes plain keywords, one title at a time
@@ -206,6 +208,17 @@ def _profile() -> tuple[str, dict, dict]:
         net["visa_note"] = "Will need H-1B sponsorship later"
     brief = "\n".join(x for x in (networking_brief(net), resume_brief[:1800]) if x)
     return brief, net, contact
+
+
+def _min_score() -> int:
+    from backend.analyzer.llm_client import _get_setting
+    db = SessionLocal()
+    try:
+        return int(_get_setting(db, "scout_min_score", str(MIN_SCORE)))
+    except (TypeError, ValueError):
+        return MIN_SCORE
+    finally:
+        db.close()
 
 
 def _daily_target() -> int:
@@ -292,7 +305,7 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
                 uniq.append(c)
         summary["candidates"] = len(uniq)
         scored = await asyncio.gather(*(score_lead(c, brief) for c in uniq[:MAX_SCORED]), return_exceptions=True)
-        best = sorted((s for s in scored if isinstance(s, dict) and s["score"] >= MIN_SCORE),
+        best = sorted((s for s in scored if isinstance(s, dict) and s["score"] >= _min_score()),
                       key=lambda s: -s["score"])[:want]
         summary["scored"] = sum(1 for s in scored if isinstance(s, dict))
         ranked = sorted((s for s in scored if isinstance(s, dict)), key=lambda s: -s["score"])

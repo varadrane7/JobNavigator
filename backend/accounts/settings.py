@@ -133,7 +133,7 @@ _SECTIONS = [
         "curate_max_years", "curate_drop_unlikely_sponsors",
         "outreach_count", "outreach_network_count",
         "linkedin_mock_daily_cap", "linkedin_main_daily_cap", "linkedin_cooldown_hours",
-        "scout_daily_leads", "github_token", "nag_apply_target", "nag_request_target", "nag_calendar"]),
+        "scout_daily_leads", "scout_min_score", "github_token", "nag_apply_target", "nag_request_target", "nag_calendar"]),
     ("curator_llm", "Curator model", POLICY, INHERIT, ["curator"], [
         "curator_llm_provider", "curator_llm_model", "curator_llm_api_key", "curator_llm_effort",
         "curator_fallback_llm_provider", "curator_fallback_llm_model", "curator_fallback_llm_api_key",

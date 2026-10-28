@@ -53,6 +53,7 @@ def test_int_keys_match_the_rows_settings_marks_int():
         "linkedin_cooldown_hours",
         "linkedin_lookup_max_per_scrape",
         "scout_daily_leads",
+        "scout_min_score",
         "nag_apply_target",
         "nag_request_target",
         "curate_max_years",

@@ -46,7 +46,7 @@ def test_plan_queries_uses_roles_domains_and_affinities():
     from backend.curator.scout import plan_queries
     q = plan_queries(NET, {"city": "New York"})
     assert any("backend engineer" in x for x in q["posts"])
-    assert any("devtools" in x for x in q["posts"])
+    assert any("developer tools" in x and "New York" in x for x in q["posts"])
     assert not any("homelab" in x for x in q["posts"] + q["project_fit"])     # hidden projects stay out
     assert q["affinity"] and '"NJIT"' in q["affinity"][0]
 

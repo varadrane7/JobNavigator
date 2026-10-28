@@ -696,6 +696,7 @@ export default function Settings() {
         B('Max years asked', 'A posting that asks for this many years of experience or more is dropped.', 'curate_max_years', { mono: true, int: true, w: '135px' }),
         SW('Drop unlikely sponsors', 'Jobs at companies whose H-1B record says they rarely sponsor are never picked.', 'Off — they are ranked like the rest.', 'curate_drop_unlikely_sponsors', { dflt: true }),
         B('Lead scout · people/day', 'New people the lead scout saves each morning (People screen), found from your persona, not today’s jobs.', 'scout_daily_leads', { mono: true, int: true, w: '135px' }),
+        B('Lead scout · min score', 'Lowest score (0-100) a scouted person needs to be saved. Lower finds more people, and more noise.', 'scout_min_score', { mono: true, int: true, w: '135px' }),
         B('GitHub token', 'Optional: lets the persona project sync read private repositories (read-only token).', 'github_token', { secret: true, mono: true, w: '340px' }),
         B('Mock session · searches/day', 'People and post searches per day on the mock LinkedIn session.', 'linkedin_mock_daily_cap', { mono: true, int: true, w: '135px' }),
         B('Main session · searches/day', 'Your own account: network (2nd/3rd) checks, and searches when the mock session is spent or throttled.', 'linkedin_main_daily_cap', { mono: true, int: true, w: '135px' }),
