@@ -162,3 +162,28 @@ def test_a_member_on_inherit_does_not_see_the_owners_email(test_db, api_client, 
     monkeypatch.setattr(rl, "_shared_from_owner", lambda: True)
     body = api_client.get("/api/linkedin/session?which=mock").json()
     assert body["shared"] is True and body["signed_in_as"] is None
+
+
+class _AppChallengePage:
+    """A checkpoint with no PIN box: LinkedIn asked the phone app instead."""
+    def __init__(self, approved: bool):
+        self.url = "https://www.linkedin.com/checkpoint/challenge/app"
+        self.approved = approved
+
+    def locator(self, sel):
+        class _L:
+            async def wait_for(self, timeout=None):
+                raise TimeoutError("no pin box")
+        return _L()
+
+    async def wait_for_url(self, pred, timeout=None):
+        if not self.approved:
+            raise TimeoutError("not approved")
+        self.url = "https://www.linkedin.com/feed/"
+
+
+async def test_app_approval_challenge_waits_for_the_phone():
+    from backend import refresh_linkedin_session as rls
+    assert await rls._solve_pin(_AppChallengePage(approved=True), rls.MAIN) is True
+    assert await rls._solve_pin(_AppChallengePage(approved=False), rls.MAIN) is False
+    assert rls.state(rls.MAIN)["phase"] == "failed" and "LinkedIn app" in rls.state(rls.MAIN)["detail"]

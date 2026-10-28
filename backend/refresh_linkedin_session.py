@@ -142,14 +142,35 @@ async def _login_and_save(email, password, which: str = MOCK) -> int:
             pass
 
 
+APP_APPROVAL_WAIT = 180   # seconds to wait for "Yes, it's me" in the LinkedIn app
+
+
+async def _await_app_approval(page, which: str = MOCK) -> bool:
+    """The other checkpoint LinkedIn sends to an account with its app on a phone: "Check your
+    LinkedIn app". Nothing is typed here; the page moves on by itself once the user approves
+    the sign-in on the phone, so wait for the feed (the account's own security is untouched)."""
+    print(f"CHECKPOINT: approve the sign-in in the LinkedIn app (waiting up to {APP_APPROVAL_WAIT}s)...", flush=True)
+    _phase("running", "LinkedIn sent a sign-in request to your phone: open the LinkedIn app and tap "
+                      f"Yes (waiting up to {APP_APPROVAL_WAIT // 60} minutes).", which)
+    try:
+        await page.wait_for_url(lambda u: "/feed" in u or "/jobs" in u, timeout=APP_APPROVAL_WAIT * 1000)
+        return True
+    except Exception:
+        print(f"No app approval within {APP_APPROVAL_WAIT}s (url={page.url}).")
+        _phase("failed", "The sign-in was not approved in the LinkedIn app in time. Try again and tap Yes on your phone.", which)
+        return False
+
+
 async def _solve_pin(page, which: str = MOCK) -> bool:
-    """Handle the email-PIN checkpoint by polling the account's PIN file (up to 300s)."""
+    """Handle the sign-in checkpoint: the email PIN (polling the account's PIN file, up to
+    300s) or, when LinkedIn asks the phone app instead, the approval there."""
     pin_box = page.locator("#input__email_verification_pin")
     try:
         await pin_box.wait_for(timeout=8000)
     except Exception:
-        print(f"Checkpoint is not an email-PIN type (url={page.url}).")
-        return False
+        if "/feed" in page.url or "/jobs" in page.url:
+            return True
+        return await _await_app_approval(page, which)
     PIN_FILE = pin_file(which)
     if os.path.exists(PIN_FILE):
         os.remove(PIN_FILE)
@@ -196,8 +217,10 @@ async def run_refresh(which: str = MOCK) -> int:
     except Exception as e:  # noqa: BLE001 - surfaced to the UI verbatim
         _phase("failed", str(e)[:200], which)
         return 1
-    _phase("ok" if code == 0 else "failed",
-           "Signed in." if code == 0 else "Login did not complete — see backend logs.", which)
+    if code == 0:
+        _phase("ok", "Signed in.", which)
+    elif state(which).get("phase") != "failed":
+        _phase("failed", "Login did not complete — see backend logs.", which)
     return code
 
 
