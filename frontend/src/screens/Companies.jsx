@@ -402,6 +402,19 @@ export default function Companies() {
     if (drawerDirty(cur)) { setConfirm({ title: 'Discard changes?', body: `Edits to ${cur.company.name} have not been saved.`, label: 'Discard', danger: true, onConfirm: () => { setConfirm(null); setDrawer(null) } }); return }
     setDrawer(null)
   }
+  const [ycBusy, setYcBusy] = useState(false)
+  const importYc = async () => {
+    setYcBusy(true)
+    try {
+      const { data } = await api.post('/companies/import-yc', null, { params: { limit: 30 } })
+      await fetchCompanies()
+      window.dispatchEvent(new CustomEvent('jn:counts-changed'))
+      pushToast({ kind: 'success', msg: `${data.added.length} YC startups added, paused for review (${data.no_board} had no public board)` })
+    } catch (e) {
+      pushToast({ kind: 'error', msg: 'YC import failed' + (typeof e?.response?.data?.detail === 'string' ? ' — ' + e.response.data.detail : '') })
+    } finally { setYcBusy(false) }
+  }
+
   const openDrawer = (c) => {
     const cur = drawerRef.current
     if (cur && cur.company.id !== c.id && drawerDirty(cur)) { setConfirm({ title: 'Discard changes?', body: `Edits to ${cur.company.name} have not been saved.`, label: 'Discard', danger: true, onConfirm: () => { setConfirm(null); setDrawer({ company: c, draft: toDraft(c) }) } }); return }
@@ -424,6 +437,9 @@ export default function Companies() {
             window.dispatchEvent(new CustomEvent('jn:counts-changed'))
             openDrawer(row)
           }} />
+          <Button variant="secondary" busy={ycBusy} disabled={ycBusy} onClick={importYc}
+            title="Add hiring YC startups (US or remote, 5-500 people, AI / devtools / fintech / infra) that have an Ashby, Greenhouse or Lever board. They start paused for review.">
+            {ycBusy ? 'Finding boards…' : '+ YC startups'}</Button>
           <Button onClick={() => setAddOpen(true)}>+ Add company</Button>
         </div>
       </HeaderRow>

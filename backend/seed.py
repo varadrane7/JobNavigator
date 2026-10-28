@@ -84,6 +84,8 @@ DEFAULT_SETTINGS = {
     "outreach_count": ("20", "How many people to find each day for the curated jobs (founders, hiring managers, recruiters)"),
     "outreach_network_count": ("10", "How many decision makers to find each day at good companies, open role or not (job slots left unused add to this)"),
     "github_token": ("", "GitHub token (read-only, repo scope) so the persona project sync sees private repositories. Empty = public repositories only"),
+    "curate_max_years": ("5", "Drop a job whose posting asks for this many years of experience or more"),
+    "curate_drop_unlikely_sponsors": ("true", "Drop jobs at companies whose H-1B record says they are unlikely to sponsor"),
     "network_scout_cron": ("15 6 * * *", "Daily lead-scout cron (people to network with, independent of jobs). Empty = disabled"),
     "scout_daily_leads": ("15", "How many new people the lead scout saves each day"),
     "llm_local_api_key": ("", "Token of the local model server (LM Studio: Developer › Server settings › Require API key). Empty = none"),

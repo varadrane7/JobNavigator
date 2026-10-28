@@ -391,6 +391,12 @@ def delete_company(company_id: str, db: Session = Depends(get_db)):
     return {"deleted": True}
 
 
+@router.post("/import-yc", summary="Add hiring YC startups with a public job board (inactive until reviewed)")
+async def import_yc_companies(limit: int = 30, activate: bool = False):
+    from backend.scraper.yc_import import import_yc
+    return await import_yc(limit=max(1, min(limit, 100)), activate=activate)
+
+
 @router.post("/auto-create-from-jobs")
 def auto_create_from_jobs(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Scan all Job.company distinct values and create inactive Company records for unmatched names."""

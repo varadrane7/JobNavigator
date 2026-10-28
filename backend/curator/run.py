@@ -40,7 +40,7 @@ def _settings() -> dict:
     from backend.accounts.settings import get_setting
     keys = ("curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore", "curate_title_exclude",
             "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max", "outreach_count",
-            "outreach_network_count")
+            "outreach_network_count", "curate_max_years", "curate_drop_unlikely_sponsors")
     db = SessionLocal()
     try:
         rows = {k: get_setting(db, k) for k in keys}
@@ -71,6 +71,8 @@ def _settings() -> dict:
         "target_max": i("target_base_max", 150000),
         "outreach": i("outreach_count", 20),
         "network": i("outreach_network_count", 10),
+        "max_years": i("curate_max_years", 5),
+        "drop_unlikely": (rows.get("curate_drop_unlikely_sponsors") or "true").lower() == "true",
     }
 
 
@@ -82,7 +84,7 @@ def _job_dict(j: Job) -> dict:
         "lca": j.h1b_company_lca_count, "approval": j.h1b_company_approval_rate,
         "jd_flag": bool(j.h1b_jd_flag), "salary_min": j.salary_min, "salary_max": j.salary_max,
         "source": j.source, "loc_country": j.loc_country, "loc_region": j.loc_region,
-        "loc_city": j.loc_city, "location": j.location or "", "tracked": False,
+        "loc_city": j.loc_city, "location": j.location or "", "tracked": False, "h1b_verdict": j.h1b_verdict,
     }
 
 
@@ -134,7 +136,8 @@ def load_pool(window_hours: int) -> tuple[list[dict], list]:
         db.close()
 
 
-def hard_drop(job: dict, title_exclude: list, company_exclude: list | None = None) -> str | None:
+def hard_drop(job: dict, title_exclude: list, company_exclude: list | None = None, max_years: int = 6,
+              drop_unlikely: bool = False) -> str | None:
     if not job["company"].strip():
         return "no company"
     agency = scoring.company_excluded(job["company"], company_exclude or [])
@@ -151,8 +154,10 @@ def hard_drop(job: dict, title_exclude: list, company_exclude: list | None = Non
     blocker = scoring.jd_blocker(job["description"])
     if blocker:
         return f"jd: {blocker}"
+    if drop_unlikely and job.get("h1b_verdict") == "unlikely":
+        return "unlikely H-1B sponsor"
     yrs = scoring.min_years_required(job["description"])
-    if yrs is not None and yrs >= 6:
+    if yrs is not None and yrs >= max_years:
         return f"{yrs}+ years"
     return None
 
@@ -529,7 +534,7 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     pool, pool_ids = await asyncio.to_thread(load_pool, cfg["window_hours"])
     dropped, keep = {}, []
     for j in pool:
-        why = hard_drop(j, cfg["title_exclude"], cfg["company_exclude"])
+        why = hard_drop(j, cfg["title_exclude"], cfg["company_exclude"], cfg["max_years"], cfg["drop_unlikely"])
         if why:
             dropped[j["id"]] = why
         else:

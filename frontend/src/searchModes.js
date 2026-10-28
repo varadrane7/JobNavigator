@@ -11,6 +11,8 @@ export const SEARCH_MODES = [
   { key: 'apify', label: 'Apify', badge: 'APIFY', cls: 'sm-apify', extension: false, needsQuery: false, sources: [] },
   { key: 'caribbeanjobs', label: 'CaribbeanJobs.com', badge: 'CARIBBEANJOBS.COM', cls: 'sm-caribbeanjobs', extension: false, needsQuery: true, sources: [] },
   { key: 'trulyremote', label: 'TrulyRemoteWork.com', badge: 'TRULYREMOTEWORK.COM', cls: 'sm-trulyremote', extension: false, needsQuery: false, sources: [] },
+  { key: 'simplify', label: 'SimplifyJobs New Grad', badge: 'SIMPLIFY', cls: 'sm-freehire', extension: false, needsQuery: false, sources: [] },
+  { key: 'hn_hiring', label: 'HN Who is hiring', badge: 'HN HIRING', cls: 'sm-trulyremote', extension: false, needsQuery: false, sources: [] },
   { key: 'linkedin_extension', label: 'LinkedIn Extension', badge: 'EXTENSION', cls: 'sm-extension', extension: true, needsQuery: false, sources: [] },
   { key: 'extension', label: 'Extension', badge: 'EXTENSION', cls: 'sm-extension', extension: true, needsQuery: false, sources: [] },
 ]

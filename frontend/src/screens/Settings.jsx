@@ -689,6 +689,8 @@ export default function Settings() {
         B('Curator parallel calls', 'Company research and drafts in parallel.', 'curate_concurrency', { mono: true, int: true, w: '135px' }),
         B('People per day', 'Founders, hiring managers and recruiters found for the top companies.', 'outreach_count', { mono: true, int: true, w: '135px' }),
         B('People to know per day', 'Engineering leaders at good companies with no posting for you today; job slots left unused add to this.', 'outreach_network_count', { mono: true, int: true, w: '135px' }),
+        B('Max years asked', 'A posting that asks for this many years of experience or more is dropped.', 'curate_max_years', { mono: true, int: true, w: '135px' }),
+        SW('Drop unlikely sponsors', 'Jobs at companies whose H-1B record says they rarely sponsor are never picked.', 'Off — they are ranked like the rest.', 'curate_drop_unlikely_sponsors', { dflt: true }),
         B('Lead scout · people/day', 'New people the lead scout saves each morning (People screen), found from your persona, not today’s jobs.', 'scout_daily_leads', { mono: true, int: true, w: '135px' }),
         B('GitHub token', 'Optional: lets the persona project sync read private repositories (read-only token).', 'github_token', { secret: true, mono: true, w: '340px' }),
         B('Mock session · searches/day', 'People and post searches per day on the mock LinkedIn session.', 'linkedin_mock_daily_cap', { mono: true, int: true, w: '135px' }),
