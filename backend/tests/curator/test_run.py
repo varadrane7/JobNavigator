@@ -210,3 +210,56 @@ def test_people_never_contacted_come_back_to_today(test_db):
     assert by["old"].found_on == today - timedelta(days=9)        # waits for another day
     assert by["worn"].status == "skip" and by["recent"].found_on == today - timedelta(days=1)
     assert by["asked"].found_on != today and by["scouted"].found_on != today
+
+
+# ── a relocation lane (curate_countries without US) ─────────────────────────
+
+@pytest.fixture
+def abroad(test_db, monkeypatch):
+    berlin = "Backend engineer in Berlin. Python, AWS. English is our working language. We offer visa sponsorship and a relocation package. €70,000 - €80,000."
+    test_db.add_all([_job(i, loc_country="DE", description=berlin, h1b_company_lca_count=0,
+                          h1b_verdict="unlikely") for i in range(1, 6)])
+    test_db.add(_job(10, loc_country="US"))                                            # other market
+    test_db.add(_job(11, loc_country="DE", description="Python backend. Fließende Deutschkenntnisse (C1) erforderlich."))
+    test_db.add(_job(12, loc_country="NL", description="Go backend. You must already have the right to work in the Netherlands."))
+    test_db.add(_job(13, loc_country="AE", description="Backend engineer in Dubai, Node.js. AED 22,000 per month.", company="DubaiCo"))
+    test_db.add(_job(14, loc_country="DE", description="Backend engineer. Salary €40,000.", company="CheapCo"))
+    test_db.add(Setting(key="curate_count", value="10"))
+    test_db.add(Setting(key="curate_countries", value='["DE", "NL", "IE", "AE"]'))
+    test_db.commit()
+
+    import backend.curator.run as run
+    async def no_sim(resumes, jds):
+        return None
+    async def no_intel(companies, concurrency=3):
+        return {}
+    async def no_score(jobs):
+        return None
+    monkeypatch.setattr(run, "similarity", no_sim)
+    monkeypatch.setattr(run, "get_intel", no_intel)
+    monkeypatch.setattr(run, "_score_unscored", no_score)
+    monkeypatch.setattr(run, "_resume_texts", lambda: ["resume"])
+    return test_db
+
+
+async def test_relocation_lane_picks_abroad_and_reads_the_posting(abroad):
+    from backend.curator.run import run_daily_curation
+    out = await run_daily_curation(dry_run=True)
+    companies = {t["company"] for t in out["top"]}
+    assert "Co10" not in companies                                       # a US job is out of this market
+    assert {"Co1", "Co2", "DubaiCo", "CheapCo"} <= companies             # H-1B "unlikely" means nothing abroad
+    assert out["drop_reasons"] == {"german": 1, "jd": 1}
+    by = {t["company"]: t for t in out["top"]}
+    assert "visa/relocation offered" in by["Co1"]["reason"] and "€75k base" in by["Co1"]["reason"]
+    assert "H-1B" not in by["Co1"]["reason"]
+    assert "AED 264k" in by["DubaiCo"]["reason"]
+    assert "Blue Card" in by["CheapCo"]["reason"]
+    assert by["Co1"]["parts"]["visa_comp"] > by["CheapCo"]["parts"]["visa_comp"]
+
+
+async def test_us_lane_still_drops_jobs_abroad(seeded):
+    seeded.add(_job(200, loc_country="DE", company="BerlinCo"))
+    seeded.commit()
+    from backend.curator.run import run_daily_curation
+    out = await run_daily_curation(dry_run=True)
+    assert "BerlinCo" not in {t["company"] for t in out["top"]}

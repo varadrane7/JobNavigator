@@ -382,7 +382,12 @@ _BARE = [
     ("Bengaluru", "IN", None), ("Bangalore", "IN", None),
     ("Hyderabad", "IN", None), ("Mumbai", "IN", None), ("Pune", "IN", None),
     ("Chennai", "IN", None), ("New Delhi", "IN", None),
-    ("Tel Aviv", "IL", None), ("Dubai", "AE", None), ("Mexico City", "MX", None),
+    ("Tel Aviv", "IL", None), ("Dubai", "AE", None), ("Abu Dhabi", "AE", None),
+    ("Sharjah", "AE", None), ("Mexico City", "MX", None),
+    ("Munchen", "DE", None), ("Stuttgart", "DE", None), ("Dusseldorf", "DE", None),
+    ("Leipzig", "DE", None), ("Karlsruhe", "DE", None), ("Rotterdam", "NL", None),
+    ("Eindhoven", "NL", None), ("Utrecht", "NL", None), ("The Hague", "NL", None),
+    ("Galway", "IE", None), ("Limerick", "IE", None),
     ("Sao Paulo", "BR", None), ("Buenos Aires", "AR", None),
 ]
 BARE_CITIES = {fold(name): (country, region, name) for name, country, region in _BARE}

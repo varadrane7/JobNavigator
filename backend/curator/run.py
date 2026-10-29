@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, or_
 
-from backend.curator import scoring
+from backend.curator import market, scoring
 from backend.curator.embed import percentiles, similarity
 from backend.curator.intel import get_intel, name_key, own_reply_rates
 from backend.models.db import Application, Company, Contact, Job, Persona, SessionLocal, Setting, VisaCache
@@ -45,7 +45,7 @@ def _settings() -> dict:
     from backend.accounts.settings import get_setting
     keys = ("curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore", "curate_title_exclude",
             "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max", "outreach_count",
-            "outreach_network_count", "curate_max_years", "curate_drop_unlikely_sponsors", "curate_release_hours")
+            "outreach_network_count", "curate_max_years", "curate_drop_unlikely_sponsors", "curate_release_hours", "curate_countries")
     db = SessionLocal()
     try:
         rows = {k: get_setting(db, k) for k in keys}
@@ -79,6 +79,7 @@ def _settings() -> dict:
         "max_years": i("curate_max_years", 5),
         "drop_unlikely": (rows.get("curate_drop_unlikely_sponsors") or "true").lower() == "true",
         "release_hours": i("curate_release_hours", 72),
+        "countries": market.countries(rows.get("curate_countries")),
     }
 
 
@@ -159,11 +160,13 @@ def tracked_keys(db) -> set[str]:
     return keys
 
 
-def load_pool(window_hours: int) -> tuple[list[dict], list]:
+def load_pool(window_hours: int, countries: list[str] | None = None) -> tuple[list[dict], list]:
     """(candidate dicts, ids of every status=new job in the window).
 
     A company on the Companies list gets a 7-day window: its career page is scraped on its own
-    schedule and rarely says when a job was posted, so its jobs used to age out unseen."""
+    schedule and rarely says when a job was posted, so its jobs used to age out unseen.
+    Only jobs in the account's markets (`curate_countries`) or of unknown country are candidates."""
+    countries = countries or market.DEFAULT_COUNTRIES
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=window_hours)
     since_tracked = now - timedelta(hours=max(window_hours, TRACKED_WINDOW_HOURS))
@@ -191,7 +194,7 @@ def load_pool(window_hours: int) -> tuple[list[dict], list]:
         all_ids = [j.id for j, _ in jobs if not (j.curation or {}).get("released")]
         pool = []
         for j, is_tracked in jobs:
-            if (j.loc_country in (None, "", "US")) and name_key(j.company) not in recent_apps:
+            if market.in_market(j.loc_country, countries) and name_key(j.company) not in recent_apps:
                 d = _job_dict(j)
                 d["tracked"] = is_tracked
                 pool.append(d)
@@ -201,7 +204,7 @@ def load_pool(window_hours: int) -> tuple[list[dict], list]:
 
 
 def hard_drop(job: dict, title_exclude: list, company_exclude: list | None = None, max_years: int = 6,
-              drop_unlikely: bool = False) -> str | None:
+              drop_unlikely: bool = False, relocation: bool = False) -> str | None:
     if not job["company"].strip():
         return "no company"
     agency = scoring.company_excluded(job["company"], company_exclude or [])
@@ -218,7 +221,14 @@ def hard_drop(job: dict, title_exclude: list, company_exclude: list | None = Non
     blocker = scoring.jd_blocker(job["description"])
     if blocker:
         return f"jd: {blocker}"
-    if drop_unlikely and job.get("h1b_verdict") == "unlikely":
+    if relocation:
+        local = market.local_only(job["description"])
+        if local:
+            return f"jd: {local}"
+        german = market.german_required(job["description"])
+        if german:
+            return f"german: {german}"
+    elif drop_unlikely and job.get("h1b_verdict") == "unlikely":
         return "unlikely H-1B sponsor"
     yrs = scoring.min_years_required(job["description"])
     if yrs is not None and yrs >= max_years:
@@ -282,20 +292,34 @@ def _resume_names() -> dict:
 def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: dict, now: datetime) -> list[dict]:
     from backend.analyzer.score_keys import is_resume_key
     year = local_today().year
+    relocation = market.is_relocation(cfg.get("countries") or market.DEFAULT_COUNTRIES)
     names = _resume_names() if any(is_resume_key(j.get("best_cv")) for j in jobs) else {}
     for j in jobs:
         k = name_key(j["company"])
         it = intel.get(k) or {}
         hours = scoring.hours_since(j["posted_at"], now)
-        base, src = scoring.comp_estimate(j["salary_min"], j["salary_max"], lca_median.get(k),
-                                          it.get("est_base_min"), it.get("est_base_max"))
-        funded = scoring.well_funded(it.get("funding_stage"), it.get("last_raise_year"), j["lca"], year)
+        if relocation:
+            # abroad: sponsorship and pay come from the posting; intel's pay guess is a US one
+            pay, cur = market.posted_pay(j["description"])
+            base, src, pay_note = None, "", market.pay_note(pay, cur)
+            funded = scoring.well_funded(it.get("funding_stage"), it.get("last_raise_year"), 0, year)
+            sponsor = market.relocation_score(j["description"], j.get("tracked"))
+            if sponsor >= 1.0:
+                pay_note = " · ".join(x for x in ("visa/relocation offered", pay_note) if x)
+            comp = market.comp_score(pay, cur, j.get("loc_country"))
+            if market.below_blue_card(pay, cur, j.get("loc_country")):
+                comp, pay_note = 0.0, pay_note + " (under the Blue Card floor)"
+        else:
+            base, src = scoring.comp_estimate(j["salary_min"], j["salary_max"], lca_median.get(k),
+                                              it.get("est_base_min"), it.get("est_base_max"))
+            funded = scoring.well_funded(it.get("funding_stage"), it.get("last_raise_year"), j["lca"], year)
+            sponsor = scoring.sponsor_score(j["lca"], j["approval"], j["jd_flag"])
+            comp, pay_note = scoring.comp_score(base, cfg["target_min"], cfg["target_max"]), ""
         own_rate, own_n = replies.get(k, (None, 0))
         parts = {
             "fit": scoring.fit_score(j["best_cv_score"], j.get("embed_pct")),
             "fresh": scoring.freshness(hours),
-            "visa_comp": scoring.visa_comp_score(scoring.sponsor_score(j["lca"], j["approval"], j["jd_flag"]),
-                                                 scoring.comp_score(base, cfg["target_min"], cfg["target_max"]), funded),
+            "visa_comp": scoring.visa_comp_score(sponsor, comp, funded),
             "reply": scoring.reply_score(own_rate, own_n, it.get("reply_reputation"), j["url"]),
             "stability": scoring.stability_score(it.get("funding_stage"), it.get("last_raise_year"),
                                                  it.get("recent_layoffs"), year),
@@ -306,9 +330,9 @@ def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: di
         j["score"] = scoring.composite(parts, cfg["weights"])
         j["hours"] = hours
         j["reason"] = scoring.reason(best_cv=names.get(str(j["best_cv"]), j["best_cv"]), llm_score=j["best_cv_score"], hours=hours,
-                                     lca_count=j["lca"], stage=it.get("funding_stage"),
+                                     lca_count=None if relocation else j["lca"], stage=it.get("funding_stage"),
                                      last_raise_year=it.get("last_raise_year"), base=base, base_src=src,
-                                     reply_note=reply_note)
+                                     reply_note=" · ".join(x for x in (pay_note, reply_note) if x))
         j["intel"] = {x: it.get(x) for x in ("funding_stage", "last_raise_year", "headcount",
                                              "recent_layoffs", "reply_reputation", "notes")}
         j["funded"] = funded
@@ -531,9 +555,10 @@ def network_companies(ranked: list[dict], top: list[dict], cfg: dict, limit: int
     return out
 
 
-async def find_network_contacts(companies: list[str], want_total: int) -> list[dict]:
+async def find_network_contacts(companies: list[str], want_total: int, abroad: str | None = None) -> list[dict]:
     """Up to `want_total` decision makers (one per company) at `companies`, with drafts that ask for a
-    chat and a referral rather than mention a posting; saved as purpose='network' with no job."""
+    chat and a referral rather than mention a posting; saved as purpose='network' with no job.
+    `abroad` (ISO-2): a relocation lane looks for people in that country, not near the user."""
     from backend.analyzer.location import parse as parse_location
     from backend.curator.linkedin_people import LinkedInPeople
     from backend.curator.people import draft_network, find_decision_makers, guess_email, profile_areas
@@ -544,6 +569,8 @@ async def find_network_contacts(companies: list[str], want_total: int) -> list[d
     city = (contact.get("city") or "").strip() or None
     region = parse_location(", ".join(x for x in (contact.get("city"), contact.get("state")) if x)).get("region") if city else None
     country = "US"
+    if abroad:
+        country, city, region = abroad, None, None
     intel = await get_intel(companies[: want_total * 2])
     today = local_today()
     found = []
@@ -618,10 +645,12 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     released = {"released": 0, "retired": 0}
     if not dry_run:
         released = await asyncio.to_thread(_with_db, release_stale_jobs, local_today(), cfg["release_hours"])
-    pool, pool_ids = await asyncio.to_thread(load_pool, cfg["window_hours"])
+    pool, pool_ids = await asyncio.to_thread(load_pool, cfg["window_hours"], cfg["countries"])
+    relocation = market.is_relocation(cfg["countries"])
     dropped, keep = {}, []
     for j in pool:
-        why = hard_drop(j, cfg["title_exclude"], cfg["company_exclude"], cfg["max_years"], cfg["drop_unlikely"])
+        why = hard_drop(j, cfg["title_exclude"], cfg["company_exclude"], cfg["max_years"], cfg["drop_unlikely"],
+                        relocation)
         if why:
             dropped[j["id"]] = why
         else:
@@ -643,7 +672,8 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     db = SessionLocal()
     try:
         keys = list({name_key(j["company"]) for j in shortlist})
-        lca_median = {r.name_key: r.median_salary for r in db.query(VisaCache).filter(VisaCache.name_key.in_(keys)).all() if r.median_salary}
+        lca_median = {} if relocation else {   # US LCA wages say nothing about pay abroad
+            r.name_key: r.median_salary for r in db.query(VisaCache).filter(VisaCache.name_key.in_(keys)).all() if r.median_salary}
         replies = own_reply_rates(db)
     finally:
         db.close()
@@ -674,7 +704,9 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     network_want = cfg["network"] + max(0, cfg["outreach"] - len(again) - len(contacts)) if cfg["network"] > 0 else 0
     if outreach and network_want > 0:
         try:
-            network = await find_network_contacts(network_companies(ranked, top, cfg, network_want * 3), network_want)
+            abroad = {"abroad": cfg["countries"][0]} if relocation else {}
+            network = await find_network_contacts(network_companies(ranked, top, cfg, network_want * 3), network_want,
+                                                  **abroad)
         except Exception as e:
             logger.exception(f"curator network outreach failed: {e}")
             _OUTREACH_ERRORS.append(f"network outreach: {e}")

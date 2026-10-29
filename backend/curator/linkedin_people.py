@@ -73,7 +73,8 @@ def card_details(text: str, headline: str) -> dict:
 
 
 # LinkedIn geo ids for the people-search location filter
-_GEO_URN = {"US": "103644278", "CA": "101174742", "GB": "101165590", "IN": "102713980", "DE": "101282230"}
+_GEO_URN = {"US": "103644278", "CA": "101174742", "GB": "101165590", "IN": "102713980", "DE": "101282230",
+            "NL": "102890719", "IE": "104738515", "AE": "104305776"}
 
 
 _POSTS_JS = r"""

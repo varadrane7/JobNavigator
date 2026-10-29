@@ -86,6 +86,7 @@ DEFAULT_SETTINGS = {
     "github_token": ("", "GitHub token (read-only, repo scope) so the persona project sync sees private repositories. Empty = public repositories only"),
     "curate_max_years": ("5", "Drop a job whose posting asks for this many years of experience or more"),
     "curate_release_hours": ("72", "A Top pick not applied to, or a person not contacted, after this many hours goes back to the queue (0 = never)"),
+    "curate_countries": ('["US"]', "Countries this account's Top picks come from (ISO codes, e.g. DE, NL, IE, AE). Without US the curator reads sponsorship from the posting instead of H-1B data"),
     "curate_drop_unlikely_sponsors": ("true", "Drop jobs at companies whose H-1B record says they are unlikely to sponsor"),
     "telegram_job_alerts": ("true", "Telegram: an alert for every new job scoring at or above the threshold"),
     "telegram_digest": ("true", "Telegram: the daily digest"),
