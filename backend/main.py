@@ -520,23 +520,43 @@ def _revoke_cookie_unlock(request: Request) -> None:
 
 @app.get("/api/auth/accounts", tags=["auth"], summary="Accounts for the picker")
 def auth_accounts(request: Request):
-    """Every account as {id, name, color, role, has_pin}, owner first; nothing else. Needs the install password but no account. A browser signed in through OIDC sees only its own account."""
+    """Every account as {id, name, color, role, has_pin}, owner first; nothing else. Needs the install password but no account. A browser signed in through OIDC sees only its own account and that account's linked profiles."""
     db = SessionLocal()
     try:
         accounts = acct_auth.load_accounts(db)
         if getattr(request.state, "oidc_session", False):
             from backend.accounts.context import current_account
-            accounts = [a for a in accounts if a["id"] == current_account.get()]
+            accounts = acct_auth.linked_family(accounts, current_account.get())
         return [acct_auth.public_account(a) for a in accounts]
+    finally:
+        db.close()
+
+
+def _oidc_switch(body: dict, request: Request, response: _Response):
+    """MT-20 with linked profiles: one verified person, one family of accounts. The OIDC
+    login already proved who this is, so moving to one of their own profiles needs no PIN;
+    the re-issued cookie keeps the OIDC flag."""
+    from backend.accounts.context import current_account
+    db = SessionLocal()
+    try:
+        accounts = acct_auth.load_accounts(db)
+        family = acct_auth.linked_family(accounts, current_account.get())
+        target = acct_auth._find(family, (body or {}).get("account_id"))
+        if target is None:
+            raise HTTPException(status_code=403, detail="oidc_session")
+        acct_auth.revoke_cookie_unlock(db, request.cookies.get(acct_auth.COOKIE_NAME))
+        acct_auth.touch_last_active(db, target["id"], force=True)
+        acct_auth.set_account_cookie(response, db, target, oidc=True)
+        return {"ok": True, "via": "linked_profile", "account": acct_auth.public_account(target)}
     finally:
         db.close()
 
 
 @app.post("/api/auth/switch", tags=["auth"], summary="Switch this browser to an account")
 def auth_switch(body: dict, request: Request, response: _Response):
-    """Body {account_id, pin?}. Sets the signed httpOnly `jn_account` cookie for this browser only (ending any owner unlock of the previous one). The owner's PIN is required once it has one; a member's PIN is optional, and the owner's PIN also opens a PIN'd member. Errors: 404 unknown account, 401 `pin_required` / `wrong_pin` (+ `tries_left`), 429 `pin_cooldown` (+ Retry-After) after 5 wrong tries for that account from this client (30 s, doubling for repeated cooldowns up to 15 min), or while the account's global ceiling is cooling."""
+    """Body {account_id, pin?}. Sets the signed httpOnly `jn_account` cookie for this browser only (ending any owner unlock of the previous one). The owner's PIN is required once it has one; a member's PIN is optional, and the owner's PIN also opens a PIN'd member. A browser signed in through OIDC may switch only between its account and that account's linked profiles, with no PIN (403 `oidc_session` for any other account). Errors: 404 unknown account, 401 `pin_required` / `wrong_pin` (+ `tries_left`), 429 `pin_cooldown` (+ Retry-After) after 5 wrong tries for that account from this client (30 s, doubling for repeated cooldowns up to 15 min), or while the account's global ceiling is cooling."""
     if getattr(request.state, "oidc_session", False):
-        raise HTTPException(status_code=403, detail="oidc_session")   # MT-20: one person, one account
+        return _oidc_switch(body, request, response)
     body = body or {}
     pin = body.get("pin")
     if pin is not None and not isinstance(pin, str):

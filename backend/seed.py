@@ -732,6 +732,7 @@ def run_migrations(db):
         "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS oidc_sub VARCHAR",
         "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS oidc_email VARCHAR",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_accounts_oidc_identity ON accounts (oidc_issuer, oidc_sub)",
+        "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS parent_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL",
         "ALTER TABLE searches ADD COLUMN IF NOT EXISTS company_exclude JSONB DEFAULT '[]'",
         "ALTER TABLE searches ADD COLUMN IF NOT EXISTS max_pages INTEGER DEFAULT 50",
         "ALTER TABLE companies ALTER COLUMN tier DROP NOT NULL",
