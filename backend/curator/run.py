@@ -270,8 +270,19 @@ def _resume_texts() -> list[str]:
         db.close()
 
 
+def _resume_names() -> dict:
+    from backend.analyzer.score_keys import resume_names
+    db = SessionLocal()
+    try:
+        return resume_names(db)
+    finally:
+        db.close()
+
+
 def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: dict, now: datetime) -> list[dict]:
+    from backend.analyzer.score_keys import is_resume_key
     year = local_today().year
+    names = _resume_names() if any(is_resume_key(j.get("best_cv")) for j in jobs) else {}
     for j in jobs:
         k = name_key(j["company"])
         it = intel.get(k) or {}
@@ -294,7 +305,7 @@ def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: di
         j["parts"] = {k2: round(v, 3) for k2, v in parts.items()}
         j["score"] = scoring.composite(parts, cfg["weights"])
         j["hours"] = hours
-        j["reason"] = scoring.reason(best_cv=j["best_cv"], llm_score=j["best_cv_score"], hours=hours,
+        j["reason"] = scoring.reason(best_cv=names.get(str(j["best_cv"]), j["best_cv"]), llm_score=j["best_cv_score"], hours=hours,
                                      lca_count=j["lca"], stage=it.get("funding_stage"),
                                      last_raise_year=it.get("last_raise_year"), base=base, base_src=src,
                                      reply_note=reply_note)
