@@ -72,6 +72,9 @@ SEARCH_MODES: dict[str, SearchMode] = {m.key: m for m in (
     # Free startup / new-grad feeds, read whole each run (scraper/sources/startup_feeds.py).
     SearchMode("simplify", "SimplifyJobs New Grad", "simplify", background_test=True),
     SearchMode("hn_hiring", "HN Who is hiring", "hn_hiring", background_test=True),
+    # Free German boards for a relocation lane, read newest-first each run (sources/europe_feeds.py).
+    SearchMode("arbeitnow", "Arbeitnow (Germany)", "arbeitnow", background_test=True),
+    SearchMode("berlinstartupjobs", "Berlin Startup Jobs", "berlinstartupjobs", background_test=True),
     SearchMode("linkedin_extension", "LinkedIn Extension", extension=True),
     SearchMode("extension", "Extension", extension=True),
 )}

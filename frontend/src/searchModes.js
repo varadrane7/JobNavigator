@@ -13,6 +13,8 @@ export const SEARCH_MODES = [
   { key: 'trulyremote', label: 'TrulyRemoteWork.com', badge: 'TRULYREMOTEWORK.COM', cls: 'sm-trulyremote', extension: false, needsQuery: false, sources: [] },
   { key: 'simplify', label: 'SimplifyJobs New Grad', badge: 'SIMPLIFY', cls: 'sm-freehire', extension: false, needsQuery: false, sources: [] },
   { key: 'hn_hiring', label: 'HN Who is hiring', badge: 'HN HIRING', cls: 'sm-trulyremote', extension: false, needsQuery: false, sources: [] },
+  { key: 'arbeitnow', label: 'Arbeitnow (Germany)', badge: 'ARBEITNOW', cls: 'sm-freehire', extension: false, needsQuery: false, sources: [] },
+  { key: 'berlinstartupjobs', label: 'Berlin Startup Jobs', badge: 'BERLIN STARTUP JOBS', cls: 'sm-trulyremote', extension: false, needsQuery: false, sources: [] },
   { key: 'linkedin_extension', label: 'LinkedIn Extension', badge: 'EXTENSION', cls: 'sm-extension', extension: true, needsQuery: false, sources: [] },
   { key: 'extension', label: 'Extension', badge: 'EXTENSION', cls: 'sm-extension', extension: true, needsQuery: false, sources: [] },
 ]
