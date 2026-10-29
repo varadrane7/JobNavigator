@@ -33,7 +33,7 @@ const copy = async (text, push, what) => {
   catch { push({ kind: 'error', msg: 'Clipboard unavailable' }) }
 }
 
-function JobCard({ j, onStatus, onCoverLetter }) {
+function JobCard({ j, onStatus, onCoverLetter, onTailor }) {
   const [open, setOpen] = useState(false)
   const done = j.status !== 'saved'
   const it = j.intel || {}
@@ -57,6 +57,8 @@ function JobCard({ j, onStatus, onCoverLetter }) {
               <Button size="xs" variant="primary" onClick={() => onStatus(j, 'applied')}>Applied</Button>
               <Button size="xs" variant="ghost" onClick={() => onStatus(j, 'skip')}>Skip</Button>
             </>}
+        <Button size="xs" variant="ghost" onClick={() => onTailor(j)} disabled={!j.tailor_base_id}
+          title={j.tailor_base_id ? `Tailor a résumé for this job, starting from ${j.best_cv && j.best_cv !== 'Persona' ? j.best_cv : 'General'}` : 'No base résumé to tailor from'}>Tailor</Button>
         <Button size="xs" variant="ghost" onClick={() => onCoverLetter(j)}
           title={j.best_cv ? `Cover letter for this job, from ${j.best_cv}` : 'Cover letter for this job'}>Cover letter</Button>
         <Button size="xs" variant="ghost" onClick={() => setOpen((v) => !v)} ariaLabel="Why this job">{open ? '▴' : '▾'}</Button>
@@ -175,6 +177,18 @@ export default function Today() {
   // ?job= picks the job, ?resume= the résumé it scored best against (same deep link as the Feed's `c`)
   const openCoverLetter = (j) => navigate(`/cover-letters?job=${j.id}${j.best_cv_id ? `&resume=${encodeURIComponent(j.best_cv_id)}` : ''}`)
 
+  // one click: start tailoring from the best-fit base (General when Persona fit best), then show the Résumés tab,
+  // which lists the run as "tailoring…" until the copy lands
+  const tailorJob = async (j) => {
+    try {
+      await api.post('/resumes/tailor', { base_resume_id: j.tailor_base_id, job_id: j.id })
+      push({ kind: 'progress', msg: `Tailoring for "${j.title}"…` })
+    } catch (e) {
+      if (e.response?.status !== 409) { push({ kind: 'error', msg: `Tailor failed for "${j.title}"${e.response?.data?.detail ? `: ${e.response.data.detail}` : ''}` }); return }
+    }
+    navigate('/resumes')
+  }
+
   const allJobs = data?.jobs || []
   const allContacts = useMemo(() => (data?.contacts || []).filter((c) => !SCOUTED.has(c.lead_kind)), [data])
   const jobContacts = useMemo(() => allContacts.filter((c) => c.purpose !== 'network'), [allContacts])
@@ -229,11 +243,11 @@ export default function Today() {
               </div>
               {allJobs.length === 0 && <Helper>No curated jobs for {day}. Run now, or wait for the morning run.</Helper>}
               {allJobs.length > 0 && todo.length === 0 && <Helper>All done for {day}.</Helper>}
-              {todo.map((j) => <JobCard key={j.id} j={j} onStatus={setJobStatus} onCoverLetter={openCoverLetter} />)}
+              {todo.map((j) => <JobCard key={j.id} j={j} onStatus={setJobStatus} onCoverLetter={openCoverLetter} onTailor={tailorJob} />)}
               {doneJobs.length > 0 && (
                 <>
                   <Heading strong={600} size={16} style={{ marginTop: 14 }}>Applied / skipped · {doneJobs.length}</Heading>
-                  {doneJobs.map((j) => <JobCard key={j.id} j={j} onStatus={setJobStatus} onCoverLetter={openCoverLetter} />)}
+                  {doneJobs.map((j) => <JobCard key={j.id} j={j} onStatus={setJobStatus} onCoverLetter={openCoverLetter} onTailor={tailorJob} />)}
                 </>
               )}
             </section>
