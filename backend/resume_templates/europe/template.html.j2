@@ -117,6 +117,8 @@ a { color: inherit; text-decoration: none; }
 
 .entry-description { margin-top: 1.5pt; color: #2b2b2b; }
 .entry-stack { font-style: italic; color: #4a5562; }
+.entry-tech { margin-top: 1.5pt; font-size: 9.5pt; color: #4a5562; }
+.entry-tech b { font-weight: 600; color: #3a4a5c; }
 
 ul.bullets {
   list-style: none;
@@ -182,7 +184,7 @@ ul.bullets li::before {
   {% for sec in section_order %}
   {% if sec.key == 'summary' and summary %}
   <div class="section">
-    <div class="section-title">{{ sec.title }}</div>
+    <div class="section-title">{{ 'Profile' if sec.title == 'Summary' else sec.title }}</div>
     <div class="summary-text">{{ summary }}</div>
   </div>
   {% elif sec.key == 'experience' and experience %}
@@ -200,11 +202,17 @@ ul.bullets li::before {
         {% endif %}
       </div>
       {% if job.description %}<div class="entry-description">{{ job.description }}</div>{% endif %}
-      {% if job.bullets %}
+      {# a bullet starting "Tech:" is the role's stack line, printed under the bullets #}
+      {% set plain = [] %}{% set tech = [] %}
+      {% for bullet in (job.bullets or []) %}
+        {% if bullet is string and bullet.startswith('Tech:') %}{% set _ = tech.append(bullet[5:].strip()) %}{% else %}{% set _ = plain.append(bullet) %}{% endif %}
+      {% endfor %}
+      {% if plain %}
       <ul class="bullets">
-        {% for bullet in job.bullets %}<li>{{ bullet | bold }}</li>{% endfor %}
+        {% for bullet in plain %}<li>{{ bullet | bold }}</li>{% endfor %}
       </ul>
       {% endif %}
+      {% for line in tech %}<div class="entry-tech"><b>Tech:</b> {{ line }}</div>{% endfor %}
     </div>
     {% endfor %}
   </div>

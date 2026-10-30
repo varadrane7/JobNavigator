@@ -76,3 +76,16 @@ def test_education_and_publication_render():
                    publications=[{"title": "A Paper", "description": "Okonkwo, D. Springer, 2022."}])
     assert "MSc Informatics" in html and "TU Berlin" in html and "10/2020 – 09/2022" in html
     assert '<span class="pub-title">A Paper</span>. Okonkwo, D. Springer, 2022.' in html
+
+
+def test_a_tech_bullet_prints_as_the_role_stack_line():
+    html = _render(HEADER, experience=[{"title": "Engineer", "company": "Acme", "date": "2024",
+                                        "bullets": ["Shipped X.", "Tech: Go, PostgreSQL"]}])
+    assert "<li>Shipped X.</li>" in html
+    assert "<li>Tech:" not in html
+    assert '<div class="entry-tech"><b>Tech:</b> Go, PostgreSQL</div>' in html
+
+
+def test_the_summary_section_prints_as_profile():
+    html = _render(HEADER, summary="Backend engineer.")
+    assert '<div class="section-title">Profile</div>' in html
