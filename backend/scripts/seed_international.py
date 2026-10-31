@@ -60,9 +60,12 @@ FEEDS = [
     ("DE · Berlin Startup Jobs", "berlinstartupjobs", ""),
 ]
 
-# Boards checked to answer with jobs (Oct 2026). Big boards list every office: the curator keeps
-# only the jobs in the lane's countries.
+# Boards checked to list engineering jobs in the lane's countries (Oct 2026). Big boards list every
+# office: the company scrape keeps only the postings in `curate_countries` (market_filter).
 _GH, _ASHBY = "https://job-boards.greenhouse.io/{}", "https://jobs.ashbyhq.com/{}"
+_AMAZON = ("https://www.amazon.jobs/en/search?normalized_country_code%5B%5D=DEU&normalized_country_code%5B%5D=IRL"
+           "&normalized_country_code%5B%5D=NLD&normalized_country_code%5B%5D=ARE&category%5B%5D=software-development")
+TITLE_EXPR = "engineer OR developer OR devops"
 COMPANIES = [
     # Germany
     ("N26", _GH.format("n26")), ("HelloFresh", _GH.format("hellofresh")), ("Celonis", _GH.format("celonis")),
@@ -72,16 +75,29 @@ COMPANIES = [
     ("Staffbase", _GH.format("staffbase")), ("Trade Republic", _GH.format("traderepublicbank")),
     ("Enpal", _ASHBY.format("enpal")), ("Parloa", _ASHBY.format("parloa")), ("n8n", _ASHBY.format("n8n")),
     ("DeepL", _ASHBY.format("deepl")), ("trivago", _GH.format("trivago")),
+    ("Helsing", _GH.format("helsing")), ("Isar Aerospace", _GH.format("isaraerospace")),
+    ("Doctolib", _GH.format("doctolib")), ("Wolt", _GH.format("wolt")), ("Babbel", _ASHBY.format("babbel")),
+    ("Black Forest Labs", _ASHBY.format("black-forest-labs")), ("Upvest", _ASHBY.format("upvest")),
+    ("Grover", _GH.format("grover")), ("SoundCloud", _GH.format("soundcloud71")), ("Tide", _GH.format("tide")),
+    ("Aleph Alpha", _ASHBY.format("alephalpha")), ("Pliant", _ASHBY.format("pliant")),
     # Netherlands
     ("Adyen", _GH.format("adyen")), ("Mollie", _ASHBY.format("mollie")), ("Miro", _ASHBY.format("miro")),
-    ("Bird", _GH.format("bird")), ("Elastic", _GH.format("elastic")),
+    ("Elastic", _GH.format("elastic")), ("Nebius", _GH.format("nebius")), ("IMC Trading", _GH.format("imc")),
+    ("Flow Traders", _GH.format("flowtraders")), ("JetBrains", _GH.format("jetbrains")),
+    ("Catawiki", _GH.format("catawiki")), ("ClickHouse", _ASHBY.format("clickhouse")),
+    ("Databricks", _GH.format("databricks")),
     # Ireland
     ("Stripe", _GH.format("stripe")), ("Intercom", _GH.format("intercom")), ("Wayflyer", _ASHBY.format("wayflyer")),
     ("Workhuman", _ASHBY.format("workhuman")), ("Toast", _GH.format("toast")), ("Squarespace", _GH.format("squarespace")),
-    ("Cloudflare", _GH.format("cloudflare")), ("Datadog", _GH.format("datadog")), ("MongoDB", _GH.format("mongodb")),
-    ("Pleo", _ASHBY.format("pleo")), ("Wise", _GH.format("wise")),
+    ("Datadog", _GH.format("datadog")), ("MongoDB", _GH.format("mongodb")), ("Pleo", _ASHBY.format("pleo")),
+    ("Twilio", _GH.format("twilio")), ("Tines", _GH.format("tines")), ("Okta", _GH.format("okta")),
+    ("Workato", _GH.format("workato")), ("Vanta", _ASHBY.format("vanta")), ("Samsara", _GH.format("samsara")),
     # UAE
     ("Careem", _GH.format("careem")), ("Tamara", _GH.format("tamara")), ("Ziina", _ASHBY.format("ziina")),
+    # Several of the lane's countries
+    ("Amazon", _AMAZON), ("OpenAI", _ASHBY.format("openai")), ("Anthropic", _GH.format("anthropic")),
+    ("ElevenLabs", _ASHBY.format("elevenlabs")), ("Cohere", _ASHBY.format("cohere")),
+    ("Legora", _ASHBY.format("legora")), ("Synthesia", _ASHBY.format("synthesia")),
     # Remote-first, hire across the EU
     ("GitLab", _GH.format("gitlab")), ("Grafana Labs", _GH.format("grafanalabs")), ("Canonical", _GH.format("canonical")),
 ]
@@ -161,13 +177,12 @@ def ensure_companies(db, account_id, plan: list) -> None:
     for name, url in COMPANIES:
         if name.lower() in have:
             continue
-        db.add(Company(account_id=account_id, name=name, active=False, scrape_urls=[url],
-                       title_exclude_keywords=TITLE_EXCLUDE,
-                       notes="Seeded for the international lane (hires from abroad, English-first). "
-                             "Resume it to start scraping."))
+        db.add(Company(account_id=account_id, name=name, active=True, scrape_urls=[url],
+                       title_include_expr=TITLE_EXPR, title_exclude_keywords=TITLE_EXCLUDE,
+                       notes="Seeded for the international lane (hires from abroad, English-first)."))
         added.append(name)
     if added:
-        plan.append(f"{len(added)} companies, paused: {', '.join(added)}")
+        plan.append(f"{len(added)} companies: {', '.join(added)}")
 
 
 def run(db, name: str = DEFAULT_NAME) -> list[str]:

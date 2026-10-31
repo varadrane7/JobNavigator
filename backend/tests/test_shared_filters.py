@@ -54,6 +54,17 @@ def test_match_title_expr_and():
     assert not match_title_expr("senior AND product", "Senior Engineer")
 
 
+def test_match_title_expr_not():
+    from backend.scraper._shared.filters import match_title_expr
+    expr = "(engineer OR developer) AND NOT (senior OR staff OR lead)"
+    assert match_title_expr(expr, "Software Engineer")
+    assert match_title_expr(expr, "Backend Developer, Payments")
+    assert not match_title_expr(expr, "Senior Software Engineer")
+    assert not match_title_expr(expr, "Tech Lead, Platform Engineer")
+    assert not match_title_expr(expr, "Product Designer")
+    assert match_title_expr("not senior", "Software Engineer")
+
+
 def test_match_title_expr_empty_allows_all():
     from backend.scraper._shared.filters import match_title_expr
     assert match_title_expr("", "Anything Goes")
@@ -147,3 +158,17 @@ def test_apply_company_filters_global_exclude():
     titles = [j["title"] for j in kept]
     assert "Junior Developer" not in titles
     assert "Senior Developer" in titles
+
+
+def test_market_filter_keeps_lane_countries_and_regions():
+    from backend.scraper._shared.filters import market_filter
+    jobs = [{"title": "a", "location": "Berlin, Germany"},
+            {"title": "b", "location": "San Francisco, CA"},
+            {"title": "c", "location": "London, UK", "locations": ["Dublin, Ireland"]},
+            {"title": "d", "location": "Remote - EMEA"},
+            {"title": "e", "location": "Remote"},
+            {"title": "f", "location": "Home based - Worldwide"},
+            {"title": "g", "location": "IE, D, Dublin"}]
+    kept, rejected = market_filter(jobs, ["DE", "NL", "IE", "AE"])
+    assert [j["title"] for j in kept] == ["a", "c", "d", "f", "g"]
+    assert [j["title"] for j in rejected] == ["b", "e"]

@@ -10,7 +10,7 @@ from backend.models.db import (
     SessionLocal, Company, Job, ScrapeLog, get_existing_external_ids,
 )
 from backend.scraper._shared.browser import _get_browser, _new_page, _close_page
-from backend.scraper._shared.filters import _apply_company_filters
+from backend.scraper._shared.filters import _apply_company_filters, market_filter
 from backend.scraper._shared.dedup import make_external_id, make_content_hash, mark_ignored, _normalize_url
 from backend.scraper._shared.posting_links import counts_as_new
 from backend.scraper.ats import (
@@ -276,6 +276,22 @@ async def scrape_single_career_page(company: Company, shared_browser=None,
             logger.info(
                 f"Keyword filter for {company.name}: {before_count} -> {len(unique_jobs)} kept, {len(filtered_out)} ignored"
             )
+
+        # A relocation lane (curate_countries without US) keeps only the postings in its
+        # countries: big boards list every office, and the rest would only fill the feed.
+        from backend.accounts.settings import get_setting
+        from backend.curator import market
+        _mk_db = SessionLocal()
+        try:
+            _countries = market.countries(get_setting(_mk_db, "curate_countries"))
+        finally:
+            _mk_db.close()
+        if market.is_relocation(_countries) and unique_jobs:
+            before_count = len(unique_jobs)
+            unique_jobs, off_market = market_filter(unique_jobs, _countries)
+            filtered_out += off_market
+            logger.info(f"Market filter for {company.name} ({', '.join(_countries)}): "
+                        f"{before_count} -> {len(unique_jobs)} kept")
 
         db = SessionLocal()
         new_jobs = 0

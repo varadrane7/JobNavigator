@@ -24,7 +24,7 @@ def test_seeds_a_linked_relocation_profile_once(test_db):
         assert searches["UAE · backend (LinkedIn, Indeed, Bayt)"].sources == ["linkedin", "indeed", "bayt"]
         assert searches["DE · Arbeitnow"].search_mode == "arbeitnow"
         companies = test_db.query(Company).filter(Company.account_id == prof.id).all()
-        assert len(companies) == len(S.COMPANIES) and not any(c.active for c in companies)
+        assert len(companies) == len(S.COMPANIES) and all(c.active for c in companies)
         persona = test_db.query(Persona).filter(Persona.account_id == prof.id).one()
         assert "Blue Card" in persona.preferences["visa_route"]
         # the owner's own lane is untouched

@@ -121,7 +121,7 @@ def _tokenize(expr: str) -> list[str]:
             while j < len(expr) and expr[j] not in '() \t' and expr[j] != '"':
                 j += 1
             word = expr[i:j]
-            if word.upper() in ('AND', 'OR'):
+            if word.upper() in ('AND', 'OR', 'NOT'):
                 tokens.append(word.upper())
             else:
                 tokens.append(word)
@@ -156,6 +156,9 @@ def _parse_atom(tokens, pos):
         if pos < len(tokens) and tokens[pos] == ')':
             pos += 1
         return node, pos
+    if tokens[pos] == 'NOT':
+        node, pos = _parse_atom(tokens, pos + 1)
+        return ('NOT', node), pos
     return ('WORD', tokens[pos]), pos + 1
 
 
@@ -166,6 +169,8 @@ def _eval_expr(node, title_lower):
         return _eval_expr(node[1], title_lower) and _eval_expr(node[2], title_lower)
     elif node[0] == 'OR':
         return _eval_expr(node[1], title_lower) or _eval_expr(node[2], title_lower)
+    elif node[0] == 'NOT':
+        return not _eval_expr(node[1], title_lower)
     return True
 
 
@@ -176,6 +181,31 @@ def match_title_expr(expr: str, title: str) -> bool:
     tree, _ = _parse_expr(tokens, 0)
     return _eval_expr(tree, title.lower())
 
+
+
+# ── Market (country) filter for relocation lanes ──────────────────────────────
+
+# A posting outside the lane's countries is still kept when its location names a region that
+# covers the lane (EMEA, Europe, MENA) or an anywhere-remote line. A bare "Remote" on a US company's
+# board is almost always US-only.
+_LANE_REGION = re.compile(r"\b(emea|europe|european union|eu|mena|middle east|gcc|worldwide|anywhere|global)\b", re.I)
+
+
+def market_filter(jobs: list[dict], countries: list[str]) -> tuple[list[dict], list[dict]]:
+    """(kept, rejected): keep the postings placed in one of `countries` (ISO-2) by their
+    `location` or any of their `locations`, or naming a region that covers the lane."""
+    from backend.analyzer.location import _places_of
+    wanted = {c.upper() for c in countries}
+    kept, rejected = [], []
+    for j in jobs:
+        texts = [t for t in [j.get("location")] + list(j.get("locations") or []) if t]
+        if any(p[0] in wanted for p in (_places_of(texts) if texts else [])):
+            kept.append(j)
+        elif any(_LANE_REGION.search(t) for t in texts):
+            kept.append(j)
+        else:
+            rejected.append(j)
+    return kept, rejected
 
 # ── Search title filters ──────────────────────────────────────────────────────
 
