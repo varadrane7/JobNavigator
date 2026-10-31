@@ -39,18 +39,23 @@ async def run_now(outreach: bool = True, send: bool = True, db: Session = Depend
         return JSONResponse(status_code=409, content={"detail": f"{e.job_type} is already running"})
 
 
-def _job_out(j: Job, resume_ids: dict | None = None, resumes: dict | None = None, general_id: str | None = None) -> dict:
-    """`resumes` is {id: (name, is_base, parent_id)}; best_cv is a résumé id (older rows: a name)."""
+def _job_out(j: Job, resume_ids: dict | None = None, resumes: dict | None = None, general_id: str | None = None,
+             tailored: dict | None = None) -> dict:
+    """`resumes` is {id: (name, is_base, parent_id)}; best_cv is a résumé id (older rows: a name, or
+    "Tailored" for the job's tailored copy, which `tailored` maps from the job id)."""
     c = j.curation or {}
     resumes = resumes or {}
     best = str(j.best_cv) if j.best_cv else None
-    hit = resumes.get(best) if best else None
-    best_id = best if hit else ((resume_ids or {}).get(best) if best else None)
+    if best == "Tailored":
+        best_id = (tailored or {}).get(str(j.id))
+    else:
+        best_id = best if best in resumes else ((resume_ids or {}).get(best) if best else None)
+    hit = resumes.get(best_id) if best_id else None
     # the base the one-click Tailor starts from: the best résumé if it is a base, its parent if it is a
     # tailored copy, and the General base when the best fit was Persona (or nothing usable)
     base_id = None
     if hit:
-        base_id = best if hit[1] else (str(hit[2]) if hit[2] and str(hit[2]) in resumes else None)
+        base_id = best_id if hit[1] else (str(hit[2]) if hit[2] and str(hit[2]) in resumes else None)
     base_id = base_id or general_id
     return {
         "id": str(j.id), "short_id": j.short_id, "rank": j.curated_rank, "title": j.title, "company": j.company,
@@ -95,16 +100,20 @@ def today(day: Optional[date] = None, db: Session = Depends(get_db)):
     notes = {r.name_key: r.notes for r in db.query(CompanyIntel).filter(CompanyIntel.name_key.in_(keys)).all()} if keys else {}
     # best_cv holds the résumé's name; the cover-letter deep link needs its id
     resume_ids = {"Persona": "persona"}
-    resumes, general_id = {}, None
-    for rid, name, is_base, parent_id in db.query(Resume.id, Resume.name, Resume.is_base, Resume.parent_id).order_by(Resume.is_base).all():
+    resumes, general_id, tailored = {}, None, {}
+    for rid, name, is_base, parent_id, job_id in (db.query(Resume.id, Resume.name, Resume.is_base, Resume.parent_id,
+                                                           Resume.job_id)
+                                                  .order_by(Resume.is_base, Resume.created_at).all()):
         resume_ids[name] = str(rid)      # base résumés last, so they win a name clash
         resumes[str(rid)] = (name, bool(is_base), parent_id)
         if is_base and name.strip().lower() == "general":
             general_id = str(rid)
+        if not is_base and job_id:
+            tailored[str(job_id)] = str(rid)   # newest copy last, so it wins
     days = [r[0].isoformat() for r in db.query(Job.curated_on).filter(Job.curated_on.isnot(None))
             .distinct().order_by(Job.curated_on.desc()).limit(30).all()]
     return {"date": d.isoformat(), "timezone": APP_TZ_NAME, "days": days,
-            "jobs": [_job_out(j, resume_ids, resumes, general_id) for j in jobs], "contacts": [{**_contact_out(c), "company_note": notes.get((c.company or "").strip().lower()) or None}
+            "jobs": [_job_out(j, resume_ids, resumes, general_id, tailored) for j in jobs], "contacts": [{**_contact_out(c), "company_note": notes.get((c.company or "").strip().lower()) or None}
                          for c in contacts]}
 
 

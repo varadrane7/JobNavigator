@@ -263,3 +263,23 @@ async def test_us_lane_still_drops_jobs_abroad(seeded):
     from backend.curator.run import run_daily_curation
     out = await run_daily_curation(dry_run=True)
     assert "BerlinCo" not in {t["company"] for t in out["top"]}
+
+
+def test_tailor_base_follows_best_fit_name_id_and_tailored_copy():
+    from types import SimpleNamespace
+    from backend.curator.routes import _job_out
+    gen, sec, copy = "g-1", "s-1", "t-1"
+    resumes = {gen: ("General", True, None), sec: ("Security", True, None), copy: ("Security → Acme", False, sec)}
+    ids = {"Persona": "persona", "General": gen, "Security": sec}
+
+    def job(best):
+        return SimpleNamespace(id="j-1", short_id=1, curated_rank=1, title="t", company="Acme", url="", location="",
+                               status="new", source="direct", posted_at=None, discovered_at=None, best_cv=best,
+                               best_cv_score=70, salary_min=None, salary_max=None, h1b_verdict=None,
+                               h1b_company_lca_count=None, curation={})
+
+    assert _job_out(job("Security"), ids, resumes, gen)["tailor_base_id"] == sec      # older rows: a name
+    assert _job_out(job(sec), ids, resumes, gen)["tailor_base_id"] == sec             # a résumé id
+    out = _job_out(job("Tailored"), ids, resumes, gen, {"j-1": copy})
+    assert (out["tailor_base_id"], out["best_cv_id"]) == (sec, copy)                  # the copy's base
+    assert _job_out(job("Persona"), ids, resumes, gen)["tailor_base_id"] == gen
