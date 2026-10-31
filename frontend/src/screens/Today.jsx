@@ -58,7 +58,7 @@ function JobCard({ j, onStatus, onCoverLetter, onTailor }) {
               <Button size="xs" variant="ghost" onClick={() => onStatus(j, 'skip')}>Skip</Button>
             </>}
         <Button size="xs" variant="ghost" onClick={() => onTailor(j)} disabled={!j.tailor_base_id}
-          title={j.tailor_base_id ? `Tailor a résumé for this job, starting from ${j.best_cv && j.best_cv !== 'Persona' ? j.best_cv : 'General'}` : 'No base résumé to tailor from'}>Tailor</Button>
+          title={j.tailor_base_id ? `Tailor a résumé for this job, starting from ${j.tailor_base || 'General'}` : 'No base résumé to tailor from'}>Tailor</Button>
         <Button size="xs" variant="ghost" onClick={() => onCoverLetter(j)}
           title={j.best_cv ? `Cover letter for this job, from ${j.best_cv}` : 'Cover letter for this job'}>Cover letter</Button>
         <Button size="xs" variant="ghost" onClick={() => setOpen((v) => !v)} ariaLabel="Why this job">{open ? '▴' : '▾'}</Button>
@@ -177,7 +177,7 @@ export default function Today() {
   // ?job= picks the job, ?resume= the résumé it scored best against (same deep link as the Feed's `c`)
   const openCoverLetter = (j) => navigate(`/cover-letters?job=${j.id}${j.best_cv_id ? `&resume=${encodeURIComponent(j.best_cv_id)}` : ''}`)
 
-  // one click: start tailoring from the best-fit base (General when Persona fit best), then show the Résumés tab,
+  // one click: start tailoring from the best-scoring base (General when none scored), then show the Résumés tab,
   // which lists the run as "tailoring…" until the copy lands
   const tailorJob = async (j) => {
     try {

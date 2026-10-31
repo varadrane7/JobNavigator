@@ -51,11 +51,13 @@ def _job_out(j: Job, resume_ids: dict | None = None, resumes: dict | None = None
     else:
         best_id = best if best in resumes else ((resume_ids or {}).get(best) if best else None)
     hit = resumes.get(best_id) if best_id else None
-    # the base the one-click Tailor starts from: the best résumé if it is a base, its parent if it is a
-    # tailored copy, and the General base when the best fit was Persona (or nothing usable)
-    base_id = None
-    if hit:
-        base_id = best_id if hit[1] else (str(hit[2]) if hit[2] and str(hit[2]) in resumes else None)
+    # the base the one-click Tailor starts from: the best-scoring base résumé (cv_scores keys are ids, or
+    # names on older rows); a tailored copy or the Persona never is one, so General when no base scored
+    base_id, top = None, None
+    for key, score in (j.cv_scores or {}).items():
+        rid = key if key in resumes else (resume_ids or {}).get(key)
+        if rid in resumes and resumes[rid][1] and isinstance(score, (int, float)) and (top is None or score > top):
+            base_id, top = rid, score
     base_id = base_id or general_id
     return {
         "id": str(j.id), "short_id": j.short_id, "rank": j.curated_rank, "title": j.title, "company": j.company,
@@ -63,6 +65,7 @@ def _job_out(j: Job, resume_ids: dict | None = None, resumes: dict | None = None
         "posted_at": (j.posted_at or j.discovered_at).isoformat() if (j.posted_at or j.discovered_at) else None,
         "best_score": j.best_cv_score, "best_cv": hit[0] if hit else j.best_cv,
         "best_cv_id": best_id, "tailor_base_id": base_id,
+        "tailor_base": resumes[base_id][0] if base_id in resumes else None,
         "salary_min": j.salary_min, "salary_max": j.salary_max,
         "h1b_verdict": j.h1b_verdict, "h1b_lca_count": j.h1b_company_lca_count,
         "score": c.get("score"), "parts": c.get("parts"), "reason": c.get("reason"),
