@@ -69,6 +69,10 @@ const GROUPS = [
     ['work_auth', 'over_18', 'Are you over 18?', 'bool'],
     ['work_auth', 'work_auth_type', 'Work authorization type', 'enum', { options: WORK_AUTH_TYPE, wide: true }],
   ]],
+  ['abroad', 'Working abroad', [
+    ['contact', 'nationality', 'Nationality', 'text'],
+    ['preferences', 'visa_route', 'Visa route', 'text', { wide: true, placeholder: 'e.g. Eligible for an EU Blue Card at the reduced threshold; no cost to you beyond the standard process' }],
+  ]],
   ['screening', 'Screening defaults', [
     ['preferences', 'willing_to_relocate', 'Willing to relocate?', 'bool'],
     ['preferences', 'willing_remote', 'Willing to work remote?', 'bool'],
@@ -128,7 +132,7 @@ function AutofillField({ node, fkey, label, kind, opts, nodes, write }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, gridColumn: opts?.wide ? 'span 2' : 'auto' }}>
       <Label style={FIELD_LABEL} title={label}>{label}</Label>
       {kind === 'text' ? (
-        <Input value={val ?? ''} onChange={(v) => write(node, fkey, v)} ariaLabel={label} />
+        <Input value={val ?? ''} onChange={(v) => write(node, fkey, v)} ariaLabel={label} placeholder={opts?.placeholder} />
       ) : kind === 'bool' ? (
         <Picker value={val === true ? 'yes' : val === false ? 'no' : undefined} options={YESNO} ariaLabel={label}
           onChange={(v) => write(node, fkey, v === undefined ? undefined : v === 'yes')} />

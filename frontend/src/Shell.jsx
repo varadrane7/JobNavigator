@@ -105,7 +105,7 @@ function AccountSwitcher({ open }) {
   const switchTo = useCallback(async (a) => {
     setMenu(null)
     if (!a || !me || a.id === me.id || busy || a.disabled) return
-    if (a.has_pin) { openPicker(a); return }
+    if (a.has_pin && !me.oidc) { openPicker(a); return }   // an OIDC login moves between its own profiles without a PIN
     setBusy(true)
     try {
       const acc = await switchAccount(a.id)

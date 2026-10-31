@@ -168,10 +168,10 @@ def load_accounts(db) -> list:
     AccountScoped, so this sees every account under any context."""
     from backend.models.db import Account
     rows = (db.query(Account.id, Account.name, Account.color, Account.role, Account.pin_hash,
-                     Account.created_at)
+                     Account.created_at, Account.parent_account_id)
             .all())
     out = [{"id": r.id, "name": r.name, "color": r.color, "role": r.role, "pin_hash": r.pin_hash,
-            "created_at": r.created_at} for r in rows]
+            "created_at": r.created_at, "parent_id": r.parent_account_id} for r in rows]
     out.sort(key=lambda a: (a["role"] != "owner", a["created_at"] is None,
                             a["created_at"].timestamp() if a["created_at"] else 0, a["name"] or ""))
     return out
@@ -223,8 +223,22 @@ _register_cache_events()
 
 def public_account(acc: dict) -> dict:
     """What the picker may show: no hashes, no data."""
-    return {"id": str(acc["id"]), "name": acc["name"], "color": acc["color"],
-            "role": acc["role"], "has_pin": bool(acc["pin_hash"])}
+    out = {"id": str(acc["id"]), "name": acc["name"], "color": acc["color"],
+           "role": acc["role"], "has_pin": bool(acc["pin_hash"])}
+    if acc.get("parent_id"):
+        out["parent_id"] = str(acc["parent_id"])   # a linked profile of that account
+    return out
+
+
+def linked_family(accounts: list, account_id) -> list:
+    """`account_id`'s own account plus its linked profiles (or, from a linked profile, its
+    parent and the parent's other profiles): one person's search lanes. An OIDC login may
+    move between these without a PIN; never to anyone else's account."""
+    acc = _find(accounts, account_id)
+    if acc is None:
+        return []
+    root = acc.get("parent_id") or acc["id"]
+    return [a for a in accounts if a["id"] == root or a.get("parent_id") == root]
 
 
 def _owner_of(accounts: list) -> Optional[dict]:

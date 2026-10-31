@@ -3,7 +3,8 @@
 Roles: one owner, up to four members (MAX_ACCOUNTS = 5 in total).
 - GET    /accounts                 owner: every account with counts; member: its own row in
                                    full, the others as {id, name, color, role}.
-- POST   /accounts                 owner only. 409 `account_limit` at 5 accounts. PINs are
+- POST   /accounts                 owner only (`linked: true` = a profile of the owner's own,
+                                   reachable from the owner's OIDC login). 409 `account_limit` at 5 accounts. PINs are
                                    optional, the owner's included (QA F2 / D3): an owner
                                    without a PIN opens from the picker with one click.
 - PATCH  /accounts/{account_id}    owner: any account; member: itself. PIN rules below.
@@ -142,7 +143,7 @@ def list_accounts(db: Session = Depends(get_db)):
 
 @router.post("", status_code=201)
 def create_account(response: Response, body: dict = Body(...), db: Session = Depends(get_db)):
-    """Owner only. Body `{name, color?, pin?, copy_from?: {account_id, items: [persona, qa, resumes, companies, searches, settings, voices, excludes]}}`. The new account is always a member and starts with an empty Persona and the two built-in extension searches; copy-from deep-copies the chosen items (new ids; résumé ids inside companies' `selected_resume_ids` and `default_resume_id` point at the copies, ids not copied are dropped; no jobs, applications or letters). PINs are optional, the owner's too. 409 `account_limit` (5 accounts), 409 `name_taken`, 422 bad name/colour/PIN/items, 404 unknown copy source."""
+    """Owner only. Body `{name, color?, pin?, linked?, copy_from?: {account_id, items: [persona, qa, resumes, companies, searches, settings, voices, excludes]}}`. The new account is always a member and starts with an empty Persona and the two built-in extension searches; copy-from deep-copies the chosen items (new ids; résumé ids inside companies' `selected_resume_ids` and `default_resume_id` point at the copies, ids not copied are dropped; no jobs, applications or letters). `linked: true` makes it a linked profile of the owner (another search lane of the same person): an OIDC login of the owner can switch to it without a PIN. PINs are optional, the owner's too. 409 `account_limit` (5 accounts), 409 `name_taken`, 422 bad name/colour/PIN/items, 404 unknown copy source."""
     body = body or {}
     accounts = _accounts(db)
     caller = _caller(accounts)
@@ -178,7 +179,11 @@ def create_account(response: Response, body: dict = Body(...), db: Session = Dep
             raise HTTPException(status_code=404, detail="Copy source account not found")
         source_id = source["id"]
 
-    new = Account(id=uuid.uuid4(), name=name, color=color, role="member", pin_hash=pin_hash)
+    linked = body.get("linked", False)
+    if not isinstance(linked, bool):
+        raise HTTPException(status_code=422, detail="linked must be true or false")
+    new = Account(id=uuid.uuid4(), name=name, color=color, role="member", pin_hash=pin_hash,
+                  parent_account_id=caller["id"] if linked else None)
     db.add(new)
     db.flush()
     admin.seed_new_account(db, new.id)

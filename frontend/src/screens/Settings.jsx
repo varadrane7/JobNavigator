@@ -684,6 +684,7 @@ export default function Settings() {
         SW('Ignore the rest', 'Other new jobs from the window are marked ignored, so the feed stays short.', 'Off — the rest stay in the feed as new.', 'curate_auto_ignore', { dflt: true }),
         B('Target base · min', 'Pay below this (minus $25k) scores zero on pay; well-funded and sponsoring companies are not held to it.', 'target_base_min', { mono: true, int: true, w: '135px' }),
         B('Target base · max', 'Pay at or above this scores full marks.', 'target_base_max', { mono: true, int: true, w: '135px' }),
+        E('Countries', 'Where this account\u2019s Top picks come from (ISO codes). Without US the curator works a relocation lane: it reads visa / relocation / Blue Card wording from the posting instead of H-1B data, drops postings that need German or local work rights, and compares EUR / AED pay to that market.', 'curate_countries', { list: true, sub: 'one country code per line · e.g. DE, NL, IE, AE · default US' }),
         E('Title excludes', 'Titles containing these words are never picked.', 'curate_title_exclude', { list: true, sub: 'one word per line · case-insensitive' }),
         E('Company excludes', 'Staffing agencies, body shops and AI-training gigs that are never picked or contacted.', 'curate_company_exclude', { list: true, sub: 'one company per line · matches the name\u2019s first words' }),
         E('Weights', 'How the composite score is built.', 'curate_weights', { json: true, sub: 'JSON — fit, fresh, visa_comp, reply, stability, tracked' }),

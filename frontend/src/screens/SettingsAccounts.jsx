@@ -196,6 +196,7 @@ export function AddAccountModal({ accounts, onClose, onCreated }) {
   const [pin, setPin] = useState('')
   const [source, setSource] = useState('')
   const [items, setItems] = useState(['persona', 'resumes', 'companies', 'searches', 'settings', 'voices', 'excludes'])
+  const [linked, setLinked] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -208,6 +209,7 @@ export function AddAccountModal({ accounts, onClose, onCreated }) {
     setBusy(true); setError('')
     const body = { name: name.trim(), color }
     if (pin) body.pin = pin
+    if (linked) body.linked = true
     if (source && items.length) body.copy_from = { account_id: source, items }
     try {
       const { data } = await api.post('/accounts', body)
@@ -235,6 +237,10 @@ export function AddAccountModal({ accounts, onClose, onCreated }) {
         <Input value={pin} onChange={(v) => setPin(v.replace(/\D/g, '').slice(0, 4))} type="password" inputMode="numeric"
           autoComplete="new-password" placeholder="none" ariaLabel="PIN for the new account" mono width="120px" invalid={!pinOk} />
       </Field>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Check checked={linked} onChange={() => setLinked((v) => !v)} label="A profile of mine" />
+        <Helper size="xs" style={{ paddingLeft: 22 }}>Another search lane of yours (e.g. jobs abroad). Your single sign-on login can switch to it without a PIN.</Helper>
+      </div>
       <Field label="Start from a copy of…">
         <Select value={source} options={sources} onPick={setSource} width="100%" ariaLabel="Copy from account" />
       </Field>

@@ -228,6 +228,32 @@ def test_oidc_browser_cannot_switch_mint_tokens_or_unlock(idp, test_db, monkeypa
     assert idp.post(f"/api/accounts/{owner.id}/api-token").status_code in (401, 403)
 
 
+def test_oidc_owner_switches_between_own_linked_profiles_only(idp, test_db, monkeypatch):
+    _login(idp, monkeypatch, sub="sub-2", email="amy@example.com", name="Amy")   # someone else
+    idp.cookies.clear()
+    _login(idp, monkeypatch)   # owner
+    r = idp.post("/api/accounts", json={"name": "Owner Abroad", "linked": True, "pin": "4321"})
+    assert r.status_code == 201
+    profile = r.json()["account"]
+    amy = next(m for m in _members(test_db) if m.name != "Owner Abroad")
+    owner = test_db.query(Account).filter(Account.role == "owner").one()
+
+    listed = idp.get("/api/auth/accounts").json()
+    assert {a["id"] for a in listed} == {str(owner.id), profile["id"]}
+    assert next(a for a in listed if a["id"] == profile["id"])["parent_id"] == str(owner.id)
+
+    # no PIN: the OIDC login already proved who this is
+    r = idp.post("/api/auth/switch", json={"account_id": profile["id"]})
+    assert r.status_code == 200 and r.json()["via"] == "linked_profile"
+    me = idp.get("/api/auth/me").json()
+    assert me["account"]["id"] == profile["id"] and me["account"]["oidc"] is True
+    # from the profile: back to the parent, never to another person
+    assert idp.post("/api/auth/switch", json={"account_id": str(amy.id)}).status_code == 403
+    assert idp.post("/api/auth/verify-pin", json={"account_id": str(owner.id)}).status_code == 403
+    assert idp.post("/api/auth/switch", json={"account_id": str(owner.id)}).status_code == 200
+    assert idp.get("/api/auth/me").json()["account"]["id"] == str(owner.id)
+
+
 def test_oidc_flag_survives_a_pin_change(idp, test_db, monkeypatch):
     _login(idp, monkeypatch, sub="sub-2", email="amy@example.com", name="Amy")
     [m] = _members(test_db)

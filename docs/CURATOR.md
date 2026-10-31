@@ -20,7 +20,7 @@ parallelism stay the owner's. An account with no résumé is skipped; everyone c
 
 | Step | What happens | Cost |
 |---|---|---|
-| Pool | `status = new`, posted (or first seen) within `curate_window_hours` (36; **7 days** for companies on the Companies list), US or unknown country, no application to that company in the last 30 days | SQL |
+| Pool | `status = new`, posted (or first seen) within `curate_window_hours` (36; **7 days** for companies on the Companies list), in one of the account's `curate_countries` (default US) or of unknown country, no application to that company in the last 30 days | SQL |
 | Hard drops | companies in `curate_company_exclude` (staffing agencies, body shops, AI-training gigs) and gig titles ("AI code evaluation", "annotation"), title words in `curate_title_exclude` (staff, lead, manager…; senior titles stay in), JD says no sponsorship, JD asks for 6+ years | regex |
 | Embedding pre-filter | résumé-vs-JD cosine similarity on the local embedding model (`curate_embed_model`) | seconds |
 | LLM fit | the top `curate_llm_pool` (150) get the usual light fit score, if they have none | local LLM |
@@ -48,6 +48,33 @@ Each pick gets an **apply window**:
 - **today**: the rest.
 
 It also gets a one-line reason, e.g. `fit 86 (SDE) · posted 5h ago · H-1B 320 LCAs · Series C '25 · ~$140k base (posted)`.
+
+## A lane abroad (relocation)
+
+An account whose `curate_countries` has no `US` (Settings › Daily curator › Countries, e.g.
+`DE NL IE AE`) is a relocation lane. US H-1B data says nothing there, so:
+
+- **Hard drops** add postings that need German (a stated level such as "fließend Deutsch",
+  "German C1", or a posting written in German) and postings that need local work rights
+  ("EU citizens only", "valid EU work permit required", "we cannot offer visa sponsorship",
+  "UAE nationals only"). The "unlikely H-1B sponsor" drop is off.
+- **visa/pay** reads the posting: visa sponsorship, relocation or Blue Card wording scores 1.0,
+  "English is our working language" 0.65, silence 0.35 (0.7 for a company on your list). Pay is
+  the posted EUR or AED figure (AED per month × 12) against the market band: DE €60–80k,
+  NL/IE €55–75k, UAE AED 216–300k. A German posting under the reduced Blue Card threshold
+  (€45,934) scores 0 on pay and says so. LCA medians and the web pay estimate (a US figure) are
+  not used.
+- **People to know** are looked for in the lane's first country.
+
+The reason line reads e.g. `fit 82 (SDE) · posted 6h ago · visa/relocation offered · ~€72k base (posted)`.
+
+`python -m backend.scripts.seed_international --commit` sets one up: a linked profile of the
+owner (your single sign-on login switches to it from the account menu, no PIN), copying your
+persona, résumés and settings. It adds LinkedIn, Indeed and Bayt searches per country,
+Arbeitnow and Berlin Startup Jobs, and about 40 English-first employers that hire from abroad.
+The employers are added **paused**; resume the ones you want. Its LinkedIn section inherits your
+sessions, so both profiles share one daily LinkedIn budget. That is why it finds fewer people a
+day.
 
 ## Which model does what
 

@@ -138,6 +138,9 @@ class Account(Base):
     oidc_issuer = Column(String, nullable=True)
     oidc_sub = Column(String, nullable=True)
     oidc_email = Column(String, nullable=True)
+    # A linked profile: another search lane of the same person (e.g. an international one).
+    # An OIDC login may switch between an account and its linked profiles without a PIN.
+    parent_account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
     __table_args__ = (Index("uq_accounts_oidc_identity", "oidc_issuer", "oidc_sub", unique=True),)
 
 

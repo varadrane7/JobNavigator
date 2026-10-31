@@ -86,7 +86,7 @@ const DEPTHS = [
   { id: 'light', label: 'Light', dots: 1, hint: 'Score only. Low cost.' },
   { id: 'full', label: 'Full', dots: 2, hint: 'Score plus the full report with keywords and requirements' },
 ]
-const SOURCES = [['linkedin', 'LinkedIn'], ['indeed', 'Indeed'], ['zip_recruiter', 'ZipRecruiter'], ['google', 'Google Jobs'], ['direct', 'Direct (Playwright)']]
+const SOURCES = [['linkedin', 'LinkedIn'], ['indeed', 'Indeed'], ['zip_recruiter', 'ZipRecruiter'], ['google', 'Google Jobs'], ['bayt', 'Bayt (Gulf)'], ['direct', 'Direct (Playwright)']]
 const COLLECTIONS = [['recommended', 'Recommended'], ['top-applicant', 'Top Applicant']]
 
 // note banners reuse the mode-badge palettes (sm-levels green / sm-jobright teal)
@@ -97,6 +97,8 @@ const noteFor = (mode) => {
   if (mode === 'apify') return ['Runs Apify actors with the API key from Settings › Apify. Apify bills your account for each result: Results wanted (at most 200) caps every board on every run, each run carries a spend cap and stops after 15 minutes, and Test fetches 20 jobs per board at most. A new Apify search starts paused: check the boards, then press Paused to resume it.', 'sm-apify']
   if (mode === 'caribbeanjobs') return ['Set the filters on caribbeanjobs.com and paste the search URL, or enter a term. The description of each result is read from its own page; Test reads at most 20 of those pages. A salary in a local currency is kept as text in the description, not as a number.', 'sm-caribbeanjobs']
   if (mode === 'trulyremote') return ['Reads TrulyRemoteWork.com’s full corpus of worldwide-remote roles. Every listing is remote with no location restriction, so you narrow it with the title and company filters below. Each new job’s description is read from its own page; Test reads at most 20 of those pages.', 'sm-trulyremote']
+  if (mode === 'arbeitnow') return ['Reads Arbeitnow’s free job board API (Germany), newest first, back as far as “Max age”. Narrow it with a term (any of comma-separated words, in the title or description), a place (e.g. Berlin, Munich, Remote) and the title filters below.', 'sm-freehire']
+  if (mode === 'berlinstartupjobs') return ['Reads Berlin Startup Jobs’ engineering feed: Berlin startups that mostly hire in English. Narrow it with a term and the title filters below.', 'sm-trulyremote']
   if (mode === 'extension') return ['Jobs come from the “Save to Job Feed” button on any website. The filters and auto-score depth below apply to each job as it is saved.', 'sm-levels']
   if (mode === 'linkedin_extension') return ['Jobs are captured while you browse linkedin.com/jobs/collections pages. The filters below are applied on import.', 'sm-levels']
   return null
@@ -145,6 +147,12 @@ const summaryOf = (s, boards = []) => {
     if (s.search_term) bits.push(`“${s.search_term}”`)
     if (s.direct_url) bits.push(short(s.direct_url))
     return (bits.join(' · ') || 'caribbeanjobs.com') + last
+  }
+  if (m === 'arbeitnow' || m === 'berlinstartupjobs') {
+    const bits = []
+    if (s.search_term) bits.push(`“${s.search_term}”`)
+    if (s.location) bits.push(s.location)
+    return (bits.join(' · ') || (m === 'arbeitnow' ? 'Arbeitnow, all of Germany' : 'Berlin Startup Jobs, engineering')) + last
   }
   if (m === 'trulyremote') return `Worldwide remote · max ${s.results_wanted || 100} new${last}`
   return `${short(s.direct_url) || 'no URL'}${last}`
