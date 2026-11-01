@@ -182,14 +182,15 @@ def _split_facet(options, applied: dict, total: int):
     return min(candidates, key=rank)
 
 
-async def _walk(client, api_url: str, facets: dict, label: str, debug: bool, rejected: list):
+async def _walk(client, api_url: str, facets: dict, label: str, debug: bool, rejected: list,
+                search_text: str = ""):
     """Page through one search. Returns (status of the first page, total, facets, postings)."""
     postings: list[dict] = []
     offset = 0
     total = None  # Capture from first page only (Workday returns 0 on later pages)
     first_facets = []
     while True:
-        payload = {"appliedFacets": facets, "limit": _PAGE, "offset": offset, "searchText": ""}
+        payload = {"appliedFacets": facets, "limit": _PAGE, "offset": offset, "searchText": search_text}
         resp = await client.post(api_url, json=payload, headers=_HEADERS)
         if resp.status_code != 200:
             logger.warning(f"Workday API returned {resp.status_code} for {label}")
@@ -211,9 +212,11 @@ async def _walk(client, api_url: str, facets: dict, label: str, debug: bool, rej
     return 200, total or 0, first_facets, postings
 
 
-async def _collect(client, api_url, facets, label, debug, rejected, found: dict, depth: int = 0):
+async def _collect(client, api_url, facets, label, debug, rejected, found: dict, depth: int = 0,
+                   search_text: str = ""):
     """Fetch one search into `found` (keyed by externalPath); split it when it hits the ceiling."""
-    status, total, facet_list, postings = await _walk(client, api_url, facets, label, debug, rejected)
+    status, total, facet_list, postings = await _walk(client, api_url, facets, label, debug, rejected,
+                                                      search_text)
     for p in postings:
         found.setdefault(p.get("externalPath") or id(p), p)
     if total < _CEILING or depth >= _MAX_SPLIT_DEPTH:
@@ -231,13 +234,16 @@ async def _collect(client, api_url, facets, label, debug, rejected, found: dict,
                 f"({len(pairs)} parts)")
     for value_id, _count in pairs:
         await _collect(client, api_url, {**facets, param: [value_id]}, label, debug, rejected,
-                       found, depth + 1)
+                       found, depth + 1, search_text)
     return status, total
 
 
 async def scrape(url: str, debug: bool = False) -> list[dict] | tuple:
     """Fetch jobs from Workday's internal JSON API."""
     origin, company_slug, site, applied_facets = _parse_workday_url(url)
+    # `?q=` is the site's own search box: a big board (Capital One, Nvidia) is read for the
+    # postings that match it instead of every posting it has.
+    search_text = " ".join(applied_facets.pop("q", [])).strip()
 
     if not company_slug or not site:
         logger.warning(f"Workday: could not parse company/site from {url}")
@@ -247,14 +253,15 @@ async def scrape(url: str, debug: bool = False) -> list[dict] | tuple:
 
     api_url = f"{origin}/wday/cxs/{company_slug}/{site}/jobs"
     label = f"{company_slug}/{site}"
-    logger.info(f"Workday API: {api_url} facets={list(applied_facets.keys())}")
+    logger.info(f"Workday API: {api_url} facets={list(applied_facets.keys())} q={search_text!r}")
 
     jobs = []
     rejected = []
     found: dict = {}
 
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        status, total = await _collect(client, api_url, applied_facets, label, debug, rejected, found)
+        status, total = await _collect(client, api_url, applied_facets, label, debug, rejected, found,
+                                       search_text=search_text)
     if status != 200 and not found:
         if not debug:
             raise_if_board_gone(status, "Workday", label)

@@ -119,8 +119,38 @@ async def _fetch_myvisajobs(company_name: str, h1b_slug: str = None) -> dict:
         return {"lca_count": 0, "approval_rate": 0, "median_salary": 0}
 
 
-async def _fetch_h1bdata(company_name: str) -> dict:
-    """Fallback: parse h1bdata.info's raw DOL LCA disclosure rows into lca_count (row count) and median_salary; no approval_rate (LCA data, not USCIS decisions)."""
+# h1bdata.info matches the employer name exactly, and filers use their legal name: "Coinbase"
+# finds 88 rows where "Coinbase Inc" finds 1,099, "Flatiron Health" 11 where "Flatiron Health
+# Inc" finds 176. A name without a legal suffix is also tried with these, keeping the largest.
+_LEGAL_SUFFIXES = ("Inc", "LLC")
+_HAS_SUFFIX = re.compile(r"\b(inc|llc|corp|corporation|co|ltd|lp|llp|plc|pbc|company)\.?$", re.I)
+
+
+def _h1bdata_names(company_name: str) -> list[str]:
+    name = re.sub(r"[,.]+$", "", (company_name or "").strip())
+    if not name or _HAS_SUFFIX.search(name):
+        return [name or company_name]
+    return [name] + [f"{name} {s}" for s in _LEGAL_SUFFIXES]
+
+
+async def _fetch_h1bdata(company_name: str, h1b_slug: str = None) -> dict:
+    """Fallback: h1bdata.info's DOL LCA rows for the name and its legal-name variants
+    (_h1bdata_names); the variant with the most rows wins. A company's `h1b_slug` names its
+    legal entity ("payward-inc" for Kraken, "unit-finance-inc" for Unit, whose "Unit Inc" is
+    another employer) and is then the only name asked."""
+    best = {"lca_count": 0, "approval_rate": 0, "median_salary": 0}
+    names = [h1b_slug.replace("-", " ").strip()] if h1b_slug else _h1bdata_names(company_name)
+    for i, name in enumerate(names):
+        if i:
+            await asyncio.sleep(0.5)
+        data = await _fetch_h1bdata_name(name)
+        if data["lca_count"] > best["lca_count"]:
+            best = data
+    return best
+
+
+async def _fetch_h1bdata_name(company_name: str) -> dict:
+    """Parse h1bdata.info's raw DOL LCA disclosure rows for one employer name into lca_count (row count) and median_salary; no approval_rate (LCA data, not USCIS decisions)."""
     from urllib.parse import quote
     import statistics
     url = f"https://h1bdata.info/index.php?em={quote(company_name)}"
@@ -158,7 +188,7 @@ async def fetch_company_h1b_data(company_name: str, h1b_slug: str = None) -> dic
 
     # MyVisaJobs was blocked or empty — try the fallback.
     try:
-        return await _fetch_h1bdata(company_name)  # reached (even zeros = legit negative)
+        return await _fetch_h1bdata(company_name, h1b_slug)  # reached (even zeros = legit negative)
     except H1bRateLimited:
         pass  # fallback also blocked
     except Exception as e:

@@ -10,7 +10,7 @@ from backend.models.db import (
     SessionLocal, Company, Job, ScrapeLog, get_existing_external_ids,
 )
 from backend.scraper._shared.browser import _get_browser, _new_page, _close_page
-from backend.scraper._shared.filters import _apply_company_filters, market_filter
+from backend.scraper._shared.filters import _apply_company_filters, home_market_filter, market_filter
 from backend.scraper._shared.dedup import make_external_id, make_content_hash, mark_ignored, _normalize_url
 from backend.scraper._shared.posting_links import counts_as_new
 from backend.scraper.ats import (
@@ -279,6 +279,8 @@ async def scrape_single_career_page(company: Company, shared_browser=None,
 
         # A relocation lane (curate_countries without US) keeps only the postings in its
         # countries: big boards list every office, and the rest would only fill the feed.
+        # The home (US) market drops only postings placed elsewhere (home_market_filter):
+        # OpenAI, Databricks, Gen Digital list as many offices abroad as at home.
         from backend.accounts.settings import get_setting
         from backend.curator import market
         _mk_db = SessionLocal()
@@ -286,9 +288,10 @@ async def scrape_single_career_page(company: Company, shared_browser=None,
             _countries = market.countries(get_setting(_mk_db, "curate_countries"))
         finally:
             _mk_db.close()
-        if market.is_relocation(_countries) and unique_jobs:
+        if unique_jobs:
             before_count = len(unique_jobs)
-            unique_jobs, off_market = market_filter(unique_jobs, _countries)
+            _filter = market_filter if market.is_relocation(_countries) else home_market_filter
+            unique_jobs, off_market = _filter(unique_jobs, _countries)
             filtered_out += off_market
             logger.info(f"Market filter for {company.name} ({', '.join(_countries)}): "
                         f"{before_count} -> {len(unique_jobs)} kept")

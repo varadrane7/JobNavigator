@@ -273,7 +273,7 @@ async def test_fetch_falls_back_when_myvisajobs_blocked(monkeypatch):
     from backend.analyzer import h1b_checker
     async def mvj(name, h1b_slug=None):
         raise h1b_checker.H1bRateLimited("myvisajobs 403")
-    async def fb(name):
+    async def fb(name, slug=None):
         return {"lca_count": 42, "approval_rate": 0.0, "median_salary": 160000}
     monkeypatch.setattr(h1b_checker, "_fetch_myvisajobs", mvj)
     monkeypatch.setattr(h1b_checker, "_fetch_h1bdata", fb)
@@ -287,7 +287,7 @@ async def test_fetch_falls_back_when_myvisajobs_empty(monkeypatch):
     from backend.analyzer import h1b_checker
     async def mvj(name, h1b_slug=None):
         return {"lca_count": 0, "approval_rate": 0, "median_salary": 0}
-    async def fb(name):
+    async def fb(name, slug=None):
         return {"lca_count": 99, "approval_rate": 0.0, "median_salary": 140000}
     monkeypatch.setattr(h1b_checker, "_fetch_myvisajobs", mvj)
     monkeypatch.setattr(h1b_checker, "_fetch_h1bdata", fb)
@@ -302,7 +302,7 @@ async def test_fetch_myvisajobs_wins_when_it_has_data(monkeypatch):
     async def mvj(name, h1b_slug=None):
         return {"lca_count": 500, "approval_rate": 95.0, "median_salary": 180000}
     called = {"n": 0}
-    async def fb(name):
+    async def fb(name, slug=None):
         called["n"] += 1
         return {"lca_count": 1, "approval_rate": 0, "median_salary": 0}
     monkeypatch.setattr(h1b_checker, "_fetch_myvisajobs", mvj)
@@ -317,7 +317,7 @@ async def test_fetch_raises_when_both_blocked(monkeypatch):
     from backend.analyzer import h1b_checker
     async def mvj(name, h1b_slug=None):
         raise h1b_checker.H1bRateLimited("myvisajobs 403")
-    async def fb(name):
+    async def fb(name, slug=None):
         raise h1b_checker.H1bRateLimited("h1bdata 403")
     monkeypatch.setattr(h1b_checker, "_fetch_myvisajobs", mvj)
     monkeypatch.setattr(h1b_checker, "_fetch_h1bdata", fb)
@@ -344,3 +344,45 @@ def test_migrate_seeds_visa_cache_from_legacy_columns(test_db):
 
     row = test_db.query(VisaCache).filter(VisaCache.name_key == "legacyco").first()
     assert row and row.lca_count == 320 and row.median_salary == 165000 and row.has_data is True
+
+
+def test_h1bdata_names_add_legal_suffixes():
+    from backend.analyzer.h1b_checker import _h1bdata_names
+    assert _h1bdata_names("Coinbase") == ["Coinbase", "Coinbase Inc", "Coinbase LLC"]
+    assert _h1bdata_names("Plaid Inc.") == ["Plaid Inc"]
+    assert _h1bdata_names("Acme Corp") == ["Acme Corp"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_h1bdata_keeps_the_variant_with_most_filings(monkeypatch):
+    """Filers use their legal name: "Coinbase" finds a handful, "Coinbase Inc" the rest."""
+    from backend.analyzer import h1b_checker
+    counts = {"Coinbase": 2, "Coinbase Inc": 40, "Coinbase LLC": 0}
+    asked = []
+
+    async def one(name):
+        asked.append(name)
+        return {"lca_count": counts[name], "approval_rate": 0.0, "median_salary": 1000 * counts[name]}
+    monkeypatch.setattr(h1b_checker, "_fetch_h1bdata_name", one)
+    monkeypatch.setattr(h1b_checker.asyncio, "sleep", lambda s: _noop())
+    data = await h1b_checker._fetch_h1bdata("Coinbase")
+    assert asked == ["Coinbase", "Coinbase Inc", "Coinbase LLC"]
+    assert data["lca_count"] == 40 and data["median_salary"] == 40000
+
+
+async def _noop():
+    return None
+
+
+@pytest.mark.asyncio
+async def test_fetch_h1bdata_tries_the_legal_entity_from_the_slug(monkeypatch):
+    from backend.analyzer import h1b_checker
+    asked = []
+
+    async def one(name):
+        asked.append(name)
+        return {"lca_count": 56 if name == "payward inc" else 4, "approval_rate": 0.0, "median_salary": 0}
+    monkeypatch.setattr(h1b_checker, "_fetch_h1bdata_name", one)
+    monkeypatch.setattr(h1b_checker.asyncio, "sleep", lambda s: _noop())
+    data = await h1b_checker._fetch_h1bdata("Kraken", "payward-inc")
+    assert asked == ["payward inc"] and data["lca_count"] == 56

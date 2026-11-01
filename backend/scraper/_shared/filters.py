@@ -207,6 +207,30 @@ def market_filter(jobs: list[dict], countries: list[str]) -> tuple[list[dict], l
             rejected.append(j)
     return kept, rejected
 
+# For a home market (US): regions that include it, and regions that name somewhere else.
+_HOME_REGION = re.compile(r"\b(worldwide|anywhere|global|north america|americas)\b", re.I)
+_AWAY_REGION = re.compile(r"\b(emea|europe|european union|apac|asia|latam|latin america|mena|middle east|gcc)\b", re.I)
+
+
+def home_market_filter(jobs: list[dict], countries: list[str]) -> tuple[list[dict], list[dict]]:
+    """(kept, rejected) for a home market (curate_countries with US): only a posting placed
+    somewhere else is rejected, one whose places are all outside `countries` (Bangalore,
+    London) or whose region names another part of the world (Remote, EMEA). A posting with
+    no place it can read (Remote, Multiple Locations) is kept, as are covering regions."""
+    from backend.analyzer.location import _places_of
+    wanted = {c.upper() for c in countries}
+    kept, rejected = [], []
+    for j in jobs:
+        texts = [t for t in [j.get("location")] + list(j.get("locations") or []) if t]
+        places = _places_of(texts) if texts else []
+        if any(p[0] in wanted for p in places) or any(_HOME_REGION.search(t) for t in texts):
+            kept.append(j)
+        elif places or any(_AWAY_REGION.search(t) for t in texts):
+            rejected.append(j)
+        else:
+            kept.append(j)
+    return kept, rejected
+
 # ── Search title filters ──────────────────────────────────────────────────────
 
 def search_title_filters(search, db) -> tuple[list, list]:

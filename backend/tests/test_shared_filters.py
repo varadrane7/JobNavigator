@@ -172,3 +172,17 @@ def test_market_filter_keeps_lane_countries_and_regions():
     kept, rejected = market_filter(jobs, ["DE", "NL", "IE", "AE"])
     assert [j["title"] for j in kept] == ["a", "c", "d", "f", "g"]
     assert [j["title"] for j in rejected] == ["b", "e"]
+
+
+def test_home_market_filter_drops_only_postings_placed_elsewhere():
+    from backend.scraper._shared.filters import home_market_filter
+    jobs = [{"title": t, "location": loc} for t, loc in [
+        ("a", "Mountain View, California"), ("b", "Bangalore, India"), ("c", "San Francisco; London"),
+        ("d", "Remote"), ("e", "Multiple Locations"), ("f", "London, UK"), ("g", "Remote (EMEA)"),
+        ("h", "Remote - North America"), ("i", None)]]
+    kept, rejected = home_market_filter(jobs, ["US"])
+    assert [j["title"] for j in kept] == ["a", "c", "d", "e", "h", "i"]
+    assert [j["title"] for j in rejected] == ["b", "f", "g"]
+    # a posting listing a US office among its other ones is kept
+    kept, _ = home_market_filter([{"title": "x", "location": "Dublin", "locations": ["Dublin", "Seattle, WA"]}], ["US"])
+    assert kept

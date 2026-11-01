@@ -82,6 +82,25 @@ async def test_scrape_workday_calls_api(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scrape_workday_sends_q_as_search_text(monkeypatch):
+    """`?q=` is the site's search box: it goes to searchText, not to the facets."""
+    mock_resp = MagicMock()
+    mock_resp.text = '{"total": 1, "jobPostings": [{"title": "Software Engineer", "externalPath": "/job/1"}]}'
+    mock_resp.status_code = 200
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr("httpx.AsyncClient", lambda **kw: mock_client)
+
+    from backend.scraper.ats.workday import scrape
+    jobs = await scrape("https://capitalone.wd12.myworkdayjobs.com/capital_one?q=software+engineer")
+    payload = mock_client.post.call_args.kwargs["json"]
+    assert payload["searchText"] == "software engineer" and payload["appliedFacets"] == {}
+    assert len(jobs) == 1
+
+
+@pytest.mark.asyncio
 async def test_scrape_workday_handles_http_error(monkeypatch):
     """scrape() returns empty list on HTTP error, doesn't raise."""
     mock_resp = MagicMock()
