@@ -10,59 +10,65 @@ function dashboardHost(serverUrl) {
   try { return new URL(serverUrl || 'http://localhost').hostname.toLowerCase() } catch { return 'localhost' }
 }
 
+// The worker calls this several times at start (onInstalled / onStartup and the direct call
+// below). Two runs at once both removed rules 1 and 2 and then both added them, so the second
+// add failed with "Rule with id 1 already exists". Runs now queue one after another, and each
+// removes and adds in a single call, which Chrome applies as one update (removals first).
+let frameRulesQueue = Promise.resolve();
+
 function setupFrameRules() {
-  chrome.storage.sync.get(['serverUrl', 'previewUnblock'], (settings) => {
-    const host = dashboardHost(settings.serverUrl);
-    const DNR = chrome.declarativeNetRequest;
-    // popup toggle "Posting preview": off removes the rules entirely
-    if (settings.previewUnblock === false) {
-      chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1, 2] }, () => console.log('Frame header rules off'));
-      return;
-    }
-    const condition = {
-      urlFilter: "*",
-      resourceTypes: [DNR.ResourceType.SUB_FRAME],
-      initiatorDomains: [host],
-      // never the dashboard's own responses: its cached-page reader is sandboxed by a CSP header
-      excludedRequestDomains: [host],
-    };
-    chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1, 2] }, () => {
-      chrome.declarativeNetRequest.updateSessionRules({
-        addRules: [
-          {
-            id: 1,
-            priority: 1,
-            action: {
-              type: DNR.RuleActionType.MODIFY_HEADERS,
-              responseHeaders: [
-                { header: "x-frame-options", operation: DNR.HeaderOperation.REMOVE },
-                { header: "content-security-policy", operation: DNR.HeaderOperation.REMOVE }
-              ]
-            },
-            condition,
-          },
-          {
-            id: 2,
-            priority: 1,
-            action: {
-              type: DNR.RuleActionType.MODIFY_HEADERS,
-              requestHeaders: [
-                { header: "sec-fetch-dest", operation: DNR.HeaderOperation.SET, value: "document" },
-                { header: "sec-fetch-site", operation: DNR.HeaderOperation.SET, value: "none" }
-              ]
-            },
-            condition,
-          }
-        ]
-      }, () => {
-        if (chrome.runtime.lastError) {
-          console.error('Failed to add rules:', chrome.runtime.lastError);
-        } else {
-          console.log('Frame header rules installed for frames opened by', host);
-        }
-      });
-    });
+  frameRulesQueue = frameRulesQueue.then(applyFrameRules).catch((e) =>
+    console.error('Failed to set frame header rules:', e && e.message ? e.message : e));
+  return frameRulesQueue;
+}
+
+async function applyFrameRules() {
+  const settings = await chrome.storage.sync.get(['serverUrl', 'previewUnblock']);
+  const host = dashboardHost(settings.serverUrl);
+  const DNR = chrome.declarativeNetRequest;
+  // popup toggle "Posting preview": off removes the rules entirely
+  if (settings.previewUnblock === false) {
+    await DNR.updateSessionRules({ removeRuleIds: [1, 2] });
+    console.log('Frame header rules off');
+    return;
+  }
+  const condition = {
+    urlFilter: "*",
+    resourceTypes: [DNR.ResourceType.SUB_FRAME],
+    initiatorDomains: [host],
+    // never the dashboard's own responses: its cached-page reader is sandboxed by a CSP header
+    excludedRequestDomains: [host],
+  };
+  await DNR.updateSessionRules({
+    removeRuleIds: [1, 2],
+    addRules: [
+      {
+        id: 1,
+        priority: 1,
+        action: {
+          type: DNR.RuleActionType.MODIFY_HEADERS,
+          responseHeaders: [
+            { header: "x-frame-options", operation: DNR.HeaderOperation.REMOVE },
+            { header: "content-security-policy", operation: DNR.HeaderOperation.REMOVE }
+          ]
+        },
+        condition,
+      },
+      {
+        id: 2,
+        priority: 1,
+        action: {
+          type: DNR.RuleActionType.MODIFY_HEADERS,
+          requestHeaders: [
+            { header: "sec-fetch-dest", operation: DNR.HeaderOperation.SET, value: "document" },
+            { header: "sec-fetch-site", operation: DNR.HeaderOperation.SET, value: "none" }
+          ]
+        },
+        condition,
+      }
+    ]
   });
+  console.log('Frame header rules installed for frames opened by', host);
 }
 
 chrome.runtime.onInstalled.addListener(() => {
