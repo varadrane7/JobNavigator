@@ -361,7 +361,13 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'autofill_stream') return;
 
   let aborter = null;
-  port.onDisconnect.addListener(() => { if (aborter) aborter.abort(); });
+  // MV3 kills a worker after 30s without an extension event, and a pending fetch
+  // isn't one. Non-streaming providers (antigravity_cli) send nothing until the whole
+  // answer is ready, often past 30s, so the worker died and the port dropped
+  // ("connection lost"). A trivial API call every 20s keeps it alive while we wait.
+  let keepAlive = null;
+  const stopKeepAlive = () => { if (keepAlive) { clearInterval(keepAlive); keepAlive = null; } };
+  port.onDisconnect.addListener(() => { stopKeepAlive(); if (aborter) aborter.abort(); });
 
   port.onMessage.addListener((req) => {
     if (!req || req.type !== 'start') return;
@@ -370,6 +376,8 @@ chrome.runtime.onConnect.addListener((port) => {
       const apiKey = settings.apiKey || '';
       aborter = new AbortController();
       const post = (m) => { try { port.postMessage(m); } catch (_) {} };
+      stopKeepAlive();
+      keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 20000);
       try {
         const headers = { 'Content-Type': 'application/json' };
         if (apiKey) headers['X-API-Key'] = apiKey;
@@ -417,6 +425,8 @@ chrome.runtime.onConnect.addListener((port) => {
         post({ type: 'done' });
       } catch (e) {
         if (e.name !== 'AbortError') post({ type: 'error', error: e.message });
+      } finally {
+        stopKeepAlive();
       }
     });
   });
