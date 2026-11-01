@@ -135,6 +135,85 @@ def _errors_of(jobs_df) -> dict:
     return {str(site).lower(): _describe_error(str(site).lower(), msg) for site, msg in raw.items()}
 
 
+# ZipRecruiter reads `search` as plain words: a boolean query ('"a" OR "b"') matches no
+# job at all and comes back as 0 rows with no error. Its terms are searched one at a time.
+_OR = re.compile(r"\s+OR\s+")
+# A 403 from ZipRecruiter is often a passing block: one more try after a pause.
+ZIP_RETRY_PAUSE = 20
+
+
+def zip_terms(term: str) -> list[str]:
+    """The plain search terms ZipRecruiter gets for one search term: each side of an OR,
+    without quotes or brackets. A term without OR is kept as it is."""
+    term = (term or "").strip()
+    if not _OR.search(term):
+        return [term]
+    out = []
+    for part in _OR.split(term):
+        word = part.strip().strip("()").strip().strip('"').strip()
+        if word and word.lower() not in (w.lower() for w in out):
+            out.append(word)
+    return out or [term]
+
+
+def _zip_blocked(df) -> bool:
+    raw = (getattr(df, "attrs", None) or {}).get("errors") or {}
+    msg = str(raw.get("zip_recruiter") or "")
+    return bool(re.search(r"\b(403|429)\b", msg))
+
+
+def _zip_rows(df) -> int:
+    if df is None or df.empty or "site" not in df.columns:
+        return 0
+    return int((df["site"].astype(str).str.lower() == "zip_recruiter").sum())
+
+
+def scrape_boards(kwargs: dict, pause: float = ZIP_RETRY_PAUSE):
+    """scrape_jobs(**kwargs), with ZipRecruiter asked on its own:
+
+    - once per plain term (zip_terms): a boolean term matches nothing there, while the
+      other boards still get the whole term in one call;
+    - with fetch_description on, so its rows carry the JD the way Indeed's do (its job
+      pages answer only the session that searched; LinkedIn's per-job fetch stays off);
+    - once more after `pause` seconds when a term comes back blocked (403 / 429) empty.
+
+    Rows are merged, deduplicated by job URL. Board errors stay in `attrs["errors"]` as
+    scrape_jobs reports them; ZipRecruiter's is kept only when no term returned a row."""
+    import pandas as pd
+    from jobspy import scrape_jobs
+
+    sites = list(kwargs.get("site_name") or [])
+    if "zip_recruiter" not in sites:
+        return scrape_jobs(**kwargs)
+    others = [s for s in sites if s != "zip_recruiter"]
+
+    def zip_call(term):
+        zkw = {**kwargs, "site_name": ["zip_recruiter"], "search_term": term, "fetch_description": True}
+        df = scrape_jobs(**zkw)
+        if _zip_rows(df) == 0 and _zip_blocked(df):
+            logger.info(f"ZipRecruiter blocked '{term}', retrying in {pause:.0f}s")
+            time.sleep(pause)
+            df = scrape_jobs(**zkw)
+        return df
+
+    calls = [scrape_jobs(**{**kwargs, "site_name": others})] if others else []
+    calls += [zip_call(term) for term in zip_terms(kwargs.get("search_term") or "")]
+
+    errors, warnings = {}, {}
+    for df in calls:
+        attrs = getattr(df, "attrs", None) or {}
+        errors.update(attrs.get("errors") or {})
+        warnings.update(attrs.get("warnings") or {})
+    parts = [f for f in calls if f is not None and not f.empty]
+    merged = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    if "job_url" in merged.columns:
+        merged = merged.drop_duplicates(subset=["job_url"], keep="first").reset_index(drop=True)
+    if _zip_rows(merged):
+        errors.pop("zip_recruiter", None)
+    merged.attrs = {"errors": errors, "warnings": warnings}
+    return merged
+
+
 def jobspy_kwargs(search, proxy_url: str = None) -> dict:
     """The scrape_jobs() arguments for one keyword search (the scheduled run and Test share them).
 
@@ -336,8 +415,6 @@ def _run_sync(search, proxy_url: str = None, shared=None) -> dict:
     breakdown = {}
 
     try:
-        from jobspy import scrape_jobs
-
         # Build source list — filter out 'direct' which is Playwright
         sources = [s for s in (search.sources or []) if s != "direct"]
         if not sources:
@@ -349,7 +426,7 @@ def _run_sync(search, proxy_url: str = None, shared=None) -> dict:
 
         if shared is None:
             logger.info(f"Running JobSpy search: {search.name} — term='{search.search_term}', sources={sources}")
-            jobs_df = scrape_jobs(**kwargs)
+            jobs_df = scrape_boards(kwargs)
             captured = _errors_of(jobs_df)
         else:
             own_results, own_hours = kwargs["results_wanted"], kwargs["hours_old"]
@@ -359,7 +436,7 @@ def _run_sync(search, proxy_url: str = None, shared=None) -> dict:
             def _fetch():
                 logger.info(f"Running shared JobSpy search: {search.name} — term='{search.search_term}', "
                             f"sources={sources}, results={kwargs['results_wanted']}, hours={kwargs['hours_old']}")
-                df = scrape_jobs(**kwargs)
+                df = scrape_boards(kwargs)
                 return df, _errors_of(df)
             jobs_df, captured = shared.get_sync(_fetch)
             jobs_df = trim_postings(jobs_df, own_results, own_hours,

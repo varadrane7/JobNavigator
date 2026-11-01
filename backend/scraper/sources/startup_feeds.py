@@ -172,11 +172,16 @@ async def ingest(search: Search, items: list[dict], source: str) -> dict:
                 continue
             job = Job(external_id=ext_id, content_hash=make_content_hash(j["company"], j["title"]),
                       company=j["company"], title=j["title"], url=j["url"], source=source,
+                      apply_url=j.get("apply_url") or None,
                       search_id=search.id, location=j.get("location") or None,
                       description=j.get("description") or None, status="new", seen=False, saved=False,
                       posted_at=j.get("posted"))
+            # A board's own yearly pay range (Wellfound, YC) is the posting's salary.
+            if j.get("salary_min"):
+                job.salary_min, job.salary_max = j["salary_min"], j.get("salary_max") or j["salary_min"]
+                job.salary_source = "posting"
             try:
-                await analyze_inline(job, db=db)
+                await analyze_inline(job, db=db, arrangement=j.get("arrangement"))
             except Exception as e:
                 logger.warning(f"{source} inline analysis failed for {j['title']}: {e}")
             if job.h1b_jd_flag:
@@ -208,8 +213,13 @@ async def preview_items(search: Search, db, items: list[dict], source: str, star
         ok, reason = title_kept(j["title"], include_kw, exclude_kw)
         if ok and (j["company"] or "").lower() in global_ex | search_ex:
             ok, reason = False, "Company excluded"
+        salary = None
+        if j.get("salary_min"):
+            salary = f"${j['salary_min']:,}"
+            if j.get("salary_max") and j["salary_max"] != j["salary_min"]:
+                salary += f" – ${j['salary_max']:,}"
         jobs.append({"title": j["title"], "company": j["company"], "url": j["url"], "source": source,
-                     "location": j.get("location") or "", "salary": None,
+                     "location": j.get("location") or "", "salary": salary,
                      "has_description": bool(j.get("description")), "desc_length": len(j.get("description") or ""),
                      "kept": ok, "reason": None if ok else reason,
                      "posted": j["posted"].isoformat() if j.get("posted") else None})

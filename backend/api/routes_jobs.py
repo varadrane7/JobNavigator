@@ -87,6 +87,38 @@ async def linkedin_import(request: Request, db: Session = Depends(get_db)):
     }
 
 
+@router.post("/hiring-cafe-import")
+async def hiring_cafe_import(request: Request, db: Session = Depends(get_db)):
+    """Store Hiring Cafe search results the extension read from a hiring.cafe page.
+
+    Body: {"jobs": [<result>, ...]}, the results as the page received them. They go through
+    the account's Hiring Cafe search: its title and company filters, the body-exclusion scan
+    and inline analysis, then its auto-scoring depth (sources/hiring_cafe.py)."""
+    from backend.models.db import Search
+    from backend.scraper.sources.hiring_cafe import MAX_BATCH, import_jobs
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="Body must be a JSON object")
+    if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
+        raise HTTPException(status_code=422, detail="jobs must be a list of Hiring Cafe results")
+    raw = [j for j in data["jobs"] if isinstance(j, dict)][:MAX_BATCH]
+    search = db.query(Search).filter(Search.search_mode == "hiring_cafe").first()
+    if search is None:
+        raise HTTPException(status_code=409, detail="This account has no Hiring Cafe search; restart the backend to seed it")
+    if not search.active:
+        return {"received": len(raw), "parsed": 0, "jobs_found": 0, "new_jobs": 0,
+                "message": "The Hiring Cafe search is paused"}
+    result = await import_jobs(search, raw)
+    if result.get("new_jobs") and search.auto_scoring_depth in ("light", "full"):
+        from backend.analyzer.cv_scorer import analyze_unscored_jobs
+        try:
+            launch_background("hiring_cafe_score", analyze_unscored_jobs, trigger="manual", func_kwargs={"status": "new"})
+        except JobAlreadyRunningError:
+            pass   # a sweep already running picks the new jobs up
+    return {k: result.get(k) for k in ("received", "parsed", "jobs_found", "new_jobs")}
+
+
 @router.get("/linkedin-import/progress")
 def linkedin_import_progress():
     """Poll the caller's own LinkedIn import progress (idle when it has none running)."""

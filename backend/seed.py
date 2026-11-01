@@ -1647,6 +1647,16 @@ SEED_SEARCHES = [
         "auto_scoring_depth": "light",
     },
     {
+        "name": "Hiring Cafe",
+        "active": True,
+        "search_mode": "hiring_cafe",
+        "sources": [],
+        "title_include_keywords": [],
+        "title_exclude_keywords": [],
+        "company_exclude": [],
+        "auto_scoring_depth": "light",
+    },
+    {
         "name": "Keyword Search",
         "active": False,
         "search_mode": "keyword",
@@ -1754,7 +1764,7 @@ from backend.scraper.search_modes import EXTENSION_MODES as EXTENSION_SEARCH_MOD
 
 
 def ensure_extension_searches(db, account_id) -> int:
-    """Give `account_id` its two built-in extension searches ("Extension", "Extension LI")
+    """Give `account_id` its built-in extension searches ("Extension", "Extension LI", "Hiring Cafe")
     when it lacks them. Explicit account filter and stamp, so it works scoped, unscoped
     (startup) and for an account that is not the current one (account creation, MT-11).
     No commit. Returns how many were added."""

@@ -15,8 +15,11 @@ export const SEARCH_MODES = [
   { key: 'hn_hiring', label: 'HN Who is hiring', badge: 'HN HIRING', cls: 'sm-trulyremote', extension: false, needsQuery: false, sources: [] },
   { key: 'arbeitnow', label: 'Arbeitnow (Germany)', badge: 'ARBEITNOW', cls: 'sm-freehire', extension: false, needsQuery: false, sources: [] },
   { key: 'berlinstartupjobs', label: 'Berlin Startup Jobs', badge: 'BERLIN STARTUP JOBS', cls: 'sm-trulyremote', extension: false, needsQuery: false, sources: [] },
+  { key: 'ycombinator', label: 'Y Combinator Jobs', badge: 'YC', cls: 'sm-levels', extension: false, needsQuery: false, sources: [] },
+  { key: 'wellfound', label: 'Wellfound', badge: 'WELLFOUND', cls: 'sm-jobright', extension: false, needsQuery: false, sources: [] },
   { key: 'linkedin_extension', label: 'LinkedIn Extension', badge: 'EXTENSION', cls: 'sm-extension', extension: true, needsQuery: false, sources: [] },
   { key: 'extension', label: 'Extension', badge: 'EXTENSION', cls: 'sm-extension', extension: true, needsQuery: false, sources: [] },
+  { key: 'hiring_cafe', label: 'Hiring Cafe Extension', badge: 'HIRING CAFE', cls: 'sm-extension', extension: true, needsQuery: false, sources: [] },
 ]
 
 const BY_KEY = Object.fromEntries(SEARCH_MODES.map((m) => [m.key, m]))

@@ -99,8 +99,11 @@ const noteFor = (mode) => {
   if (mode === 'trulyremote') return ['Reads TrulyRemoteWork.com’s full corpus of worldwide-remote roles. Every listing is remote with no location restriction, so you narrow it with the title and company filters below. Each new job’s description is read from its own page; Test reads at most 20 of those pages.', 'sm-trulyremote']
   if (mode === 'arbeitnow') return ['Reads Arbeitnow’s free job board API (Germany), newest first, back as far as “Max age”. Narrow it with a term (any of comma-separated words, in the title or description), a place (e.g. Berlin, Munich, Remote) and the title filters below.', 'sm-freehire']
   if (mode === 'berlinstartupjobs') return ['Reads Berlin Startup Jobs’ engineering feed: Berlin startups that mostly hire in English. Narrow it with a term and the title filters below.', 'sm-trulyremote']
+  if (mode === 'ycombinator') return ['Reads ycombinator.com/jobs, no account. A YC page lists only its ~40 most active jobs, so a run reads the role page, its sub-roles and its city pages (or the cities in Location) and keeps the union. Each new job’s description is read from its own page, with YC’s visa, experience and batch lines on top; Test reads at most 5 of those pages.', 'sm-levels']
+  if (mode === 'wellfound') return ['Reads Wellfound’s public role pages, no account: 20 startups a page, each job with its full description and pay range. The search term is the role (e.g. software engineer, backend engineer); Location “remote” reads the remote page. Wellfound ranks by startup, not date, so jobs live longer than Max age (at least 30 days) are left out.', 'sm-jobright']
   if (mode === 'extension') return ['Jobs come from the “Save to Job Feed” button on any website. The filters and auto-score depth below apply to each job as it is saved.', 'sm-levels']
   if (mode === 'linkedin_extension') return ['Jobs are captured while you browse linkedin.com/jobs/collections pages. The filters below are applied on import.', 'sm-levels']
+  if (mode === 'hiring_cafe') return ['Jobs are captured while you browse hiring.cafe searches in Chrome with The Navigator extension (Hiring Cafe capture on in its popup): each results page the site loads is sent here, with the description, pay and workplace. hiring.cafe blocks automated visitors, so there is no scheduled run; the filters and auto-score depth below apply on import.', 'sm-levels']
   return null
 }
 
@@ -116,6 +119,7 @@ const summaryOf = (s, boards = []) => {
   const m = s.search_mode
   if (m === 'linkedin_extension') return 'Passive capture on linkedin.com/jobs/collections/* · title filters apply on import'
   if (m === 'extension') return 'Manual “Save to Job Feed” button on any website'
+  if (m === 'hiring_cafe') return 'Passive capture on hiring.cafe searches · filters apply on import'
   if (m === 'keyword') {
     const bits = []
     if (s.search_term) bits.push(`“${s.search_term}”`)
@@ -153,6 +157,15 @@ const summaryOf = (s, boards = []) => {
     if (s.search_term) bits.push(`“${s.search_term}”`)
     if (s.location) bits.push(s.location)
     return (bits.join(' · ') || (m === 'arbeitnow' ? 'Arbeitnow, all of Germany' : 'Berlin Startup Jobs, engineering')) + last
+  }
+  if (m === 'ycombinator' || m === 'wellfound') {
+    const bits = []
+    if (s.search_term) bits.push(`“${s.search_term}”`)
+    if (s.location) bits.push(s.location)
+    if (s.direct_url) bits.push(short(s.direct_url))
+    if (m === 'wellfound') bits.push(`${Math.min(s.max_pages || 3, 10)} pages`)
+    if (s.require_salary) bits.push('require salary')
+    return (bits.join(' · ') || (m === 'ycombinator' ? 'YC software engineering jobs' : 'Wellfound software engineer')) + last
   }
   if (m === 'trulyremote') return `Worldwide remote · max ${s.results_wanted || 100} new${last}`
   return `${short(s.direct_url) || 'no URL'}${last}`
@@ -222,6 +235,8 @@ const toPayload = (d) => {
   if (d.search_mode === 'keyword' || d.search_mode === 'apify') {
     p.location = d.location || ''
     p.country = d.country || DEFAULT_COUNTRY
+  } else if (d.search_mode === 'ycombinator' || d.search_mode === 'wellfound') {
+    p.location = d.location || ''
   }
   return p
 }
@@ -289,7 +304,7 @@ function ConfigForm({ d, set }) {
   fields.push(<Cell key="name" label="Name" value={d.name} onChange={(v) => set({ name: v })} placeholder="e.g. TPM roles — Tier 1" />)
   if (ext) {
     fields.push(<Cell key="mode" label="Mode" span={2} disabled
-      value={m === 'extension' ? 'Extension (manual Save-to-Feed)' : 'LinkedIn Extension (passive capture)'} onChange={() => {}} />)
+      value={m === 'extension' ? 'Extension (manual Save-to-Feed)' : m === 'hiring_cafe' ? 'Hiring Cafe Extension (passive capture)' : 'LinkedIn Extension (passive capture)'} onChange={() => {}} />)
   } else {
     fields.push(<Cell key="mode" label="Mode" value={m} options={MODE_OPTIONS} onChange={(v) => {
       const patch = { search_mode: v }
@@ -351,6 +366,30 @@ function ConfigForm({ d, set }) {
         placeholder="https://www.caribbeanjobs.com/ShowResults.aspx?Keywords=engineer&Location=123"
         sub="Keywords, Location, Category and job type are taken from the URL as is" />,
       <Cell key="rw" label="Results wanted · 1–500" mono type="number" min={BOUNDS.results_wanted[0]} max={BOUNDS.results_wanted[1]} value={d.results_wanted} onChange={(v) => set({ results_wanted: v })} />,
+    )
+  } else if (m === 'ycombinator') {
+    fields.push(
+      <Cell key="term" label="Title words · optional" mono value={d.search_term} onChange={(v) => set({ search_term: v })} placeholder="e.g. backend, full stack, platform"
+        sub="Comma-separated; a job is kept when its title has any of them" />,
+      <Cell key="loc" label="Location · optional" value={d.location} onChange={(v) => set({ location: v })} placeholder="e.g. New York, Remote"
+        sub="Comma-separated. YC city pages: San Francisco, New York, Seattle, Boston, Austin, Los Angeles, Chicago, Remote. “United States” reads all of them." />,
+      <Cell key="url" label="ycombinator.com/jobs URLs · optional" mono span={3} value={d.direct_url} onChange={(v) => set({ direct_url: v })}
+        placeholder="https://www.ycombinator.com/jobs/role/software-engineer/backend"
+        sub="Comma-separated. When set, only these pages are read." />,
+    )
+  } else if (m === 'wellfound') {
+    fields.push(
+      <Cell key="term" label="Role · optional" mono value={d.search_term} onChange={(v) => set({ search_term: v })} placeholder="software engineer"
+        sub="Wellfound’s role names, comma-separated: software engineer, backend engineer, full stack engineer" />,
+      <Cell key="loc" label="Location · optional" value={d.location} onChange={(v) => set({ location: v })} placeholder="e.g. New York, Remote"
+        sub="Comma-separated; each place is its own set of pages. Empty = every location." />,
+      <Cell key="mp" label="Pages per role and place · 1–10" mono type="number" min={1} max={10} value={d.max_pages} onChange={(v) => set({ max_pages: v })}
+        sub="About 40 jobs a page" />,
+      <Cell key="ho" label="Max age · hours" mono type="number" min={BOUNDS.hours_old[0]} max={BOUNDS.hours_old[1]} value={d.hours_old} onChange={(v) => set({ hours_old: v })}
+        sub="At least 30 days is always kept" />,
+      <Cell key="url" label="wellfound.com/role URLs · optional" mono span={2} value={d.direct_url} onChange={(v) => set({ direct_url: v })}
+        placeholder="https://wellfound.com/role/r/backend-engineer"
+        sub="Comma-separated. When set, only these page sets are read." />,
     )
   } else if (m === 'trulyremote') {
     // The whole board is read on every run; this caps the new jobs whose pages one run opens.
@@ -427,7 +466,7 @@ function ConfigForm({ d, set }) {
             <Check checked={d.exclude_active_companies} label="Skip my active companies"
               title="Leaves out jobs from companies you scrape (active in Companies, aliases included): their own careers page already brings those in"
               onChange={(v) => set({ exclude_active_companies: v })} />
-            {m === 'jobright' && <Check checked={d.require_salary} label="Require salary" title="Drop results without a listed salary"
+            {(m === 'jobright' || m === 'ycombinator' || m === 'wellfound') && <Check checked={d.require_salary} label="Require salary" title="Drop results without a listed salary"
               onChange={(v) => set({ require_salary: v })} />}
           </div>
         </div>

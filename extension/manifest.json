@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "The Navigator",
-  "version": "3.1",
-  "description": "Job navigation automation - application tracking & LinkedIn capture",
+  "version": "3.2",
+  "description": "Job navigation automation - application tracking, LinkedIn & Hiring Cafe capture",
   "permissions": ["activeTab", "storage", "scripting", "declarativeNetRequest"],
   "host_permissions": ["http://*/*", "https://*/*", "<all_urls>"],
   "action": {
@@ -23,6 +23,17 @@
       ],
       "js": ["content_linkedin.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://hiring.cafe/*", "https://*.hiring.cafe/*", "https://hiringcafe.com/*", "https://*.hiringcafe.com/*"],
+      "js": ["content_hiringcafe_main.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://hiring.cafe/*", "https://*.hiring.cafe/*", "https://hiringcafe.com/*", "https://*.hiringcafe.com/*"],
+      "js": ["content_hiringcafe.js"],
+      "run_at": "document_start"
     },
     {
       "matches": ["http://*/*", "https://*/*"],

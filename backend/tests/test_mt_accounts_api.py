@@ -162,12 +162,12 @@ def test_second_account_with_pins(client, test_db, owner):
     new_id = uuid.UUID(acc["id"])
     row = test_db.query(Account).filter(Account.id == new_id).one()
     assert A.verify_pin("2222", row.pin_hash)
-    # own rows: an empty Persona and the two built-in extension searches
+    # own rows: an empty Persona and the built-in extension searches
     personas = _rows(test_db, Persona, new_id)
     assert len(personas) == 1 and personas[0].qa_bank == [] and personas[0].contact == {}
     searches = _rows(test_db, Search, new_id)
     assert sorted((s.name, s.search_mode) for s in searches) == [
-        ("Extension", "extension"), ("Extension LI", "linkedin_extension")]
+        ("Extension", "extension"), ("Extension LI", "linkedin_extension"), ("Hiring Cafe", "hiring_cafe")]
     assert r.json()["copied"] == {}
 
 
@@ -288,7 +288,7 @@ def test_copy_everything_from_the_owner_remaps_ids(client, test_db, owner, owner
 
     searches = sorted((s.name, s.search_mode) for s in _rows(test_db, Search, new_id))
     assert searches == [("Extension", "extension"), ("Extension LI", "linkedin_extension"),
-                        ("PM search", "keyword")]
+                        ("Hiring Cafe", "hiring_cafe"), ("PM search", "keyword")]
     ext = next(s for s in _rows(test_db, Search, new_id) if s.search_mode == "extension")
     assert ext.title_exclude_keywords == []                          # seeded, not the owner's
 
@@ -418,7 +418,7 @@ def test_seed_searches_gives_every_member_its_extension_searches(test_db, owner)
         seed.seed_searches(test_db)
         test_db.commit()
     modes = sorted(s.search_mode for s in _rows(test_db, Search, m.id))
-    assert modes == ["extension", "linkedin_extension"]
+    assert modes == ["extension", "hiring_cafe", "linkedin_extension"]
     assert len(_rows(test_db, Search, owner.id)) == len(seed.SEED_SEARCHES)
 
 

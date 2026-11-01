@@ -119,7 +119,7 @@ function _extractDescFn() {
 const state = {
   screen: 'capture', url: '', host: '', path: '',
   send: 'idle', applied: 'idle', lastError: '', filterReason: '',
-  li: false, af: false, atsMode: 'off', len: 250, captured: 0,
+  li: false, hc: true, hcInfo: false, hcLast: null, af: false, atsMode: 'off', len: 250, captured: 0,
   theme: 'system',
   liInfo: false, afInfo: false, charsOpen: false, urlOpen: false,
   serverUrl: 'http://localhost', apiKey: '',
@@ -315,6 +315,14 @@ function render() {
   $('afToggle').dataset.on = String(state.af);
   $('pvToggle').dataset.on = String(state.pv);
   $('liInfoCard').classList.toggle('hide', !state.liInfo);
+  $('hcToggle').dataset.on = String(state.hc);
+  $('hcInfoCard').classList.toggle('hide', !state.hcInfo);
+  const hl = state.hcLast;
+  $('hcCount').classList.toggle('hide', !(hl && hl.total_new));
+  $('hcCount').textContent = `${(hl && hl.total_new) || 0} new`;
+  $('hcLast').textContent = !hl ? 'Nothing sent yet'
+    : hl.error ? `Last send failed: ${hl.error}`
+    : `Last send ${new Date(hl.at).toLocaleTimeString()}: ${hl.received ?? hl.sent} jobs, ${hl.jobs_found ?? 0} kept, ${hl.new_jobs ?? 0} new`;
   $('afInfoCard').classList.toggle('hide', !state.afInfo);
   $('pvInfoCard').classList.toggle('hide', !state.pvInfo);
 
@@ -403,8 +411,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadAccounts();   // fills the "Saves to" row (settings) when the server has 2+ accounts
 
   // storage-backed feature state
-  const st = await chrome.storage.sync.get(['linkedinCapture', 'autofillEnabled', 'autofillDefaultLength', 'structuredAutofillEnabled', 'structuredAutofillTrigger', 'theme', 'previewUnblock']);
+  const st = await chrome.storage.sync.get(['linkedinCapture', 'hiringCafeCapture', 'autofillEnabled', 'autofillDefaultLength', 'structuredAutofillEnabled', 'structuredAutofillTrigger', 'theme', 'previewUnblock']);
   state.li = !!st.linkedinCapture;
+  state.hc = st.hiringCafeCapture !== false;   // on until switched off
+  chrome.runtime.sendMessage({ type: 'hiringcafe_status' }, (resp) => { state.hcLast = resp || null; render(); });
   state.af = !!st.autofillEnabled;
   state.pv = st.previewUnblock !== false;   // on until switched off
   state.len = Number(st.autofillDefaultLength) > 0 ? Number(st.autofillDefaultLength) : 250;
@@ -460,6 +470,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // footer: LinkedIn
   $('liToggle').onclick = () => { state.li = !state.li; chrome.storage.sync.set({ linkedinCapture: state.li }); render(); };
   $('liInfo').onclick = () => { state.liInfo = !state.liInfo; render(); };
+  $('hcToggle').onclick = () => { state.hc = !state.hc; chrome.storage.sync.set({ hiringCafeCapture: state.hc }); render(); };
+  $('hcInfo').onclick = () => { state.hcInfo = !state.hcInfo; render(); };
   $('liClear').onclick = () => { chrome.runtime.sendMessage({ type: 'linkedin_clear' }, () => { state.captured = 0; render(); }); };
 
   // footer: AI-drafted

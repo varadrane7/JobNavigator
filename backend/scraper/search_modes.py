@@ -75,8 +75,13 @@ SEARCH_MODES: dict[str, SearchMode] = {m.key: m for m in (
     # Free German boards for a relocation lane, read newest-first each run (sources/europe_feeds.py).
     SearchMode("arbeitnow", "Arbeitnow (Germany)", "arbeitnow", background_test=True),
     SearchMode("berlinstartupjobs", "Berlin Startup Jobs", "berlinstartupjobs", background_test=True),
+    # Public startup boards, no account (sources/ycombinator.py, sources/wellfound.py).
+    SearchMode("ycombinator", "Y Combinator Jobs", "ycombinator", background_test=True),
+    SearchMode("wellfound", "Wellfound", "wellfound", background_test=True),
     SearchMode("linkedin_extension", "LinkedIn Extension", extension=True),
     SearchMode("extension", "Extension", extension=True),
+    # Jobs captured from hiring.cafe pages in the browser (sources/hiring_cafe.py).
+    SearchMode("hiring_cafe", "Hiring Cafe Extension", extension=True),
 )}
 
 EXTENSION_MODES = tuple(k for k, m in SEARCH_MODES.items() if m.extension)

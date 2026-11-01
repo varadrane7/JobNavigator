@@ -80,6 +80,8 @@ SOURCE_LABELS = {
     "bdjobs": "BDJobs",
     "arbeitnow": "Arbeitnow",
     "berlinstartupjobs": "Berlin Startup Jobs",
+    "ycombinator": "Y Combinator",
+    "wellfound": "Wellfound",
 }
 
 

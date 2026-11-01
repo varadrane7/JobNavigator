@@ -488,7 +488,6 @@ async def test_search(search_id: str, db: Session = Depends(get_db)):
     import re
     import time
     import pandas as pd
-    from jobspy import scrape_jobs
 
     sources = [s for s in (search.sources or []) if s != "direct"]
     if not sources:
@@ -496,7 +495,7 @@ async def test_search(search_id: str, db: Session = Depends(get_db)):
 
     proxy_url = get_setting(db, "proxy_url") or None
 
-    from backend.scraper.sources.jobspy import _board_errors, _errors_of, jobspy_kwargs
+    from backend.scraper.sources.jobspy import _board_errors, _errors_of, jobspy_kwargs, scrape_boards
     try:
         kwargs = jobspy_kwargs(search, proxy_url)
     except ValueError as e:
@@ -504,7 +503,7 @@ async def test_search(search_id: str, db: Session = Depends(get_db)):
 
     start = time.time()
     try:
-        jobs_df = await asyncio.to_thread(scrape_jobs, **kwargs)
+        jobs_df = await asyncio.to_thread(scrape_boards, kwargs)
     except Exception:
         logger.exception("JobSpy scrape_jobs failed during test for search %s", search.name)
         return {

@@ -128,6 +128,49 @@ async function noteAccountGone(resp) {
   } catch (_) { /* not JSON */ }
 }
 
+// Hiring Cafe batches arrive one per results page (and again on scroll); they are pooled
+// for a moment and sent together, at most 200 per request, deduplicated by result id.
+const hiringCafeQueue = new Map();
+let hiringCafeTimer = null;
+
+function queueHiringCafe(jobs) {
+  for (const j of jobs) {
+    const id = (j && (j.id || j.objectID || j.apply_url)) || JSON.stringify(j).slice(0, 200);
+    hiringCafeQueue.set(String(id), j);
+  }
+  if (!hiringCafeTimer) hiringCafeTimer = setTimeout(sendHiringCafe, 2500);
+}
+
+async function sendHiringCafe() {
+  hiringCafeTimer = null;
+  const batch = Array.from(hiringCafeQueue.entries()).slice(0, 200);
+  for (const [key] of batch) hiringCafeQueue.delete(key);
+  const jobs = batch.map(([, j]) => j);
+  if (!jobs.length) return;
+  const { serverUrl, apiKey } = await chrome.storage.sync.get(['serverUrl', 'apiKey']);
+  const last = { at: Date.now(), sent: jobs.length };
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['X-API-Key'] = apiKey;
+    await addAccountHeader(headers);
+    const resp = await fetch(`${serverUrl || 'http://localhost'}/api/jobs/hiring-cafe-import`, {
+      method: 'POST', headers, body: JSON.stringify({ jobs }),
+    });
+    if (!resp.ok) {
+      await noteAccountGone(resp);
+      last.error = `Server error: ${resp.status}`;
+    } else {
+      Object.assign(last, await resp.json());
+    }
+  } catch (e) {
+    last.error = e.message;
+  }
+  const prev = (await chrome.storage.local.get('hiringCafeLast')).hiringCafeLast || {};
+  last.total_new = (prev.total_new || 0) + (last.new_jobs || 0);
+  await chrome.storage.local.set({ hiringCafeLast: last });
+  if (hiringCafeQueue.size) hiringCafeTimer = setTimeout(sendHiringCafe, 2500);
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // only our own popup and content scripts; another extension must not read the persona or push Q&A answers
   if (!sender || sender.id !== chrome.runtime.id) return;
@@ -186,6 +229,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
 
     return true; // Async response
+  }
+
+  // Hiring Cafe: a content script hands over a batch of results the page loaded
+  if (msg.type === 'hiringcafe_jobs') {
+    queueHiringCafe(msg.jobs || []);
+    sendResponse({ queued: true });
+    return;
+  }
+
+  // Popup reads the last Hiring Cafe send
+  if (msg.type === 'hiringcafe_status') {
+    chrome.storage.local.get('hiringCafeLast', (d) => sendResponse(d.hiringCafeLast || null));
+    return true;
   }
 
   // Popup triggers clear
