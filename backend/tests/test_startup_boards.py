@@ -102,6 +102,11 @@ async def test_yc_fetch_unions_pages_filters_and_reads_only_new_job_pages(monkey
     items = await yc.fetch(_search(location="New York, Remote", require_salary=True, search_term="backend"), set())
     assert [j["yc_id"] for j in items] == ["3"]
 
+    # the search's own filters decide which job pages are read
+    asked.clear()
+    items = await yc.fetch(_search(location="New York, Remote"), set(), wanted=lambda j: j["yc_id"] != "5")
+    assert len(items) == 3 and not [u for u in asked if "x5-swe" in u]
+
 
 @pytest.mark.asyncio
 async def test_yc_fetch_defers_jobs_past_the_page_cap(monkeypatch):
@@ -213,3 +218,28 @@ async def test_ingest_stores_posting_salary_and_board_remote(test_db, monkeypatc
     job = test_db.query(Job).filter(Job.source == "wellfound").one()
     assert (job.salary_min, job.salary_max, job.salary_source) == (150_000, 190_000, "posting")
     assert job.arr_remote is True
+
+
+def test_wf_remote_jobs_must_take_the_us_for_a_us_search():
+    assert wf.remote_for_us([]) is None
+    assert wf.remote_for_us(["India"]) is False
+    assert wf.remote_for_us(["Argentina", "Australia", "United States"]) is True
+    assert wf.remote_for_us(["North America"]) is True
+    jobs, _ = wf.parse_page(_wf_page([
+        _wf_job(1, remote=True, locationNames=["Los Angeles"], acceptedRemoteLocationNames=["Australia", "United States"]),
+        _wf_job(2, remote=True, locationNames=["Bangalore"], acceptedRemoteLocationNames=["India"])]))
+    assert jobs[0]["location"] == "Los Angeles (Remote: United States)" and jobs[0]["us_remote"] is True
+    assert jobs[1]["us_remote"] is False
+
+
+@pytest.mark.asyncio
+async def test_wf_fetch_drops_remote_jobs_closed_to_the_us(monkeypatch):
+    monkeypatch.setattr(wf, "PAGE_PAUSE", 0)
+    monkeypatch.setattr(wf.time, "time", lambda: NOW.timestamp())
+    page = _wf_page([_wf_job(1, remote=True, acceptedRemoteLocationNames=["India"]),
+                     _wf_job(2, remote=True, acceptedRemoteLocationNames=["United States"])], page_count=1)
+    _mock_client(monkeypatch, lambda request: httpx.Response(200, text=page))
+    items, _ = await wf.fetch(_search(location="Remote", max_pages=1))
+    assert [j["wf_id"] for j in items] == ["2"]
+    items, _ = await wf.fetch(_search(location="Remote", max_pages=1, country="germany"))
+    assert [j["wf_id"] for j in items] == ["1", "2"]

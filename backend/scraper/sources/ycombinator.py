@@ -123,6 +123,15 @@ def parse_listing(p: dict, now: datetime | None = None) -> dict:
             "job_type": p.get("type") or ""}
 
 
+def filters_of(search: Search, db):
+    """The search's title and company filters as one predicate on a job."""
+    from backend.scraper._shared.filters import build_search_exclude_sets, search_title_filters, title_kept
+    include_kw, exclude_kw = search_title_filters(search, db)
+    global_ex, search_ex = build_search_exclude_sets(db, search)
+    excluded = global_ex | search_ex
+    return lambda j: title_kept(j["title"], include_kw, exclude_kw)[0] and (j["company"] or "").lower() not in excluded
+
+
 def detail_text(props: dict, job: dict) -> str | None:
     """The description stored for one job: YC's facts first, then the posting itself."""
     from backend.scraper._shared.html_text import html_to_text
@@ -145,9 +154,10 @@ async def _get(client, url: str) -> dict:
     return page_props(r.text)
 
 
-async def fetch(search: Search, existing_ids: set | None = None, detail_cap: int = DETAIL_CAP) -> list[dict]:
-    """Every matching job of the run's listing pages; new ones (not in `existing_ids`) with
-    their description."""
+async def fetch(search: Search, existing_ids: set | None = None, detail_cap: int = DETAIL_CAP,
+                wanted=None) -> list[dict]:
+    """Every matching job of the run's listing pages; new ones (not in `existing_ids`) that
+    `wanted(job)` accepts (the search's title and company filters) with their description."""
     from backend.scraper._shared.dedup import make_external_id
     now = datetime.now(timezone.utc)
     seen, items = set(), []
@@ -172,7 +182,8 @@ async def fetch(search: Search, existing_ids: set | None = None, detail_cap: int
                  and feeds.terms_ok(j["title"], search.search_term)
                  and (j["salary_min"] or not getattr(search, "require_salary", False))]
         todo = [j for j in items
-                if existing_ids is None or make_external_id(j["company"], j["title"], j["url"]) not in existing_ids]
+                if (existing_ids is None or make_external_id(j["company"], j["title"], j["url"]) not in existing_ids)
+                and (wanted is None or wanted(j))]
         for i, j in enumerate(todo[:detail_cap]):
             if i:
                 await asyncio.sleep(DETAIL_PAUSE)
@@ -195,9 +206,10 @@ async def run(search: Search) -> dict:
         db = SessionLocal()
         try:
             existing = get_existing_external_ids(db)
+            wanted = filters_of(search, db)
         finally:
             db.close()
-        items = await fetch(search, existing)
+        items = await fetch(search, existing, wanted=wanted)
         logger.info(f"ycombinator '{search.name}': {len(items)} listings match")
         items = [j for j in items if not j.get("deferred")]
         return await feeds.ingest(search, items, "ycombinator")
@@ -211,7 +223,7 @@ async def preview(search: Search, db) -> dict:
     try:
         from backend.models.db import get_existing_external_ids
         # Test reads a few job pages only: enough to show the descriptions come through
-        items = await fetch(search, get_existing_external_ids(db), detail_cap=5)
+        items = await fetch(search, get_existing_external_ids(db), detail_cap=5, wanted=filters_of(search, db))
         return await feeds.preview_items(search, db, items, "ycombinator", start)
     except Exception as e:
         return {"search_name": search.name, "error": str(e), "duration": round(time.time() - start, 1),

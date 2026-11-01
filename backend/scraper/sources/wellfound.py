@@ -11,6 +11,8 @@ What a search reads:
   comma-separated for several roles: "backend engineer, full stack engineer").
 - `location`: one place per page set; "remote" reads the remote page (/role/r/<role>), any
   other place its location page (/role/l/<role>/<place>), none the role page.
+- `country` (the US unless set otherwise): a remote job whose own list of remote countries
+  leaves the US out is dropped; one that takes the US is labelled "Remote: United States".
 - `hours_old`: postings live longer than that are left out, with a floor of MIN_AGE_DAYS
   (Wellfound ranks by startup, not date, so most pages mix new and older jobs).
 - title include/exclude keywords, company exclude and `require_salary` as elsewhere.
@@ -96,6 +98,18 @@ def parse_page(text: str) -> tuple[list[dict], int]:
     return jobs, int(results.get("pageCount") or 1)
 
 
+# Remote regions that let someone in the US work a remote job; a job with no list says nothing.
+US_REMOTE = {"united states", "usa", "us", "north america", "americas", "worldwide", "anywhere", "global"}
+
+
+def remote_for_us(accepted: list) -> bool | None:
+    """True / False when the job's remote list does / does not take the US, None without a list."""
+    names = [str(a).strip().lower() for a in accepted or [] if str(a).strip()]
+    if not names:
+        return None
+    return any(n in US_REMOTE or feeds.is_us(a) and n != "remote" for n, a in zip(names, accepted))
+
+
 def parse_job(j: dict, startup: dict) -> dict:
     from backend.scraper.sources.jobright import _parse_salary
     pay = (j.get("compensation") or "").split("•")[0].strip()
@@ -103,6 +117,9 @@ def parse_job(j: dict, startup: dict) -> dict:
     places = j.get("locationNames") or []
     remote_in = j.get("acceptedRemoteLocationNames") or []
     loc = ", ".join(places)
+    us_remote = remote_for_us(remote_in) if j.get("remote") else None
+    if us_remote:
+        remote_in = ["United States"]   # the full list (40 countries) misleads the place parser
     if j.get("remote"):
         loc = f"{loc} (Remote{': ' + ', '.join(remote_in) if remote_in else ''})" if loc \
             else f"Remote{' (' + ', '.join(remote_in) + ')' if remote_in else ''}"
@@ -123,7 +140,8 @@ def parse_job(j: dict, startup: dict) -> dict:
             "location": loc, "posted": posted,
             "description": ("\n".join(facts) + ("\n\n" + body if body else "")).strip() or None,
             "salary_min": salary_min, "salary_max": salary_max,
-            "arrangement": True if j.get("remote") else None, "wf_id": str(j.get("id") or "")}
+            "arrangement": True if j.get("remote") else None, "wf_id": str(j.get("id") or ""),
+            "us_remote": us_remote}
 
 
 async def fetch(search: Search) -> tuple[list[dict], str | None]:
@@ -164,10 +182,12 @@ async def fetch(search: Search) -> tuple[list[dict], str | None]:
             if stopped:
                 break
     place_filter = None if (search.direct_url or "").strip() else search.location
+    us = (getattr(search, "country", None) or "usa").lower() in ("usa", "us", "united states")
     items = [j for j in items
              if (j["posted"] is None or now - j["posted"].timestamp() <= max_age)
              and (j["salary_min"] or not getattr(search, "require_salary", False))
-             and _place_ok(j["location"], place_filter)]
+             and _place_ok(j["location"], place_filter)
+             and not (us and j["us_remote"] is False)]
     return items, stopped
 
 
