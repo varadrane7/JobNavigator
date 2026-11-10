@@ -798,7 +798,8 @@ async def _handle_callback(callback_data: str, message_id: int = None):
                 job.status = "applied"
                 existing = db.query(Application).filter(Application.job_id == job.id).first()
                 if not existing:
-                    app = Application(job_id=job.id, status="applied",
+                    from backend.analyzer.score_keys import resume_for_application
+                    app = Application(job_id=job.id, status="applied", cv_version_used=resume_for_application(job, db),
                                      status_transitions=[{"from": None, "to": "applied", "at": datetime.now(timezone.utc).isoformat(), "source": "telegram"}])
                     db.add(app)
                 db.commit()

@@ -349,10 +349,11 @@ def create_application(
             status_code=409,
             detail={"message": "An application already exists for this job", "application_id": str(app.id)},
         )
+    from backend.analyzer.score_keys import resume_for_application
     app = Application(
         job_id=job.id,
         status=new_status,
-        cv_version_used=data.cv_version_used,
+        cv_version_used=data.cv_version_used or resume_for_application(job, db),
         notes=data.notes,
         # seed the funnel edge so this application shows an initial edge in the Sankey chart
         status_transitions=[{

@@ -714,6 +714,7 @@ export default function Settings() {
         B('Max years asked', 'A posting that asks for this many years of experience or more is dropped.', 'curate_max_years', { mono: true, int: true, w: '135px' }),
         B('Release after (hours)', 'A Top pick you have not applied to, or a person you have not contacted, goes back to the queue after this long and can be picked again. 0 = never.', 'curate_release_hours', { mono: true, int: true, w: '135px' }),
         SW('Drop unlikely sponsors', 'Jobs at companies whose H-1B record says they rarely sponsor are never picked.', 'Off — they are ranked like the rest.', 'curate_drop_unlikely_sponsors', { dflt: true }),
+        SW('Ignore H-1B filings', 'Top picks never use H-1B filings: no drops or score changes from them. Unknown pay leaves the score.', 'Off — filings count toward visa / pay.', 'curate_ignore_h1b', { dflt: false }),
         B('Lead scout · people/day', 'New people the lead scout saves each morning (People screen), found from your persona, not today’s jobs.', 'scout_daily_leads', { mono: true, int: true, w: '135px' }),
         B('Lead scout · min score', 'Lowest score (0-100) a scouted person needs to be saved. Lower finds more people, and more noise.', 'scout_min_score', { mono: true, int: true, w: '135px' }),
         B('GitHub token', 'Optional: lets the persona project sync read private repositories (read-only token).', 'github_token', { secret: true, mono: true, w: '340px' }),

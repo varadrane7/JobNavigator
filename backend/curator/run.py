@@ -45,7 +45,8 @@ def _settings() -> dict:
     from backend.accounts.settings import get_setting
     keys = ("curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore", "curate_title_exclude",
             "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max", "outreach_count",
-            "outreach_network_count", "curate_max_years", "curate_drop_unlikely_sponsors", "curate_release_hours", "curate_countries")
+            "outreach_network_count", "curate_max_years", "curate_drop_unlikely_sponsors", "curate_ignore_h1b",
+            "curate_release_hours", "curate_countries")
     db = SessionLocal()
     try:
         rows = {k: get_setting(db, k) for k in keys}
@@ -64,6 +65,7 @@ def _settings() -> dict:
             return v if v is not None else d
         except ValueError:
             return d
+    ignore_h1b = (rows.get("curate_ignore_h1b") or "false").lower() == "true"
     return {
         "count": i("curate_count", 50),
         "window_hours": i("curate_window_hours", 36),
@@ -77,7 +79,8 @@ def _settings() -> dict:
         "outreach": i("outreach_count", 20),
         "network": i("outreach_network_count", 10),
         "max_years": i("curate_max_years", 5),
-        "drop_unlikely": (rows.get("curate_drop_unlikely_sponsors") or "true").lower() == "true",
+        "drop_unlikely": not ignore_h1b and (rows.get("curate_drop_unlikely_sponsors") or "true").lower() == "true",
+        "ignore_h1b": ignore_h1b,
         "release_hours": i("curate_release_hours", 72),
         "countries": market.countries(rows.get("curate_countries")),
     }
@@ -293,6 +296,7 @@ def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: di
     from backend.analyzer.score_keys import is_resume_key
     year = local_today().year
     relocation = market.is_relocation(cfg.get("countries") or market.DEFAULT_COUNTRIES)
+    ignore_h1b = bool(cfg.get("ignore_h1b"))
     names = _resume_names() if any(is_resume_key(j.get("best_cv")) for j in jobs) else {}
     for j in jobs:
         k = name_key(j["company"])
@@ -309,6 +313,13 @@ def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: di
             comp = market.comp_score(pay, cur, j.get("loc_country"))
             if market.below_blue_card(pay, cur, j.get("loc_country")):
                 comp, pay_note = 0.0, pay_note + " (under the Blue Card floor)"
+        elif ignore_h1b:
+            # No filings anywhere: not a sponsor signal, not an LCA wage guess, not "funded because it files".
+            base, src = scoring.comp_estimate(j["salary_min"], j["salary_max"], None,
+                                              it.get("est_base_min"), it.get("est_base_max"))
+            funded = scoring.well_funded(it.get("funding_stage"), it.get("last_raise_year"), 0, year)
+            sponsor, pay_note = None, ""
+            comp = scoring.comp_score(base, cfg["target_min"], cfg["target_max"]) if base else None
         else:
             base, src = scoring.comp_estimate(j["salary_min"], j["salary_max"], lca_median.get(k),
                                               it.get("est_base_min"), it.get("est_base_max"))
@@ -319,18 +330,19 @@ def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: di
         parts = {
             "fit": scoring.fit_score(j["best_cv_score"], j.get("embed_pct")),
             "fresh": scoring.freshness(hours),
-            "visa_comp": scoring.visa_comp_score(sponsor, comp, funded),
+            # None = unknown pay with filings ignored: left out of the score, neither help nor harm
+            "visa_comp": comp if ignore_h1b and not relocation else scoring.visa_comp_score(sponsor, comp, funded),
             "reply": scoring.reply_score(own_rate, own_n, it.get("reply_reputation"), j["url"]),
             "stability": scoring.stability_score(it.get("funding_stage"), it.get("last_raise_year"),
                                                  it.get("recent_layoffs"), year),
             "tracked": 1.0 if j.get("tracked") else 0.0,
         }
         reply_note = f"you heard back {round(own_rate * 100)}% of {own_n}" if own_n >= 3 else ""
-        j["parts"] = {k2: round(v, 3) for k2, v in parts.items()}
+        j["parts"] = {k2: None if v is None else round(v, 3) for k2, v in parts.items()}
         j["score"] = scoring.composite(parts, cfg["weights"])
         j["hours"] = hours
         j["reason"] = scoring.reason(best_cv=names.get(str(j["best_cv"]), j["best_cv"]), llm_score=j["best_cv_score"], hours=hours,
-                                     lca_count=None if relocation else j["lca"], stage=it.get("funding_stage"),
+                                     lca_count=None if relocation or ignore_h1b else j["lca"], stage=it.get("funding_stage"),
                                      last_raise_year=it.get("last_raise_year"), base=base, base_src=src,
                                      reply_note=" · ".join(x for x in (pay_note, reply_note) if x))
         j["intel"] = {x: it.get(x) for x in ("funding_stage", "last_raise_year", "headcount",

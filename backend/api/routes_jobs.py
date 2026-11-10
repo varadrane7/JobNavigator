@@ -1147,7 +1147,8 @@ async def update_job(job_id: str, updates: dict, background_tasks: BackgroundTas
         from datetime import datetime, timezone
         existing_app = db.query(Application).filter(Application.job_id == job.id).first()
         if not existing_app:
-            app = Application(job_id=job.id, status="applied",
+            from backend.analyzer.score_keys import resume_for_application
+            app = Application(job_id=job.id, status="applied", cv_version_used=resume_for_application(job, db),
                               status_transitions=[{"from": None, "to": "applied", "at": datetime.now(timezone.utc).isoformat(), "source": "ui"}])
             db.add(app)
             db.commit()

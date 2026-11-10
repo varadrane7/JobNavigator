@@ -127,6 +127,14 @@ def display(cv_scores, scoring_report, best_cv, snapshot, names: dict):
     return scores, report, best
 
 
+def resume_for_application(job, db) -> Optional[str]:
+    """Résumé name to record on a new application: the one tailored for this job, else the best match."""
+    from backend.models.db import Resume
+    tailored = (db.query(Resume).filter(Resume.job_id == job.id, Resume.is_base == False)  # noqa: E712
+                .order_by(Resume.updated_at.desc()).first())
+    return tailored.name if tailored else display_best(job, db=db)
+
+
 def display_best(job, names: Optional[dict] = None, db=None) -> Optional[str]:
     """The best résumé's display name for one job (Telegram, application history)."""
     if not getattr(job, "best_cv", None):

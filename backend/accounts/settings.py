@@ -133,7 +133,7 @@ _SECTIONS = [
     ("curator", "Daily curator", POLICY, OWN, ["curator"], [
         "curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore",
         "curate_title_exclude", "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max",
-        "curate_max_years", "curate_drop_unlikely_sponsors", "curate_release_hours", "curate_countries",
+        "curate_max_years", "curate_drop_unlikely_sponsors", "curate_ignore_h1b", "curate_release_hours", "curate_countries",
         "outreach_count", "outreach_network_count",
         "linkedin_mock_daily_cap", "linkedin_main_daily_cap", "linkedin_cooldown_hours",
         "scout_daily_leads", "scout_min_score", "github_token", "nag_apply_target", "nag_request_target", "nag_calendar"]),
@@ -154,7 +154,7 @@ _SECTIONS = [
     # Not a section of the Settings screen. MT-19: the token is connected from a row in Email
     # classification (GET /api/gmail/connect); gmail_token_status = the "expired" marker after
     # an invalid_grant (never served).
-    ("gmail", "Gmail", OWN_ALWAYS, OWN, [], ["gmail_processed_ids", "gmail_refresh_token", "gmail_token_status"]),
+    ("gmail", "Gmail", OWN_ALWAYS, OWN, [], ["gmail_processed_ids", "gmail_check_state", "gmail_refresh_token", "gmail_token_status"]),
     # account_cookie_secret: HMAC key of the jn_account cookie (MT-10); never served.
     # telemetry_install_id / telemetry_last_sent_at: telemetry state, never served.
     ("system", "System", OWNER_ONLY, INHERIT, [], ["llm_seeded_models", "llm_local_seed_cleared", "account_cookie_secret",

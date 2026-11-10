@@ -88,6 +88,7 @@ DEFAULT_SETTINGS = {
     "curate_release_hours": ("72", "A Top pick not applied to, or a person not contacted, after this many hours goes back to the queue (0 = never)"),
     "curate_countries": ('["US"]', "Countries this account's Top picks come from (ISO codes, e.g. DE, NL, IE, AE). Without US the curator reads sponsorship from the posting instead of H-1B data"),
     "curate_drop_unlikely_sponsors": ("true", "Drop jobs at companies whose H-1B record says they are unlikely to sponsor"),
+    "curate_ignore_h1b": ("false", "Top picks ignore H-1B filings: no drops or score changes from them, and unknown pay leaves the score"),
     "telegram_job_alerts": ("true", "Telegram: an alert for every new job scoring at or above the threshold"),
     "telegram_digest": ("true", "Telegram: the daily digest"),
     "telegram_reply_alerts": ("true", "Telegram: an alert when a company replies by email"),
@@ -475,6 +476,7 @@ DEFAULT_SETTINGS = {
 # keys outside DEFAULT_SETTINGS, so these have to be listed explicitly.
 RUNTIME_SETTING_KEYS = {
     "gmail_processed_ids",   # email_monitor/gmail_client.py — processed-message dedup
+    "gmail_check_state",     # email_monitor/gmail_client.py — last good check, emails awaiting the model
     "gmail_refresh_token",   # Gmail OAuth setup (gmail_oauth_setup.py)
     "llm_seeded_models",     # migrate_llm_settings() — one-time "defaults offered" marker
 }

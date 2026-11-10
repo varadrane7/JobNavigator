@@ -23,6 +23,14 @@ logger = logging.getLogger("jobnavigator.gmail")
 
 GMAIL_API_BASE = "https://www.googleapis.com/gmail/v1"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
+DEFAULT_LOOKBACK_DAYS = 3
+MAX_LOOKBACK_DAYS = 60
+MAX_MESSAGES_PER_RUN = 500
+LLM_RETRY_LIMIT = 20    # ~10 hours of 30-minute checks before an email the model can't read is given up on
+
+
+class GmailTokenRefused(RuntimeError):
+    """The account has a Gmail token that no longer works: a failed run, not a quiet one."""
 
 
 def _is_invalid_grant(resp) -> bool:
@@ -95,14 +103,45 @@ def _load_processed_ids(db) -> set:
 
 
 def _save_processed_ids(db, processed_ids: set):
-    """Save processed Gmail message IDs to settings (keep last 500)."""
-    id_list = list(processed_ids)[-500:]
+    """Save processed Gmail message IDs to settings (keep last 5000: a catch-up reads many)."""
+    id_list = list(processed_ids)[-5000:]
     set_setting(db, "gmail_processed_ids", json.dumps(id_list),
                 description="Processed Gmail message IDs for dedup (auto-managed)")
     db.commit()
 
 
-def _build_gmail_query(db) -> str:
+def _load_check_state(db) -> dict:
+    """{"last": ISO time of the last check that reached Gmail, "retries": {message id: count}}."""
+    try:
+        state = json.loads(get_setting(db, "gmail_check_state") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        state = {}
+    return state if isinstance(state, dict) else {}
+
+
+def _lookback_days(state: dict, now: datetime | None = None) -> int:
+    """Far enough back to reach the last check that worked, so an outage loses no mail."""
+    try:
+        last = datetime.fromisoformat(state["last"])
+    except (KeyError, TypeError, ValueError):
+        return DEFAULT_LOOKBACK_DAYS
+    days = ((now or datetime.now(timezone.utc)) - last).days + 2
+    return min(max(DEFAULT_LOOKBACK_DAYS, days), MAX_LOOKBACK_DAYS)
+
+
+def _raise_if_token_refused() -> None:
+    """No access token: quiet when the account never connected Gmail, a failed run when it did."""
+    from backend.email_monitor import gmail_auth
+    db = SessionLocal()
+    try:
+        token, _source = gmail_auth.resolve_token(db)
+    finally:
+        db.close()
+    if token:
+        raise GmailTokenRefused("Gmail token expired or refused: reconnect Gmail in Settings")
+
+
+def _build_gmail_query(db, days: int = DEFAULT_LOOKBACK_DAYS) -> str:
     """Build Gmail search query from settings — sender patterns + subject keywords + exclusions."""
     import json as _json
 
@@ -144,7 +183,7 @@ def _build_gmail_query(db) -> str:
 
     # `in:anywhere` forces Gmail to search all mail incl. Trash/Spam — the list endpoint's
     # includeSpamTrash flag alone isn't enough to surface auto-archived rejection emails.
-    parts = ["in:anywhere", "newer_than:3d"]
+    parts = ["in:anywhere", f"newer_than:{days}d"]
     if from_block and subject_block:
         parts.append(f"(({from_block}) OR ({subject_block}))")
     elif from_block:
@@ -225,31 +264,41 @@ def _apply_llm_result_to_app(db, matched_app, llm_result: dict, body: str, subje
     )
 
 
-async def check_emails():
-    """Poll Gmail for recruiter responses and update application statuses."""
+async def check_emails(lookback_days: int | None = None, max_llm_calls: int = 5):
+    """Poll Gmail for recruiter responses and update application statuses.
+
+    Reads back to the last check that worked; `lookback_days` overrides that for a catch-up."""
     access_token = await _get_access_token()
     if not access_token:
+        _raise_if_token_refused()
         return
 
     db = SessionLocal()
     try:
         processed_ids = _load_processed_ids(db)
-        query = _build_gmail_query(db)
+        state = _load_check_state(db)
+        retries = state.get("retries") if isinstance(state.get("retries"), dict) else {}
+        query = _build_gmail_query(db, lookback_days or _lookback_days(state))
 
         headers = {"Authorization": f"Bearer {access_token}"}
 
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                f"{GMAIL_API_BASE}/users/me/messages",
-                params={"q": query, "maxResults": 20, "includeSpamTrash": True},
-                headers=headers,
-            )
+            messages, page_token = [], None
+            while len(messages) < MAX_MESSAGES_PER_RUN:
+                params = {"q": query, "maxResults": 100, "includeSpamTrash": True}
+                if page_token:
+                    params["pageToken"] = page_token
+                resp = await client.get(f"{GMAIL_API_BASE}/users/me/messages", params=params, headers=headers)
 
-            if resp.status_code != 200:
-                logger.error(f"Gmail list messages failed: {resp.text}")
-                return
+                if resp.status_code != 200:
+                    logger.error(f"Gmail list messages failed: {resp.text}")
+                    raise RuntimeError(f"Gmail list messages failed: HTTP {resp.status_code}")
 
-            messages = resp.json().get("messages", [])
+                page = resp.json()
+                messages.extend(page.get("messages", []))
+                page_token = page.get("nextPageToken")
+                if not page_token:
+                    break
             logger.info(f"Gmail: found {len(messages)} messages from known domains")
 
             llm_calls_this_run = 0
@@ -299,8 +348,8 @@ async def check_emails():
 
                 # Low confidence or ambiguous — try LLM pass 2 (max 5 per run)
                 from backend.email_monitor.response_parser import classify_email_llm
-                if llm_calls_this_run >= 5:
-                    logger.info("LLM call limit reached (5), deferring remaining ambiguous emails to next run")
+                if llm_calls_this_run >= max_llm_calls:
+                    logger.info(f"LLM call limit reached ({max_llm_calls}), deferring remaining ambiguous emails to next run")
                     continue
                 active_apps = _get_active_apps_for_llm(db)
                 llm_result = await classify_email_llm(from_header, subject, body, active_apps)
@@ -353,9 +402,23 @@ async def check_emails():
                             db=db,
                         )
 
+                elif get_setting(db, "email_llm_enabled") == "true":
+                    # The model gave no answer (not loaded, rate limited, bad reply): the email
+                    # is still unread as far as the tracker goes, so try it again next run.
+                    retries[msg_id] = int(retries.get(msg_id) or 0) + 1
+                    if retries[msg_id] < LLM_RETRY_LIMIT:
+                        continue
+                    from backend.activity import log_activity
+                    log_activity("email", f"Gave up classifying an email after {LLM_RETRY_LIMIT} tries", db=db)
+
+                retries.pop(msg_id, None)
                 processed_ids.add(msg_id)
 
         _save_processed_ids(db, processed_ids)
+        set_setting(db, "gmail_check_state",
+                    json.dumps({"last": datetime.now(timezone.utc).isoformat(), "retries": retries}),
+                    description="Last Gmail check that worked and emails awaiting the model (auto-managed)")
+        db.commit()
 
         from backend.activity import log_activity
         log_activity("email", f"Email check: {len(messages)} messages found from known domains", db=db)

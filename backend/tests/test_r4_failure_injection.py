@@ -354,18 +354,19 @@ def _fake_httpx(monkeypatch, module, *, status=200, payload=None, raises=None):
 
 
 @pytest.mark.asyncio
-async def test_gmail_token_expiry_returns_no_token_and_does_not_raise(test_db, monkeypatch):
+async def test_gmail_token_expiry_returns_no_token_and_fails_the_check(test_db, monkeypatch):
     import backend.email_monitor.gmail_client as gc
     monkeypatch.setattr(gc, "GMAIL_REFRESH_TOKEN", "expired-token")
     _fake_httpx(monkeypatch, gc, status=400,
                 payload={"error": "invalid_grant", "error_description": "Token expired"})
     assert await gc._get_access_token() == ""
-    assert await gc.check_emails() is None
+    with pytest.raises(gc.GmailTokenRefused):
+        await gc.check_emails()
 
 
 @pytest.mark.asyncio
-async def test_gmail_token_expiry_leaves_the_scheduler_run_completed(test_db, monkeypatch):
-    """An expired token is an operator problem, not a crashed job."""
+async def test_gmail_token_expiry_marks_the_scheduler_run_failed(test_db, monkeypatch):
+    """A refused token must show: a "completed" run hid a 19-day outage."""
     import backend.email_monitor.gmail_client as gc
     from backend.scheduler import run_email_check
     from backend.models.db import JobRun
@@ -373,10 +374,11 @@ async def test_gmail_token_expiry_leaves_the_scheduler_run_completed(test_db, mo
     monkeypatch.setattr(gc, "GMAIL_REFRESH_TOKEN", "expired-token")
     _fake_httpx(monkeypatch, gc, status=400, payload={"error": "invalid_grant"})
 
-    await run_email_check()
+    with pytest.raises(gc.GmailTokenRefused):
+        await run_email_check()      # APScheduler catches and logs this
     test_db.expire_all()
     row = test_db.query(JobRun).filter(JobRun.job_type == "email_check").first()
-    assert row.status == "completed" and row.result_summary == "No new replies"
+    assert row.status == "failed" and "reconnect Gmail" in (row.error or "")
 
 
 @pytest.mark.asyncio
@@ -399,8 +401,8 @@ async def test_gmail_network_failure_marks_the_run_failed_without_killing_the_sc
 
 
 @pytest.mark.asyncio
-async def test_gmail_list_error_response_is_swallowed(test_db, monkeypatch):
-    """A 403 on the messages list must not raise — the next tick retries."""
+async def test_gmail_list_error_response_fails_the_check(test_db, monkeypatch):
+    """A 403 on the messages list is a failed run; the next check still reads back to the last good one."""
     import backend.email_monitor.gmail_client as gc
     monkeypatch.setattr(gc, "GMAIL_REFRESH_TOKEN", "tok")
 
@@ -416,7 +418,8 @@ async def test_gmail_list_error_response_is_swallowed(test_db, monkeypatch):
     c.__aexit__ = AsyncMock(return_value=False)
     monkeypatch.setattr(gc.httpx, "AsyncClient", lambda **kw: c)
 
-    assert await gc.check_emails() is None
+    with pytest.raises(RuntimeError, match="HTTP 403"):
+        await gc.check_emails()
 
 
 # ══ Telegram ═════════════════════════════════════════════════════════════════

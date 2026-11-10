@@ -384,7 +384,8 @@ async def test_invalid_grant_marks_only_that_account_expired(test_db, accounts, 
     google["refresh"] = {"tok-b": "at-b"}
     google["mail"] = {"at-b": ["b1"]}
 
-    await run_email_check()
+    with pytest.raises(gc.GmailTokenRefused):               # a refused token is a failed run, after every account ran
+        await run_email_check()
 
     assert _row(test_db, ga.STATUS_KEY).value == f"expired:{ga.fingerprint('revoked-a')}"
     assert _row(test_db, ga.STATUS_KEY, b) is None
@@ -396,7 +397,8 @@ async def test_invalid_grant_marks_only_that_account_expired(test_db, accounts, 
 
     # next tick: the expired owner is not sent to Google again, the member still is
     google["posts"].clear()
-    await run_email_check()
+    with pytest.raises(gc.GmailTokenRefused):
+        await run_email_check()
     assert [d["refresh_token"] for _u, d in google["posts"]] == ["tok-b"]
 
 
@@ -406,7 +408,8 @@ async def test_expired_member_is_not_polled(test_db, accounts, google):
     _a, b = accounts
     _put(test_db, "gmail_refresh_token", "tok-b", b)
     google["refresh"] = {}                                  # Google refuses tok-b
-    await run_email_check()
+    with pytest.raises(gc.GmailTokenRefused):
+        await run_email_check()
     assert _row(test_db, ga.STATUS_KEY, b).value == f"expired:{ga.fingerprint('tok-b')}"
     google["posts"].clear()
     await run_email_check()

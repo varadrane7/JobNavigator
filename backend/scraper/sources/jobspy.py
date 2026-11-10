@@ -168,6 +168,32 @@ def _zip_rows(df) -> int:
     return int((df["site"].astype(str).str.lower() == "zip_recruiter").sum())
 
 
+def _unwrap_page_bigints(value):
+    """ZipRecruiter's page data writes large numbers as "$n1794183969"; give JobSpy the number."""
+    if isinstance(value, dict):
+        return {k: _unwrap_page_bigints(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_unwrap_page_bigints(v) for v in value]
+    if isinstance(value, str) and re.fullmatch(r"\$n-?\d+", value):
+        return int(value[2:])
+    return value
+
+
+def _patch_zip_bigints() -> None:
+    """JobSpy 1.4.1 rejects every ZipRecruiter card with a "$n" timestamp (found=0, no error)."""
+    import jobspy.ziprecruiter as zip_board
+    if getattr(zip_board, "_jn_bigints_patched", False):
+        return
+
+    class _Job(zip_board.Job):
+        @classmethod
+        def model_validate(cls, obj, **kw):
+            return super().model_validate(_unwrap_page_bigints(obj), **kw)
+
+    zip_board.Job = _Job
+    zip_board._jn_bigints_patched = True
+
+
 def scrape_boards(kwargs: dict, pause: float = ZIP_RETRY_PAUSE):
     """scrape_jobs(**kwargs), with ZipRecruiter asked on its own:
 
@@ -185,6 +211,7 @@ def scrape_boards(kwargs: dict, pause: float = ZIP_RETRY_PAUSE):
     sites = list(kwargs.get("site_name") or [])
     if "zip_recruiter" not in sites:
         return scrape_jobs(**kwargs)
+    _patch_zip_bigints()
     others = [s for s in sites if s != "zip_recruiter"]
 
     def zip_call(term):

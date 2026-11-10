@@ -68,7 +68,7 @@ function JobCard({ j, onStatus, onCoverLetter, onTailor }) {
         <div style={{ paddingLeft: 38, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '6px 18px' }}>
           {PARTS.map(([k, name]) => (
             <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <Label size="xs">{name} · {Math.round(((j.parts || {})[k] || 0) * 100)}</Label>
+              <Label size="xs">{name} · {(j.parts || {})[k] == null ? 'unknown' : Math.round((j.parts || {})[k] * 100)}</Label>
               <Meter value={(j.parts || {})[k] || 0} />
             </div>
           ))}

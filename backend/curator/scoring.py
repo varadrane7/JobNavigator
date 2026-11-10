@@ -204,7 +204,8 @@ def fit_score(llm_score: float | None, embed_pct: float | None) -> float:
 
 
 def composite(parts: dict, weights: dict | None = None) -> float:
-    w = {**DEFAULT_WEIGHTS, **(weights or {})}
+    """Weighted mean of the parts. A part set to None is unknown and leaves the mean entirely."""
+    w = {k: v for k, v in {**DEFAULT_WEIGHTS, **(weights or {})}.items() if parts.get(k, 0.0) is not None}
     total = sum(w.values()) or 1.0
     return round(sum(w[k] * parts.get(k, 0.0) for k in w) / total, 4)
 
