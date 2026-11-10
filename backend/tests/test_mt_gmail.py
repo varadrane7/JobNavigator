@@ -138,6 +138,13 @@ def test_connect_redirect_uri_follows_the_proxy_headers(client, test_db, account
     assert q["redirect_uri"] == "https://jobs.example.org/api/gmail/callback"
 
 
+def test_connect_public_url_overrides_the_proxy_headers(client, test_db, accounts, monkeypatch):
+    # A TLS-terminating tunnel in front of Caddy leaves X-Forwarded-Proto at http.
+    monkeypatch.setenv("GMAIL_PUBLIC_URL", "https://jobs.example.org/")
+    _url, q = _connect(client, headers={"X-Forwarded-Proto": "http", "X-Forwarded-Host": "jobs.example.org"})
+    assert q["redirect_uri"] == "https://jobs.example.org/api/gmail/callback"
+
+
 def test_connect_state_is_bound_to_the_member(client, test_db, accounts):
     _a, b = accounts
     _url, q = _connect(client, account=b)

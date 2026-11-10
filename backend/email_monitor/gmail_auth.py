@@ -23,6 +23,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import time
 import urllib.parse
@@ -254,8 +255,15 @@ def consent_url(client_id: str, redirect_uri: str, state: str) -> str:
 
 def base_url(request) -> str:
     """The browser-facing origin: forwarded proto/host when a proxy sets them, else the
-    request's own (Caddy passes the original Host, so localhost works as is)."""
-    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip() or request.url.scheme
+    request's own (Caddy passes the original Host, so localhost works as is).
+
+    GMAIL_PUBLIC_URL overrides both: behind a TLS-terminating tunnel or proxy, Caddy sees
+    plain http and rewrites X-Forwarded-Proto, so the headers would give an http:// URI
+    that Google refuses."""
+    public = (os.getenv("GMAIL_PUBLIC_URL") or "").strip().rstrip("/")
+    if public:
+        return public
+    proto =(request.headers.get("x-forwarded-proto") or "").split(",")[0].strip() or request.url.scheme
     host = ((request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
             or request.headers.get("host") or request.url.netloc)
     return f"{proto}://{host}"
