@@ -8,6 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 # A developer .env must not change what the tests see: no install password unless a test sets one.
 os.environ["INITIAL_API_KEY"] = ""
+# Nor single sign-on or a public address: a test that needs one sets its own.
+for _name in [n for n in os.environ if n.startswith("OIDC_")] + ["GMAIL_PUBLIC_URL"]:
+    os.environ.pop(_name, None)
 # MT-2: a query on an account-owned model without an account context raises in tests
 # instead of falling back to the owner. MT_STRICT=0 turns that off for a local run.
 os.environ.setdefault("MT_STRICT", "1")

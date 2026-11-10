@@ -163,8 +163,9 @@ async def test_injected_script_does_not_run_and_internal_requests_are_blocked(mo
     pw, browser = await _chromium_or_skip()
     try:
         # Control: the same payload in an ordinary page does run, so the check below means something.
+        # Not waiting for load: nothing blocks this page's <img>, and on some networks those addresses hang.
         page = await browser.new_page()
-        await page.set_content(PAYLOAD)
+        await page.set_content(PAYLOAD, wait_until="domcontentloaded")
         assert "PWNED" in await page.inner_text("body")
         await page.close()
 
