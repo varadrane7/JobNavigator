@@ -21,7 +21,8 @@ SLOW_ATS = ("myworkdayjobs.com", "taleo.net", "icims.com", "successfactors", "or
 # Postings a STEM-OPT candidate who will need H-1B cannot take, whatever the
 # company's sponsorship record says.
 _BLOCKERS = re.compile(
-    r"\b(u\.?s\.? citizen(s|ship)?|united states citizen(s|ship)?|citizens only|must be a citizen|"
+    # YC's "US citizen/visa only" means already authorized to work, which a visa holder is
+    r"\b(u\.?s\.? citizen(s|ship)?(?!\s*/\s*visa)|united states citizen(s|ship)?|citizens only|must be a citizen|"
     r"(active|current|secret|top secret|ts/sci|dod|public trust) (security )?clearance|clearance required|"
     r"able to obtain (a |an )?(security )?clearance|green card holders?( only)?|permanent residents? only|"
     r"(not|unable to|cannot|can't|won't|will not|do not|does not) (provide |offer )?(visa )?sponsor(ship)?|"

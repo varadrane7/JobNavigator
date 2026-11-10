@@ -64,6 +64,9 @@ def detect_scrape_type(url: str) -> str:
         return "Meta Careers (Playwright)"
     if _is_google_careers(url):
         return "Google Careers (Playwright)"
+    from backend.scraper.ats.staffing_boards import is_staffing_board as _is_staffing_board
+    if _is_staffing_board(url):
+        return "Staffing JSON (Playwright)"
     return "Generic (Playwright)"
 
 
@@ -662,6 +665,14 @@ async def test_scrape_company(company_id: str, db: Session = Depends(get_db)):
                     all_jobs.extend(jobs)
                     all_rejected.extend(rejected)
                     urls_scraped.append(f"{target_url[:80]}... ({len(jobs)} found via Google Careers)")
+                    continue
+
+                from backend.scraper.ats import staffing_boards
+                if staffing_boards.is_staffing_board(target_url):
+                    jobs, rejected = await staffing_boards.scrape(target_url, browser=browser, debug=True)
+                    all_jobs.extend(jobs)
+                    all_rejected.extend(rejected)
+                    urls_scraped.append(f"{target_url[:80]}... ({len(jobs)} found via Staffing JSON)")
                     continue
 
                 page = await _new_page(browser)

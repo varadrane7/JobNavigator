@@ -9,6 +9,7 @@ Releases are named major.minor ("3.0"); tags before 3.0 carry a `.0` patch (`v2.
 ## [Unreleased]
 
 ### Added
+- **Insight Global, Kforce, Yoh and United Software boards:** company scraping now reads these staffing boards from the job data their pages load; the generic scraper found no postings on them.
 - **Ignore H-1B filings (Settings › Curator):** Top picks can leave H-1B filings out entirely: no drops or score changes from them, and a job with unknown pay is scored on what is known instead of being marked down. The job feed keeps its H-1B badges and filters.
 - **`GMAIL_PUBLIC_URL`:** sets the address Gmail's redirect URI is built from, for installs where HTTPS ends at a tunnel or proxy in front of Caddy and Google would otherwise be sent an `http://` URI.
 - **Single sign-on (OIDC):** sign in with Authentik, Keycloak or any OpenID Connect provider. Give the discovery URL (`OIDC_DISCOVERY_URL`, or Settings › Advanced), a client id and secret, and add `<dashboard>/api/auth/oidc/callback` as the redirect URI. The login screen then offers **Sign in with …**. The email in `OIDC_OWNER_EMAIL` signs in as the existing owner; everyone else becomes a member on first login (still five accounts at most) with their own models, LinkedIn, Jobright and Apify credentials. A single-sign-on browser stays in its own account (no switching, no PIN picker, no minting tokens for others), and the install password remains as a break-glass login (**Use the install password**). With SSO on, a member's `X-Account-Token` is enough for the extension and scripts, so members never need the install password.
@@ -21,6 +22,7 @@ Releases are named major.minor ("3.0"); tags before 3.0 carry a `.0` patch (`v2.
 - **Default résumé template:** Settings › Résumé & tailoring › **Default résumé template** picks the template a new résumé starts with (blank, imported, or tailored from Persona): **Last selected** (the default: the template you last picked in the résumé editor, remembered per account) or a template from the list. A copy tailored from a résumé keeps that résumé's template. Before any pick, the first template on the list, as before.
 
 ### Fixed
+- **YC jobs were dropped as citizens-only:** YC's "Visa: US citizen/visa only" means already authorized to work, but the curator read it as a citizenship rule and dropped most YC postings.
 - **A Gmail outage looked like a quiet inbox:** when Google refused the token, the email check returned "No new replies" every 30 minutes. It now fails visibly, and after any outage the next check reads back to the last one that worked (it only ever looked back 3 days, 20 messages deep).
 - **Emails were lost when the model gave no answer:** an email the local model could not read (none loaded, rate limited) was marked as read and never tried again. It is now retried.
 - **ZipRecruiter returned nothing:** JobSpy 1.4.1 rejected every card since the site began writing timestamps as `$n1794183969`, and the search reported 0 jobs with no error.

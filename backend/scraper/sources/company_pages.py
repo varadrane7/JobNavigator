@@ -15,7 +15,7 @@ from backend.scraper._shared.dedup import make_external_id, make_content_hash, m
 from backend.scraper._shared.posting_links import counts_as_new
 from backend.scraper.ats import (
     workday, greenhouse, lever, ashby, oracle_hcm,
-    phenom, talentbrew, rippling, smartrecruiters, meta, google, amazon, uber, generic,
+    phenom, talentbrew, rippling, smartrecruiters, meta, google, amazon, uber, generic, staffing_boards,
 )
 from backend.scraper.ats._descriptions import _fetch_descriptions_parallel
 
@@ -52,6 +52,8 @@ async def _dispatch_ats(url: str, debug: bool = False, shared_browser=None, max_
         return await meta.scrape(url, browser=shared_browser, max_pages=max_pages, debug=debug)
     if google.is_google(url):
         return await google.scrape(url, browser=shared_browser, max_pages=max_pages, debug=debug)
+    if staffing_boards.is_staffing_board(url):
+        return await staffing_boards.scrape(url, browser=shared_browser, debug=debug)
     # The fallback honours the same per-company page cap as every other handler; None keeps generic's own default.
     return await generic.scrape(url, browser=shared_browser, debug=debug, **({'max_pages': max_pages} if max_pages else {}))
 
@@ -184,7 +186,8 @@ async def _fetch_postings(company, target_urls: list, browser) -> tuple[list, li
                     or greenhouse.is_greenhouse(target_url) or rippling.is_rippling(target_url)
                     or smartrecruiters.is_smartrecruiters(target_url)
                     or amazon.is_amazon(target_url) or uber.is_uber(target_url)
-                    or meta.is_meta(target_url) or google.is_google(target_url)):
+                    or meta.is_meta(target_url) or google.is_google(target_url)
+                    or staffing_boards.is_staffing_board(target_url)):
                 page_jobs = await _dispatch_ats(target_url, debug=False, shared_browser=browser, max_pages=max_pages)
             else:
                 page = await _new_page(browser)
@@ -346,7 +349,7 @@ async def scrape_single_career_page(company: Company, shared_browser=None,
             for j in jobs_needing_desc:
                 ext_id = j["_ext_id"]
                 content_hash = j["_content_hash"]
-                desc = desc_map.get(j["url"])
+                desc = desc_map.get(j["url"]) or j.get("description")
 
                 job = Job(
                     external_id=ext_id,
