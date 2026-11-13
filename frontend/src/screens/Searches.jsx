@@ -9,7 +9,7 @@ import { useSettled, useWarm, NBSP, DASH } from '../hooks'
 import { Button, Card, Check, CopyGlyph, Dot, FlaskGlyph, FooterRow, HeaderRow, Heading, Helper, IconButton, Input, Label, Link, Menu, MenuItem, ModalPanel, PageTitle, Pill, Rule, Segmented, Select, Spinner, TableHead, Tag } from '../ui'
 import { BLOCKED_BADGE, MODE_BLOCKS, MODE_TERMS, SOURCE_BLOCKS } from '../sourceBlocks'
 import { useApifyBoards, boardLabel, testCost, usd } from '../apifyBoards'
-import { MODE_OPTIONS, defaultSources, isExtensionMode, isTestable, modeBadge, needsQuery } from '../searchModes'
+import { MODE_OPTIONS, defaultSources, isExtensionMode, isTestable, modeBadge, needsQuery, needsTerm } from '../searchModes'
 import '../theme.css'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -55,9 +55,12 @@ const isExt = isExtensionMode
 // Keyword sources have no account-based "recommended" feed, so a term or a pre-filtered URL is
 // what there is to search for. Run/Test are blocked until one is set, rather than launching a
 // run that quietly finds nothing.
-const configError = (s) => (needsQuery(s.search_mode)
-  && !(`${s.search_term || ''}`.trim() || `${s.direct_url || ''}`.trim())
-  ? 'Add a search term or a URL before running' : null)
+const configError = (s) => {
+  const term = `${s.search_term || ''}`.trim()
+  if (needsTerm(s.search_mode) && !term) return 'Add a search term before running'
+  if (needsQuery(s.search_mode) && !(term || `${s.direct_url || ''}`.trim())) return 'Add a search term or a URL before running'
+  return null
+}
 
 // A Test run is invisible to the run monitor: `POST /searches/{id}/test` runs the
 // keyword modes inline and the slow ones through a bare asyncio task into a
@@ -88,6 +91,9 @@ const DEPTHS = [
 ]
 const SOURCES = [['linkedin', 'LinkedIn'], ['indeed', 'Indeed'], ['zip_recruiter', 'ZipRecruiter'], ['google', 'Google Jobs'], ['bayt', 'Bayt (Gulf)'], ['direct', 'Direct (Playwright)']]
 const COLLECTIONS = [['recommended', 'Recommended'], ['top-applicant', 'Top Applicant']]
+// backend/scraper/search_modes.py CREATIVE_BOARDS, same order
+const CREATIVE_BOARDS = [['behance', 'Behance'], ['hollylist', 'Hollylist'], ['wanacreate', 'Wana Create'], ['dribbble', 'Dribbble'], ['artstation', 'ArtStation'], ['workwithindies', 'Work With Indies']]
+const creativeLabel = (k) => (CREATIVE_BOARDS.find(([id]) => id === k) || [k, k])[1]
 
 // note banners reuse the mode-badge palettes (sm-levels green / sm-jobright teal)
 const noteFor = (mode) => {
@@ -101,6 +107,9 @@ const noteFor = (mode) => {
   if (mode === 'berlinstartupjobs') return ['Reads Berlin Startup Jobs’ engineering feed: Berlin startups that mostly hire in English. Narrow it with a term and the title filters below.', 'sm-trulyremote']
   if (mode === 'ycombinator') return ['Reads ycombinator.com/jobs, no account. A YC page lists only its ~40 most active jobs, so a run reads the role page, its sub-roles and its city pages (or the cities in Location) and keeps the union. Each new job’s description is read from its own page, with YC’s visa, experience and batch lines on top; Test reads at most 5 of those pages.', 'sm-levels']
   if (mode === 'wellfound') return ['Reads Wellfound’s public role pages, no account: 20 startups a page, each job with its full description and pay range. The search term is the role (e.g. software engineer, backend engineer); Location “remote” reads the remote page. Wellfound ranks by startup, not date, so jobs live longer than Max age (at least 30 days) are left out.', 'sm-jobright']
+  if (mode === 'creative') return ['Reads the job APIs and feeds of Behance, Hollylist, Wana Create, Dribbble, ArtStation and Work With Indies directly: no login and no Apify key. Remote applies on every board: where a board cannot filter it, the jobs that the posting calls on-site or hybrid are dropped. Location (a city name) applies on Hollylist, Wana Create, Dribbble, ArtStation and Work With Indies (remote jobs stay); Behance ignores it. On Remote searches, Country drops the Behance jobs that are not open to that country. Hollylist members-only offers are skipped, and a salary is stored as a number only in US dollars per year. Test reads at most 20 job pages.', 'sm-creative']
+  if (mode === 'himalayas') return ['Reads the public API of himalayas.app: no login and no key. Every job is remote, so there is no Remote or Location. Country keeps the jobs open to that country, worldwide jobs included. A salary is stored as a number only in US dollars per year.', 'sm-himalayas']
+  if (mode === 'eluta') return ['Reads Canadian jobs from employer career sites through the RSS search of eluta.ca: no login and no key. Location is a city with a 50 km radius; empty means all of Canada. Eluta has no remote filter. It allows 10 RSS checks a day from one address, so give each search a run interval of 1440 minutes. One run reads one feed page and at most 6 job pages; the other new jobs wait for the next run.', 'sm-eluta']
   if (mode === 'extension') return ['Jobs come from the “Save to Job Feed” button on any website. The filters and auto-score depth below apply to each job as it is saved.', 'sm-levels']
   if (mode === 'linkedin_extension') return ['Jobs are captured while you browse linkedin.com/jobs/collections pages. The filters below are applied on import.', 'sm-levels']
   if (mode === 'hiring_cafe') return ['Jobs are captured while you browse hiring.cafe searches in Chrome with The Navigator extension (Hiring Cafe capture on in its popup): each results page the site loads is sent here, with the description, pay and workplace. hiring.cafe blocks automated visitors, so there is no scheduled run; the filters and auto-score depth below apply on import.', 'sm-levels']
@@ -168,6 +177,14 @@ const summaryOf = (s, boards = []) => {
     return (bits.join(' · ') || (m === 'ycombinator' ? 'YC software engineering jobs' : 'Wellfound software engineer')) + last
   }
   if (m === 'trulyremote') return `Worldwide remote · max ${s.results_wanted || 100} new${last}`
+  if (m === 'creative') {
+    const bits = [`“${s.search_term || ''}”`]
+    if (s.location) bits.push(s.location)
+    bits.push((s.sources || []).map(creativeLabel).join(', ') || 'no board')
+    return bits.join(' · ') + last
+  }
+  if (m === 'himalayas') return `“${s.search_term || ''}” · Remote${s.country ? ` · ${s.country}` : ''}${last}`
+  if (m === 'eluta') return `“${s.search_term || ''}” · ${s.location || 'Canada'}${last}`
   return `${short(s.direct_url) || 'no URL'}${last}`
 }
 
@@ -237,6 +254,11 @@ const toPayload = (d) => {
     p.country = d.country || DEFAULT_COUNTRY
   } else if (d.search_mode === 'ycombinator' || d.search_mode === 'wellfound') {
     p.location = d.location || ''
+  }
+  // Creative boards and Eluta take a city name; Himalayas and Behance read Country.
+  if (d.search_mode === 'creative' || d.search_mode === 'himalayas' || d.search_mode === 'eluta') {
+    p.location = d.location || ''
+    p.country = d.country || DEFAULT_COUNTRY
   }
   return p
 }
@@ -391,6 +413,33 @@ function ConfigForm({ d, set }) {
         placeholder="https://wellfound.com/role/r/backend-engineer"
         sub="Comma-separated. When set, only these page sets are read." />,
     )
+  } else if (m === 'creative') {
+    fields.push(
+      <Cell key="term" label="Search term · required" mono value={d.search_term} onChange={(v) => set({ search_term: v })} placeholder="e.g. illustrator" />,
+      <Cell key="loc" label="Location" value={d.location} onChange={(v) => set({ location: v })} placeholder="e.g. Vancouver"
+        sub="One city name. Behance ignores it." />,
+      <Cell key="ctry" label="Country" value={d.country} options={countries} onChange={(v) => set({ country: v })}
+        sub="Behance on Remote searches: jobs open to this country, worldwide jobs included." />,
+      <Cell key="rem" label="Remote" value={d.is_remote} options={[['', 'Any'], ['true', 'Remote only']]} onChange={(v) => set({ is_remote: v })} />,
+      <Cell key="ho" label="Hours old · 0–720" mono type="number" min={BOUNDS.hours_old[0]} max={BOUNDS.hours_old[1]} value={d.hours_old} onChange={(v) => set({ hours_old: v })}
+        sub="0 = no age limit. Behance freelance briefs carry no date." />,
+      <Cell key="rw" label="Results wanted · 1–500 per board" mono type="number" min={BOUNDS.results_wanted[0]} max={BOUNDS.results_wanted[1]} value={d.results_wanted} onChange={(v) => set({ results_wanted: v })} />,
+    )
+  } else if (m === 'himalayas') {
+    fields.push(
+      <Cell key="term" label="Search term · required" mono value={d.search_term} onChange={(v) => set({ search_term: v })} placeholder="e.g. designer" />,
+      <Cell key="ctry" label="Country" value={d.country} options={countries} onChange={(v) => set({ country: v })}
+        sub="Jobs open to this country, worldwide jobs included." />,
+      <Cell key="ho" label="Hours old · 0–720" mono type="number" min={BOUNDS.hours_old[0]} max={BOUNDS.hours_old[1]} value={d.hours_old} onChange={(v) => set({ hours_old: v })} sub="0 = no age limit" />,
+      <Cell key="rw" label="Results wanted · 1–500" mono type="number" min={BOUNDS.results_wanted[0]} max={BOUNDS.results_wanted[1]} value={d.results_wanted} onChange={(v) => set({ results_wanted: v })} />,
+    )
+  } else if (m === 'eluta') {
+    fields.push(
+      <Cell key="term" label="Search term · required" mono value={d.search_term} onChange={(v) => set({ search_term: v })} placeholder="e.g. designer" />,
+      <Cell key="loc" label="Location" value={d.location} onChange={(v) => set({ location: v })} placeholder="e.g. Vancouver"
+        sub="A city, 50 km around it. Empty = all of Canada." />,
+      <Cell key="ho" label="Hours old · 0–720" mono type="number" min={BOUNDS.hours_old[0]} max={BOUNDS.hours_old[1]} value={d.hours_old} onChange={(v) => set({ hours_old: v })} sub="0 = no age limit" />,
+    )
   } else if (m === 'trulyremote') {
     // The whole board is read on every run; this caps the new jobs whose pages one run opens.
     fields.push(
@@ -428,6 +477,13 @@ function ConfigForm({ d, set }) {
           {apifyBoards.map((b) => <Chip key={b.value} on={d.sources.includes(b.value)} label={b.label} onClick={() => toggleSrc(b.value)} />)}
           <Helper>Each board is a separate Apify run</Helper>
           {apifyBoards.filter((b) => d.sources.includes(b.value)).map((b) => <Helper key={b.value} size="xs" style={{ flexBasis: '100%' }}>{b.label}: {b.hint}</Helper>)}
+        </div>
+      )}
+      {m === 'creative' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+          <Label style={{ marginRight: 3 }}>Boards</Label>
+          {CREATIVE_BOARDS.map(([id, label]) => <Chip key={id} on={d.sources.includes(id)} label={label} onClick={() => toggleSrc(id)} />)}
+          <Helper>Free; Apify has paid Behance and Hollylist boards as a fallback</Helper>
         </div>
       )}
       {m === 'linkedin_personal' && (
@@ -1015,6 +1071,8 @@ function TestModal({ test, tab, setTab, onClose }) {
   } else if (cfg.mode === 'trulyremote') {
     params.push('worldwide remote')
     if (cfg.results_wanted) params.push(`${cfg.results_wanted} new per run`)
+  } else if (cfg.mode === 'creative') {
+    params.push(`Boards: ${(cfg.sources || []).map(creativeLabel).join(', ')}`, `${cfg.results_wanted} per board max`)
   } else {
     if (cfg.location) params.push(cfg.location)
     if (cfg.is_remote === true) params.push('remote only')

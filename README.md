@@ -43,6 +43,11 @@ Follow steps here manually or ask AI to: [Upgrading from 2.x](CHANGELOG.md#upgra
 │   Amazon, Uber, Meta,   │  freehire.me            │  any page               │
 │   Google                │  CaribbeanJobs.com      │                         │
 │                         │  TrulyRemoteWork.com    │                         │
+│                         │  Creative boards:       │                         │
+│                         │  Behance, Dribbble,     │                         │
+│                         │  ArtStation, Hollylist, │                         │
+│                         │  Wana Create, WWI       │                         │
+│                         │  Himalayas, Eluta       │                         │
 │                         │                         │                         │
 └─────────────────────────┴───────────┬─────────────┴─────────────────────────┘
                                       │
@@ -107,7 +112,7 @@ Follow steps here manually or ask AI to: [Upgrading from 2.x](CHANGELOG.md#upgra
 | Feature | Description |
 |---------|-------------|
 | **Daily curator** | Every morning ranks the day's new jobs (résumé fit, freshness, H-1B / pay, reply odds, company stability), saves the top 50 in apply order, ignores the rest, and finds founders / hiring managers / recruiters to contact. Self-hosted SearXNG search, also exposed to LM Studio over MCP. See [docs/CURATOR.md](docs/CURATOR.md) |
-| **Discovery** | Career pages (Playwright + 13 ATS handlers), JobSpy (LinkedIn, Indeed, ZipRecruiter, Google), Apify (Indeed, LinkedIn, Glassdoor, Greenhouse/Lever/Ashby/Workday search; not on the Apify Creator plan), LinkedIn collections, Levels.fyi, Jobright.ai, freehire.me, CaribbeanJobs.com, TrulyRemoteWork.com, the Chrome extension |
+| **Discovery** | Career pages (Playwright + 13 ATS handlers), JobSpy (LinkedIn, Indeed, ZipRecruiter, Google), Apify (Indeed, LinkedIn, Glassdoor, Greenhouse/Lever/Ashby/Workday search; not on the Apify Creator plan), LinkedIn collections, Levels.fyi, Jobright.ai, freehire.me, CaribbeanJobs.com, TrulyRemoteWork.com, creative boards (Behance, Dribbble, ArtStation, Wana Create, Hollylist, Work With Indies), Himalayas, Eluta, the Chrome extension |
 | **Scoring** | Claude, OpenAI, OpenRouter, Ollama, LM Studio, Claude Code, Codex CLI, Antigravity CLI or OpenCode Go; live model search, a model per feature; Light (score) or Full (report, keyword coverage, requirement mapping) against every base résumé; prompt caching on Anthropic |
 | **Résumés** | Structured base résumés, tailoring per job with a review step, 8 PDF templates (drop in your own) and a Word (.docx) export, an opt-in page footer (name, job title, company) on tailored copies, tracked links that record opens |
 | **Cover letters** | Generated from the paired résumé and persona; voice and length presets, 7 templates, PDF |
@@ -145,10 +150,21 @@ Any API key goes straight into Settings › AI, once per provider: every model s
 
 | Subscription | Once after the containers start |
 |---|---|
-| Claude Pro / Max | `docker compose exec backend claude setup-token`, put the printed token in `.env` as `CLAUDE_CODE_OAUTH_TOKEN`, then `docker compose up -d backend` |
-| ChatGPT | `docker compose exec backend codex login --device-auth` (check with `codex login status`; the login lives in the `codex_auth` volume) |
-| Google Antigravity | `docker compose exec -it backend agy` — the container has no browser, so the CLI prints a URL and asks for the code it shows (the login lives in the `antigravity_auth` volume) |
+| Claude Pro / Max | `docker compose run --rm -it claude-runner claude setup-token`, put the printed token in `.env` as `CLAUDE_CODE_OAUTH_TOKEN`, then `docker compose up -d backend` |
+| ChatGPT | `docker compose run --rm -it codex-runner codex login --device-auth` (check with `codex login status`; the login lives in the `codex_auth` volume) |
+| Google Antigravity | `docker compose run --rm -it antigravity-runner agy` — the container has no browser, so the CLI prints a URL and asks for the code it shows (the login lives in the `antigravity_auth` volume) |
 | OpenCode Go | nothing: paste the Go API key under Settings › AI |
+
+Subscription CLIs run in separate optional images. Save a provider in Settings and the
+private runner manager downloads a missing image and starts its container automatically.
+Settings › Models shows progress and errors. All accounts, feature overrides and scoring
+fallback count: a container is removed only after no account selects it and active calls
+finish. Images and logins are retained. Leave `COMPOSE_PROFILES` unset in automatic mode.
+Ollama and LM Studio continue to use external servers; API providers need no runner.
+For a source checkout, first build the needed runner images (e.g.
+`docker compose build codex-runner`) and start the core with `docker compose up --build -d`.
+Manual profiles remain available with `JN_RUNNER_MANAGEMENT=0`.
+See [CLI runners and migration](docs/CLI-RUNNERS.md) for source builds, existing logins and troubleshooting.
 
 No pay-per-token key needed for any of them. A plan limit fails over to the fallback provider without retrying. With several accounts, `docker compose exec backend python -m backend.scripts.cli_login <codex|agy|claude> "<account>"` prints a member's own login command.
 
