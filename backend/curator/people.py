@@ -194,6 +194,9 @@ async def find_people(company: str, job_title: str, small_company: bool, li: Lin
 # Who can put someone forward when there is no open role to apply to: the people who
 # own a team's headcount. Recruiters are left out; they work open requisitions.
 DECISION_MAKERS = {"hiring_manager", "founder"}
+# Companies whose web search came back with no LinkedIn profile at all, this run (curator/run.py
+# clears it and reports the count: the search engines stopped honouring `site:` queries).
+NO_PROFILES: list = []
 _PROFILE_AREA_WORDS = {"ml": "AI", "backend": "backend", "infra": "platform", "data": "data",
                        "mobile": "mobile", "frontend": "frontend", "security": "security"}
 
@@ -252,9 +255,11 @@ async def _search_people(company: str, queries: list[str], li_keywords: list[str
                             "_r": relevance(c, areas, small_company, region, early)})
         return sorted(out, key=lambda c: -c["_r"])
 
+    profiles = 0
     for q in queries:
         try:
             for r in await search(q, n=10):
+                profiles += "linkedin.com/in/" in (r.get("url") or "")
                 hit = parse_linkedin_hit(r, company)
                 if hit and keep(hit):
                     hit["source"] = "searxng"
@@ -265,6 +270,9 @@ async def _search_people(company: str, queries: list[str], li_keywords: list[str
         if len([c for c in ranked() if c["_p"] >= 2]) >= want + 2:
             break
 
+    if queries and not profiles:
+        # the engines answered without a single profile: they are not honouring site:linkedin.com/in
+        NO_PROFILES.append(company)
     best = ranked()
     if (not best or best[0]["_p"] < 2) and li is not None:
         for kw in li_keywords:

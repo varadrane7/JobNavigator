@@ -123,6 +123,8 @@ class LinkedInPeople:
         self.account = None          # "mock" | "main" | None
         self.tried: set = set()      # sessions that failed this run
         self.dead = False
+        self.walled: set = set()     # sessions LinkedIn shows no out-of-network people to
+        self.notes: list = []        # what went wrong, in words for the run summary
 
     async def __aenter__(self):
         return self
@@ -217,6 +219,16 @@ class LinkedInPeople:
         return ("/checkpoint" in self.page.url or "/login" in self.page.url or "/authwall" in self.page.url
                 or await lp._check_rate_limit(self.page))
 
+    async def _walled(self) -> bool:
+        """LinkedIn answered a people search with its "limited visibility" page: this account has
+        used up its searches or has too small a network, and every result is hidden. Not a block:
+        the page loads, with nobody on it."""
+        try:
+            text = await self.page.evaluate("document.body ? document.body.innerText.slice(0, 3000) : ''")
+        except Exception:
+            return False
+        return "limited visibility" in text or "Unlock these profiles" in text
+
     async def _open(self, url: str, main_only: bool = False) -> bool:
         """Load one LinkedIn page on a usable session, moving to the other session once when this one
         is throttled; False when neither can."""
@@ -248,9 +260,22 @@ class LinkedInPeople:
         if network:
             url += "&network=" + quote(json.dumps(network))
         try:
-            if not await self._open(url, main_only=bool(network)):
+            # a session that hides everyone is not asked again this run
+            if not await self._open(url, main_only=bool(network) or li_budget.MOCK in self.walled):
                 return []
             cards = await self.page.evaluate(_RESULTS_JS)
+            if not cards and await self._walled():
+                who = self.account
+                self.walled.add(who)
+                note = (f"LinkedIn {who} session shows no people outside its network (its search limit, or too "
+                        "few connections): people search on it finds nobody")
+                if note not in self.notes:
+                    self.notes.append(note)
+                    logger.warning(note)
+                if who != li_budget.MAIN and await self._open(url, main_only=True):
+                    cards = await self.page.evaluate(_RESULTS_JS)
+                    if not cards and await self._walled():
+                        self.walled.add(li_budget.MAIN)
         except Exception as e:
             logger.warning(f"LinkedIn people search failed ({keywords!r}): {e}")
             return []

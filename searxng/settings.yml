@@ -46,3 +46,12 @@ engines:
     disabled: true
   - name: wikipedia
     disabled: true
+
+# When the engines above stop answering `site:linkedin.com/in` queries from this host (bans,
+# CAPTCHAs, or Bing ignoring the operator), the curator's people search finds nobody and says
+# so in its run summary. A search API is not rate-limited by IP: uncomment and add a key
+# (Brave Search API has a free tier), then `docker compose restart searxng`.
+#  - name: braveapi
+#    engine: braveapi
+#    api_key: "YOUR_BRAVE_SEARCH_API_KEY"
+#    disabled: false

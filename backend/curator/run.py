@@ -46,7 +46,7 @@ def _settings() -> dict:
     keys = ("curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore", "curate_title_exclude",
             "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max", "outreach_count",
             "outreach_network_count", "curate_max_years", "curate_drop_unlikely_sponsors", "curate_ignore_h1b",
-            "curate_release_hours", "curate_countries")
+            "curate_release_hours", "curate_countries", "curate_source_penalty", "curate_max_age_days")
     db = SessionLocal()
     try:
         rows = {k: get_setting(db, k) for k in keys}
@@ -83,6 +83,9 @@ def _settings() -> dict:
         "ignore_h1b": ignore_h1b,
         "release_hours": i("curate_release_hours", 72),
         "countries": market.countries(rows.get("curate_countries")),
+        "source_penalty": {str(k): v for k, v in (j("curate_source_penalty", {}) or {}).items()
+                           if isinstance(v, (int, float))} if isinstance(j("curate_source_penalty", {}), dict) else {},
+        "max_age_days": max(1, i("curate_max_age_days", RELEASE_MAX_AGE_DAYS)),
     }
 
 
@@ -163,12 +166,14 @@ def tracked_keys(db) -> set[str]:
     return keys
 
 
-def load_pool(window_hours: int, countries: list[str] | None = None) -> tuple[list[dict], list]:
+def load_pool(window_hours: int, countries: list[str] | None = None,
+              max_age_days: int = RELEASE_MAX_AGE_DAYS) -> tuple[list[dict], list]:
     """(candidate dicts, ids of every status=new job in the window).
 
     A company on the Companies list gets a 7-day window: its career page is scraped on its own
     schedule and rarely says when a job was posted, so its jobs used to age out unseen.
-    Only jobs in the account's markets (`curate_countries`) or of unknown country are candidates."""
+    Only jobs in the account's markets (`curate_countries`) or of unknown country are candidates.
+    Nothing posted more than `max_age_days` ago is a candidate, released or tracked."""
     countries = countries or market.DEFAULT_COUNTRIES
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=window_hours)
@@ -179,7 +184,8 @@ def load_pool(window_hours: int, countries: list[str] | None = None) -> tuple[li
                        .filter(Application.applied_at >= now - timedelta(days=30)).all()}
         tracked = tracked_keys(db)
         # a closed posting, or a copy of one already listed (dedup_copy_* = new), is never picked
-        oldest = min(since_tracked, now - timedelta(days=RELEASE_MAX_AGE_DAYS))
+        oldest = now - timedelta(days=max_age_days)
+        since, since_tracked = max(since, oldest), max(since_tracked, oldest)
         q = (db.query(Job).filter(Job.status == "new")
              .filter(func.coalesce(Job.posted_at, Job.discovered_at) >= oldest)
              .filter(or_(Job.open_state.is_(None), Job.open_state != "closed"))
@@ -339,7 +345,10 @@ def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: di
         }
         reply_note = f"you heard back {round(own_rate * 100)}% of {own_n}" if own_n >= 3 else ""
         j["parts"] = {k2: None if v is None else round(v, 3) for k2, v in parts.items()}
-        j["score"] = scoring.composite(parts, cfg["weights"])
+        # a board whose postings rarely answer (curate_source_penalty: {"source": 0..1}) costs that share of the score
+        penalty = scoring.clamp(float((cfg.get("source_penalty") or {}).get(j.get("source") or "", 0)))
+        j["score"] = round(scoring.composite(parts, cfg["weights"]) * (1 - penalty), 4)
+        j["source_penalty"] = penalty
         j["hours"] = hours
         j["reason"] = scoring.reason(best_cv=names.get(str(j["best_cv"]), j["best_cv"]), llm_score=j["best_cv_score"], hours=hours,
                                      lca_count=None if relocation or ignore_h1b else j["lca"], stage=it.get("funding_stage"),
@@ -518,6 +527,7 @@ async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[d
                               "email": email, "email_confidence": conf, "source": p.get("source"),
                               "note": d.get("note"), "email_draft": d.get("email_draft"), "found_on": today,
                               "purpose": "job", "lead_kind": "job"})
+    _OUTREACH_ERRORS.extend(n for n in li.notes if n not in _OUTREACH_ERRORS)
     db = SessionLocal()
     try:
         saved = []
@@ -606,6 +616,7 @@ async def find_network_contacts(companies: list[str], want_total: int, abroad: s
                               "email": email, "email_confidence": conf, "source": p.get("source"),
                               "note": d.get("note"), "email_draft": d.get("email_draft"), "found_on": today,
                               "purpose": "network", "lead_kind": "network"})
+    _OUTREACH_ERRORS.extend(n for n in li.notes if n not in _OUTREACH_ERRORS)
     db = SessionLocal()
     try:
         saved = []
@@ -657,7 +668,7 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     released = {"released": 0, "retired": 0}
     if not dry_run:
         released = await asyncio.to_thread(_with_db, release_stale_jobs, local_today(), cfg["release_hours"])
-    pool, pool_ids = await asyncio.to_thread(load_pool, cfg["window_hours"], cfg["countries"])
+    pool, pool_ids = await asyncio.to_thread(load_pool, cfg["window_hours"], cfg["countries"], cfg["max_age_days"])
     relocation = market.is_relocation(cfg["countries"])
     dropped, keep = {}, []
     for j in pool:
@@ -702,6 +713,8 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
 
     contacts, network, again = [], [], []
     _OUTREACH_ERRORS.clear()
+    from backend.curator import people as _people
+    _people.NO_PROFILES.clear()
     if outreach and cfg["outreach"] > 0:
         # people never contacted come back first, taking up to half the day's slots
         again = await asyncio.to_thread(_with_db, resurface_contacts, local_today(), cfg["release_hours"],
@@ -731,7 +744,10 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
                "llm_pool": len(shortlist), "saved": len(top), "ignored": ignored, "contacts": len(contacts),
                "network": len(network), "released": released["released"], "retired": released["retired"],
                "resurfaced": len(again)}
+    if _people.NO_PROFILES:
+        _OUTREACH_ERRORS.insert(0, f"web search returned no LinkedIn profiles for {len(set(_people.NO_PROFILES))} "
+                                   "companies (the search engines are not answering site: queries)")
     if _OUTREACH_ERRORS:
-        summary["outreach_errors"] = list(_OUTREACH_ERRORS[:5])
+        summary["outreach_errors"] = list(dict.fromkeys(_OUTREACH_ERRORS))[:5]
     logger.info(f"curator done: {summary}")
     return summary

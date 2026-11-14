@@ -164,3 +164,18 @@ def test_same_posting_key_spans_company_spellings():
     b = same_posting_key("Nationwide Mutual Insurance Company", "Specialist, Software Engineer (Java, Spring Boot, Angular)")
     assert a == b
     assert same_posting_key("Glean", "Software Engineer") != same_posting_key("Glean", "Software Engineer II")
+
+
+def test_source_penalty_takes_its_share_of_the_score_and_old_postings_leave_the_pool(test_db, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from backend.curator import run
+    now = datetime.now(timezone.utc)
+    job = lambda source: {"company": "Acme", "title": "Engineer", "url": "", "description": "", "posted_at": now,
+                          "best_cv_score": 80, "best_cv": None, "lca": 0, "approval": None, "jd_flag": False,
+                          "salary_min": None, "salary_max": None, "source": source, "loc_country": "US"}
+    cfg = {"weights": None, "target_min": 100000, "target_max": 150000, "countries": ["US"], "ignore_h1b": True,
+           "source_penalty": {"jobright": 0.25}}
+    monkeypatch.setattr(run, "_resume_names", lambda: {})
+    plain, silent = run.rank([job("direct"), job("jobright")], {}, {}, {}, cfg, now)
+    assert (plain["source"], silent["source"]) == ("direct", "jobright")
+    assert silent["score"] == round(plain["score"] * 0.75, 4) and silent["source_penalty"] == 0.25

@@ -85,6 +85,8 @@ DEFAULT_SETTINGS = {
     "outreach_network_count": ("10", "How many decision makers to find each day at good companies, open role or not (job slots left unused add to this)"),
     "github_token": ("", "GitHub token (read-only, repo scope) so the persona project sync sees private repositories. Empty = public repositories only"),
     "curate_max_years": ("5", "Drop a job whose posting asks for this many years of experience or more"),
+    "curate_source_penalty": ("{}", "Share of the curator score a job loses for coming from a board that rarely answers, as JSON by source: {\"jobright\": 0.25}"),
+    "curate_max_age_days": ("30", "A posting older than this many days is never picked, released or tracked"),
     "curate_release_hours": ("72", "A Top pick not applied to, or a person not contacted, after this many hours goes back to the queue (0 = never)"),
     "curate_countries": ('["US"]', "Countries this account's Top picks come from (ISO codes, e.g. DE, NL, IE, AE). Without US the curator reads sponsorship from the posting instead of H-1B data"),
     "curate_drop_unlikely_sponsors": ("true", "Drop jobs at companies whose H-1B record says they are unlikely to sponsor"),

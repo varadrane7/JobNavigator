@@ -133,7 +133,7 @@ _SECTIONS = [
     ("curator", "Daily curator", POLICY, OWN, ["curator"], [
         "curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore",
         "curate_title_exclude", "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max",
-        "curate_max_years", "curate_drop_unlikely_sponsors", "curate_ignore_h1b", "curate_release_hours", "curate_countries",
+        "curate_max_years", "curate_drop_unlikely_sponsors", "curate_ignore_h1b", "curate_release_hours", "curate_countries", "curate_source_penalty", "curate_max_age_days",
         "outreach_count", "outreach_network_count",
         "linkedin_mock_daily_cap", "linkedin_main_daily_cap", "linkedin_cooldown_hours",
         "scout_daily_leads", "scout_min_score", "github_token", "nag_apply_target", "nag_request_target", "nag_calendar"]),
