@@ -326,24 +326,21 @@ async def export_pdf(cl_id: str, db: Session = Depends(get_db)):
         logger.error(f"Cover-letter PDF generation failed: {e}")
         raise HTTPException(500, f"PDF generation failed: {str(e)}")
 
-    # Filename: {Name}_{Type}_CoverLetter_{number}.pdf
+    # Filename: {Name}_{Company}_CoverLetter.pdf (no job number: the file goes to the employer)
     header_name = (_header_name(cl.json_data) or "CoverLetter").replace(" ", "")
     def _safe(text: str) -> str:
         """Letters (any script), digits, `-` and `_`; no spaces or punctuation that muddles a download filename."""
         out = "".join(c for c in (text or "") if c.isalnum() or c in " -_").strip()
         return out.replace(" ", "")
 
-    number = ""
     label = _safe(cl.name) or "Cover"
     if cl.job_id:
         job = db.query(Job).filter(Job.id == cl.job_id).first()
         if job:
-            if job.short_id:
-                number = f"_{job.short_id}"
             label = _safe(job.company) or label
     # An ASCII filename= for old clients plus filename*=UTF-8'' so José or Дана keeps its name
     # (the same header the résumé downloads send).
-    stem = f"{header_name}_{label}_CoverLetter{number}"
+    stem = f"{header_name}_{label}_CoverLetter"
 
     return Response(
         content=pdf_bytes,

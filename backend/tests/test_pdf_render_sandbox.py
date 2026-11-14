@@ -294,10 +294,10 @@ def _letter(test_db, name, **kw):
 
 
 @pytest.mark.parametrize("name,company,ascii_stem,utf8_stem", [
-    ("José Müller", "Acme", "JoseMuller_Acme_CoverLetter_77", "JoséMüller_Acme_CoverLetter_77"),
-    ("Dana Okonkwo", "Acme", "DanaOkonkwo_Acme_CoverLetter_77", "DanaOkonkwo_Acme_CoverLetter_77"),
-    ("Дана", "Ромашка", "CoverLetter_77", "Дана_Ромашка_CoverLetter_77"),
-    ("王小明", "Acme", "Acme_CoverLetter_77", "王小明_Acme_CoverLetter_77"),
+    ("José Müller", "Acme", "JoseMuller_Acme_CoverLetter", "JoséMüller_Acme_CoverLetter"),
+    ("Dana Okonkwo", "Acme", "DanaOkonkwo_Acme_CoverLetter", "DanaOkonkwo_Acme_CoverLetter"),
+    ("Дана", "Ромашка", "CoverLetter", "Дана_Ромашка_CoverLetter"),
+    ("王小明", "Acme", "Acme_CoverLetter", "王小明_Acme_CoverLetter"),
 ])
 def test_cover_letter_pdf_filename_keeps_a_non_ascii_name(client, test_db, monkeypatch, name, company, ascii_stem, utf8_stem):
     from urllib.parse import quote, unquote

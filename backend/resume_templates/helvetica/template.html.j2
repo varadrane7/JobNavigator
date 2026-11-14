@@ -148,16 +148,17 @@ ul.bullets li {
   font-size: 9.5pt;
   line-height: 1.2;
   padding-left: 10pt;
-  position: relative;
+  text-indent: -10pt;
 }
 
 ul.bullets li::before {
+  display: inline-block;
   content: "";
-  position: absolute;
-  left: 0;
-  top: 5pt;
   width: 3pt;
   height: 3pt;
+  margin-right: 7pt;
+  vertical-align: 2pt;
+  text-indent: 0;
   background: #bbb;
   border-radius: 50%;
 }

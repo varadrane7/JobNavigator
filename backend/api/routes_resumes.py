@@ -257,6 +257,16 @@ def validate_template_name(name, templates_dir: Path) -> str:
     return resolve_template_dir(name, templates_dir).name
 
 
+def template_engine(name) -> str:
+    """What renders this template's PDF: "latex" when its meta.json says so, else "html"
+    (Chromium). An unknown or malformed template is "html"."""
+    try:
+        meta = json.loads((resolve_template_dir(name, TEMPLATES_DIR) / "meta.json").read_text())
+        return "latex" if meta.get("engine") == "latex" else "html"
+    except Exception:
+        return "html"
+
+
 def _discover_templates() -> list[dict]:
     """Scan resume_templates/ for folders containing template.html.j2; each folder can optionally include meta.json with 'name' and 'description'."""
     templates = []
@@ -1444,6 +1454,19 @@ async def export_pdf(resume_id: str, template: Optional[str] = None, format: Opt
     fmt = (format or resume.page_format or "letter")
     json_data = resume.json_data or {}
     pdf_data = _rewrite_urls_with_tracers(json_data, str(resume.id), db)
+    if template_engine(tpl) == "latex":
+        from backend.api import resume_latex
+        try:
+            pdf_bytes, page_count = await resume_latex.render_pdf(
+                _render_safe_links({**_EMPTY_RESUME, **pdf_data}), fmt, _get_section_order(db))
+        except resume_latex.LatexError as e:
+            logger.error(f"LaTeX PDF generation failed: {e}")
+            raise HTTPException(status_code=503 if not resume_latex.available() else 500, detail=str(e))
+        headers = {"Content-Disposition": _content_disposition(_resume_download_name(db, resume), "pdf"),
+                   "X-Page-Count": str(page_count)}
+        if page_count > 1:
+            headers["X-Warning"] = f"Resume is {page_count} pages - consider trimming to 1 page"
+        return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
     html = _render_html(pdf_data, tpl, fmt, db)
     footer_text = _resume_footer_text(db, resume)
 
@@ -1481,19 +1504,35 @@ async def export_pdf(resume_id: str, template: Optional[str] = None, format: Opt
     )
 
 
+# Base résumé names that say nothing an employer should read in a filename.
+_PLAIN_RESUME_NAMES = ("general", "default", "resume", "main")
+
+
+@router.get("/{resume_id}/tex")
+def export_tex(resume_id: str, format: Optional[str] = None, db: Session = Depends(get_db)):
+    """The résumé as a LaTeX source file (the document the LaTeX template compiles), for
+    editing or compiling elsewhere, e.g. in Overleaf. Works for a résumé on any template."""
+    from backend.api import resume_latex
+    resume = get_owned_or_404(db, Resume, resume_id)
+    tex = resume_latex.to_tex(_render_safe_links({**_EMPTY_RESUME, **(resume.json_data or {})}),
+                              format or resume.page_format or "letter", _get_section_order(db))
+    return Response(content=tex, media_type="application/x-tex; charset=utf-8",
+                    headers={"Content-Disposition": _content_disposition(_resume_download_name(db, resume), "tex")})
+
+
 def _resume_download_name(db: Session, resume: "Resume") -> str:
     """A download's filename without the extension, shared by /pdf and /docx:
-    {Name}_{Type}_Resume_{number}. Name is the candidate's header name, Type the base
-    résumé's name, number the linked job's short_id (left out when there is none)."""
+    {Name}_{Type}_Resume for a base résumé (Type is its name), {Name}_Resume for a copy
+    tailored to a job and for a base résumé called General. No job number and no base name
+    on a copy: the file goes to an employer, and a numbered or "General" file says it is
+    one of many."""
     header_name = (_header_name(resume.json_data) or "Resume").replace(" ", "")
-    base_name = (resume.name.split(" → ")[0] if " → " in (resume.name or "") else resume.name) or "Resume"
-    base_name = base_name.replace(" ", "")
-    number = ""
-    if resume.job_id:
-        job_for_name = get_owned(db, Job, resume.job_id)
-        if job_for_name and job_for_name.short_id:
-            number = f"_{job_for_name.short_id}"
-    name = f"{header_name}_{base_name}_Resume{number}"
+    base_name = ((resume.name or "").split(" → ")[0] or "Resume").replace(" ", "")
+    is_copy = not resume.is_base and (resume.job_id or " → " in (resume.name or ""))
+    if is_copy or base_name.lower() in _PLAIN_RESUME_NAMES:
+        name = f"{header_name}_Resume"
+    else:
+        name = f"{header_name}_{base_name}_Resume"
     return re.sub(r'["\\\x00-\x1f\x7f]', "", name)
 
 

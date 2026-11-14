@@ -126,17 +126,18 @@ ul.bullets {
 }
 
 ul.bullets li {
-  position: relative;
   padding-left: 10pt;
+  text-indent: -10pt;
   margin-bottom: 1.5pt;
   break-inside: avoid;
   page-break-inside: avoid;
 }
 
 ul.bullets li::before {
+  display: inline-block;
+  width: 10pt;
+  text-indent: 0;
   content: "\2013";
-  position: absolute;
-  left: 0;
   color: #5d6875;
 }
 

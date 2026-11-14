@@ -1,0 +1,1 @@
+{"name": "LaTeX Classic", "engine": "latex", "description": "Typeset by pdflatex in the classic one-column r\u00e9sum\u00e9 layout: one text run per line in Type 1 fonts, the PDF r\u00e9sum\u00e9 parsers (Workday and others) read most reliably. No summary section. The preview is an approximation; download the PDF to see the real page, or the .tex to edit it in Overleaf"}

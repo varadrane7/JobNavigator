@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ header.name }} Resume</title>
+<style>
+/* Built for résumé parsers. Rules that keep the PDF readable in content-stream order:
+   no positioned elements, no grid, no ::before bullets (Chromium paints those in a later
+   layer, after every heading); a static embedded TrueType font (a variable web font
+   becomes Type 3 glyphs with no space characters); links printed as their own text. */
+{% if fonts.get('LiberationSans-Regular.ttf') %}
+@font-face { font-family: 'Liberation Sans'; font-weight: 400; font-style: normal; src: url('{{ fonts['LiberationSans-Regular.ttf'] }}') format('truetype'); }
+@font-face { font-family: 'Liberation Sans'; font-weight: 700; font-style: normal; src: url('{{ fonts['LiberationSans-Bold.ttf'] }}') format('truetype'); }
+@font-face { font-family: 'Liberation Sans'; font-weight: 400; font-style: italic; src: url('{{ fonts['LiberationSans-Italic.ttf'] }}') format('truetype'); }
+{% endif %}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+@page {
+  size: {{ 'letter' if page_format == 'letter' else 'A4' }};
+  margin: 0.5in 0.55in;
+}
+
+html, body {
+  font-family: 'Liberation Sans', Arial, Helvetica, sans-serif;
+  font-size: 9.5pt;
+  line-height: 1.24;
+  color: #000;
+  background: #fff;
+}
+
+.page {
+  width: {{ '8.5in' if page_format == 'letter' else '210mm' }};
+  padding: 0.5in 0.55in;
+  margin: 0 auto;
+}
+@media print {
+  .page { width: auto; padding: 0; margin: 0; }
+}
+
+h1 { font-size: 17pt; font-weight: 700; line-height: 1.15; }
+.headline { font-size: 10.5pt; margin-top: 1pt; }
+.contact { font-size: 9pt; margin-top: 3pt; }
+.contact a, .link a { color: #000; text-decoration: none; }
+
+h2 {
+  font-size: 10.5pt;
+  font-weight: 700;
+  text-transform: none;
+  border-bottom: 0.75pt solid #000;
+  padding-bottom: 1pt;
+  margin: 8pt 0 3pt 0;
+  break-after: avoid;
+}
+
+.entry { margin-bottom: 5pt; }
+.entry:last-child { margin-bottom: 0; }
+.row { display: flex; justify-content: space-between; align-items: baseline; break-after: avoid; }
+.row .right { white-space: nowrap; margin-left: 10pt; }
+.title { font-weight: 700; }
+.sub { font-style: italic; }
+.desc, .link { font-size: 9pt; }
+
+ul { margin: 2pt 0 0 14pt; list-style: disc outside; }
+li { margin-bottom: 1.5pt; padding-left: 1pt; }
+
+.skill { margin-bottom: 1.5pt; }
+.skill b { font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  {% if header %}
+  <h1>{{ header.name }}</h1>
+  {% if header.title %}<div class="headline">{{ header.title }}</div>{% endif %}
+  {# "Label: value" items (nationality, work permit) go on their own line, as on the European CV #}
+  {% set contact_parts = [] %}{% set detail_parts = [] %}
+  {% for item in (header.contact_items or []) %}
+    {% set text = (item.text or '') | e %}
+    {% if not text %}
+    {% elif not item.url and ': ' in (item.text or '') %}
+      {% set _ = detail_parts.append(text) %}
+    {% elif item.url %}
+      {% set href = item.url if (item.url.startswith('http') or item.url.startswith('mailto')) else 'https://' ~ item.url %}
+      {% set _ = contact_parts.append('<a href="' ~ (href | e) ~ '">' ~ text ~ '</a>') %}
+    {% else %}
+      {% set _ = contact_parts.append(text) %}
+    {% endif %}
+  {% endfor %}
+  {% if contact_parts %}<div class="contact">{{ contact_parts | join(' | ') }}</div>{% endif %}
+  {% if detail_parts %}<div class="contact">{{ detail_parts | join(' | ') }}</div>{% endif %}
+  {% endif %}
+
+  {% for sec in section_order %}
+  {% if sec.key == 'summary' and summary %}
+  <h2>{{ sec.title }}</h2>
+  <p>{{ summary }}</p>
+  {% elif sec.key == 'experience' and experience %}
+  <h2>{{ sec.title }}</h2>
+  {% for job in experience %}
+  <div class="entry">
+    <div class="row"><span class="title">{{ job.title }}</span><span class="right">{{ job.date }}</span></div>
+    {% if job.company or job.location %}<div class="sub">{{ job.company }}{% if job.company and job.location %}, {% endif %}{{ job.location }}</div>{% endif %}
+    {% if job.description %}<div class="desc">{{ job.description }}</div>{% endif %}
+    {% if job.bullets %}
+    <ul>
+      {% for bullet in job.bullets %}<li>{{ bullet | bold }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% elif sec.key == 'skills' and skills %}
+  <h2>{{ sec.title }}</h2>
+  {% if skills is mapping %}
+    {% for label, value in skills.items() %}<div class="skill"><b>{{ label }}:</b> {{ value }}</div>
+    {% endfor %}
+  {% else %}
+    {% for sk in skills %}<div class="skill"><b>{{ sk.category }}:</b> {{ sk.items }}</div>
+    {% endfor %}
+  {% endif %}
+  {% elif sec.key == 'education' and education %}
+  <h2>{{ sec.title }}</h2>
+  {% for edu in education %}
+  <div class="entry">
+    <div class="row"><span class="title">{{ edu.school }}</span><span class="right">{{ edu.years or edu.date or '' }}</span></div>
+    <div>{{ edu.degree }}{% if edu.degree and edu.location %}, {% endif %}{{ edu.location }}</div>
+  </div>
+  {% endfor %}
+  {% elif sec.key == 'projects' and projects %}
+  <h2>{{ sec.title }}</h2>
+  {% for project in projects %}
+  <div class="entry">
+    <div class="title">{{ project.name or project.title }}</div>
+    {% if project.description %}<div class="desc">{{ project.description }}</div>{% endif %}
+    {% if project.url %}<div class="link"><a href="{{ project.url }}">{{ project.url | replace('https://', '') | replace('http://', '') }}</a></div>{% endif %}
+    {% if project.bullets %}
+    <ul>
+      {% for bullet in project.bullets %}<li>{{ bullet | bold }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% elif sec.key == 'publications' and publications %}
+  <h2>{{ sec.title }}</h2>
+  {% for pub in publications %}
+  <div class="entry">
+    <div class="title">{{ pub.name or pub.title }}</div>
+    {% if pub.description %}<div class="desc">{{ pub.description }}</div>{% endif %}
+    {% if pub.bullets %}
+    <ul>
+      {% for bullet in pub.bullets %}<li>{{ bullet | bold }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+  {% endfor %}
+
+</div>
+</body>
+</html>

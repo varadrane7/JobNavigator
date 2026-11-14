@@ -723,7 +723,8 @@ export function DownloadMenu({ id, template, format, onError, beforeDownload }) 
     } catch (e) {
       console.error(e)
       const reason = await downloadErrorReason(e)
-      onError?.((kind === 'docx' ? 'Could not download the Word document' : 'Could not download the PDF') + (reason ? ` — ${reason}` : '.'))
+      const what = { docx: 'the Word document', tex: 'the LaTeX source' }[kind] || 'the PDF'
+      onError?.(`Could not download ${what}` + (reason ? ` — ${reason}` : '.'))
     } finally { setBusy(false) }
   }
   // Overrides keep the toolbar's own 29px height and 12px label.
@@ -736,6 +737,7 @@ export function DownloadMenu({ id, template, format, onError, beforeDownload }) 
           style={{ position: 'absolute', top: '100%', right: 0, marginTop: 5, zIndex: 45, width: 168 }}>
           <MenuItem hint=".pdf" hintMono onClick={() => download('pdf')}>PDF</MenuItem>
           <MenuItem hint=".docx" hintMono onClick={() => download('docx')}>Word</MenuItem>
+          <MenuItem hint=".tex" hintMono onClick={() => download('tex')}>LaTeX</MenuItem>
         </Menu>
       )}
     </div>

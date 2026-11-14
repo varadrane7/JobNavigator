@@ -73,9 +73,9 @@ def test_docx_download_headers_for_a_base_resume(client, test_db):
     assert 'filename="DanaOkonkwo_BaseCV_Resume.docx"' in response.headers["content-disposition"]
 
 
-def test_docx_filename_matches_the_pdf_one_for_a_copy(client, test_db):
+def test_a_copy_downloads_without_its_job_number_or_base_name(client, test_db):
     response, _ = _fetch(client, _copy(test_db))
-    assert 'filename="DanaOkonkwo_BaseCV_Resume_4242.docx"' in response.headers["content-disposition"]
+    assert 'filename="DanaOkonkwo_Resume.docx"' in response.headers["content-disposition"]
 
 
 def test_download_name_tolerates_a_missing_header_and_drops_quotes(test_db):

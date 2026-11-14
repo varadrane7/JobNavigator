@@ -33,12 +33,12 @@ describe('DownloadMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 
-  it('offers PDF and Word, and Escape closes it', () => {
+  it('offers PDF, Word and LaTeX, and Escape closes it', () => {
     render(<DownloadMenu {...props} />)
     fireEvent.click(screen.getByRole('button', { name: /Download/ }))
     expect(screen.getByRole('button', { name: /Download/ }).getAttribute('aria-expanded')).toBe('true')
     const items = screen.getAllByRole('menuitem').map((el) => el.textContent)
-    expect(items).toEqual(['PDF.pdf', 'Word.docx'])
+    expect(items).toEqual(['PDF.pdf', 'Word.docx', 'LaTeX.tex'])
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('menu')).toBeNull()
   })
