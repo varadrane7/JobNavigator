@@ -210,3 +210,71 @@ async def test_real_subprocess_cancellation_reaps_process_and_preserves_partial_
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+# ── the backend queues for a runner slot instead of failing on "Runner is busy" ──
+
+@pytest.mark.asyncio
+async def test_calls_beyond_the_runner_slots_wait_their_turn(wire, monkeypatch):
+    running, peak, done = [], [], []
+
+    async def slow(provider, prompt, *a, **kw):
+        running.append(prompt)
+        peak.append(len(running))
+        await asyncio.sleep(0.02)
+        running.remove(prompt)
+        done.append(prompt)
+        return {"text": prompt, "usage": {}}
+
+    monkeypatch.setattr(runtime, "execute", slow)
+    results = await asyncio.gather(*[runner_client.complete("codex_cli", f"p{i}", "s", "m", 10) for i in range(7)])
+    assert [r["text"] for r in results] == [f"p{i}" for i in range(7)] and len(done) == 7
+    assert max(peak) <= runner_client.RUNNER_SLOTS          # never more in flight than the runner takes
+
+
+@pytest.mark.asyncio
+async def test_a_busy_answer_is_asked_again_and_gives_up_after_the_wait(token, monkeypatch):
+    answers = [NonRetryableLLMError("Runner is busy; try again when a call finishes")] * 2 + [{"text": "ok", "usage": {}}]
+    calls = []
+
+    async def once(*a, **kw):
+        calls.append(1)
+        answer = answers[len(calls) - 1] if len(calls) <= len(answers) else answers[0]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(runner_client, "_complete_once", once)
+    monkeypatch.setattr(runner_client, "BUSY_PAUSE", (0, 0))
+    assert (await runner_client.complete("codex_cli", "p", "s", "m", 10))["text"] == "ok" and len(calls) == 3
+
+    answers[:] = [NonRetryableLLMError("Runner is busy; try again when a call finishes")]
+    monkeypatch.setattr(runner_client, "BUSY_WAIT_SECONDS", 0)
+    with pytest.raises(NonRetryableLLMError, match="Runner is busy"):
+        await runner_client.complete("codex_cli", "p", "s", "m", 10)
+
+    answers[:] = [NonRetryableLLMError("Antigravity usage limit reached")]       # any other refusal is final
+    calls.clear()
+    monkeypatch.setattr(runner_client, "BUSY_WAIT_SECONDS", 1800)
+    with pytest.raises(NonRetryableLLMError, match="usage limit"):
+        await runner_client.complete("codex_cli", "p", "s", "m", 10)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_runner_being_started_is_waited_for(token, monkeypatch):
+    calls = []
+
+    async def once(*a, **kw):
+        calls.append(1)
+        if len(calls) < 3:
+            raise NonRetryableLLMError("Runner is not ready. Check provider status in Settings > Models and try again")
+        return {"text": "ok", "usage": {}}
+
+    monkeypatch.setattr(runner_client, "_complete_once", once)
+    monkeypatch.setattr(runner_client, "BUSY_PAUSE", (0, 0))
+    assert (await runner_client.complete("codex_cli", "p", "s", "m", 10))["text"] == "ok" and len(calls) == 3
+    calls.clear()
+    monkeypatch.setattr(runner_client, "READY_WAIT_SECONDS", 0)
+    with pytest.raises(NonRetryableLLMError, match="not ready"):
+        await runner_client.complete("codex_cli", "p", "s", "m", 10)
