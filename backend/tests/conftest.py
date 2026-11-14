@@ -28,6 +28,10 @@ def pytest_configure(config):
         "markers",
         "live: hits the running stack over HTTP (read-only); auto-skips when unreachable",
     )
+    # Same for `asyncio_mode = auto`: without it a bare `async def test_…` fails with
+    # "async def functions are not natively supported". A mode given on the command line wins.
+    if config.getoption("asyncio_mode", None) is None:
+        config.option.asyncio_mode = "auto"
     config.addinivalue_line(
         "markers",
         "mt_no_owner: test_db creates no owner account and runs the test unscoped (MT-1 migration tests)",
