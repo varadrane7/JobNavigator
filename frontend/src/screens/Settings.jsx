@@ -15,6 +15,7 @@ import {
 } from './SettingsAccounts'
 import '../theme.css'
 import RunnerStatus from './RunnerStatus'
+import ConnectorRow from './ConnectorRow'
 import { loadDemo } from '../demoHooks'
 
 // QA F7 / R6-06: a locked row stays in the accessibility tree (read-only, aria-disabled);
@@ -716,6 +717,8 @@ export default function Settings() {
         B('People per day', 'Founders, hiring managers and recruiters found for the top companies.', 'outreach_count', { mono: true, int: true, w: '135px' }),
         B('People to know per day', 'Engineering leaders at good companies with no posting for you today; job slots left unused add to this.', 'outreach_network_count', { mono: true, int: true, w: '135px' }),
         B('Max years asked', 'A posting that asks for this many years of experience or more is dropped.', 'curate_max_years', { mono: true, int: true, w: '135px' }),
+        B('Max posting age (days)', 'A posting older than this is never picked, whether it was released back to the queue or belongs to a tracked company.', 'curate_max_age_days', { mono: true, int: true, w: '135px' }),
+        E('Source penalty', 'Share of the score a job loses for coming from a board whose postings rarely answer you.', 'curate_source_penalty', { json: true, sub: 'JSON by source, 0 to 1 — e.g. {"jobright": 0.25}' }),
         B('Release after (hours)', 'A Top pick you have not applied to, or a person you have not contacted, goes back to the queue after this long and can be picked again. 0 = never.', 'curate_release_hours', { mono: true, int: true, w: '135px' }),
         SW('Drop unlikely sponsors', 'Jobs at companies whose H-1B record says they rarely sponsor are never picked.', 'Off — they are ranked like the rest.', 'curate_drop_unlikely_sponsors', { dflt: true }),
         SW('Ignore H-1B filings', 'Top picks never use H-1B filings: no drops or score changes from them. Unknown pay leaves the score.', 'Off — filings count toward visa / pay.', 'curate_ignore_h1b', { dflt: false }),
@@ -840,6 +843,8 @@ export default function Settings() {
       ['advanced', 'System', 'Advanced', '', [
         B('Proxy URL', 'Used by scrapes that hit rate limits or geo-blocks. Empty = direct.', 'proxy_url', { mono: true, w: '340px', placeholder: 'socks5://127.0.0.1:9050' }),
         { kind: 'apikey', label: 'Dashboard API key', help: 'Saving refreshes the session cookie so iframes keep working.' },
+        { kind: 'connector', label: 'Connector (MCP)', help: 'Ask Claude about your search. In Claude: Settings › Connectors › Add custom connector, paste this address, then approve here. A token is for Claude Code and other agents.',
+          info: 'The address must be reachable from the internet over HTTPS for claude.ai. A connected app reads your jobs, applications, résumés, profile and leads; with “update” it can also change leads and applications. Disconnect all ends every connection and token of this account.' },
         B('SSO discovery URL', 'OpenID Connect sign-in (Authentik, Keycloak…): the provider’s .well-known/openid-configuration URL. Empty = the OIDC_DISCOVERY_URL environment variable, or no SSO. Redirect URI: <this dashboard>/api/auth/oidc/callback.', 'oidc_discovery_url', { mono: true, w: '340px', placeholder: 'https://auth.example.com/application/o/jobnavigator/.well-known/openid-configuration' }),
         B('SSO client ID', 'The provider application’s client ID.', 'oidc_client_id', { mono: true, w: '260px' }),
         B('SSO client secret', 'Stored locally; the provider’s client secret.', 'oidc_client_secret', { secret: true, w: '260px' }),
@@ -1218,6 +1223,8 @@ function Row({ r, ctx }) {
         return <RunnerStatus accountId={r.accountId} isOwner={r.isOwner} />
       case 'apikey':
         return <ApiKeyRow value={val('dashboard_api_key')} save={save} flash={flash} />
+      case 'connector':
+        return <ConnectorRow flash={flash} />
       case 'telemetry':
         return <TelemetrySettingRow />
       case 'readonly': {

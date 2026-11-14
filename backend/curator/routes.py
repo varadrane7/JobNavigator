@@ -1,7 +1,7 @@
 """API for the daily curator: run it, read a day's Top list and contacts, update a contact, test search."""
 import logging
 from datetime import date
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -151,6 +151,70 @@ def patch_contact(contact_id: str, body: ContactPatch, db: Session = Depends(get
         setattr(c, k, v)
     db.commit()
     return _contact_out(c)
+
+
+class ContactIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    name: str
+    company: Optional[str] = None
+    title: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    email: Optional[str] = None
+    location: Optional[str] = None
+    role: Optional[str] = None
+    kind: Optional[str] = None
+    status: Optional[str] = None
+    contacted_on: Optional[date] = None
+    next_action_at: Optional[date] = None
+    why: Optional[str] = None
+    evidence: Optional[str] = None
+    talking_points: Optional[list[str]] = None
+    linkedin_note: Optional[str] = None
+    email_draft: Optional[str] = None
+    show_project: Optional[str] = None
+    score: Optional[int] = None
+    job_id: Optional[str] = None
+    agent: Optional[str] = None
+
+
+@router.post("/contacts", summary="Add or log a contact (one object or a list)")
+def add_contacts(body: Union[ContactIn, list[ContactIn]], db: Session = Depends(get_db)):
+    """Record people found or contacted outside the curator: by another agent, a script, by hand.
+    The body is one contact or a list of up to 100. Only `name` is required. An upsert: a person
+    already on the list (same LinkedIn URL, email, or name and company) is returned with
+    `created: false`, their empty fields filled and their status moved forward, never back.
+    `status` defaults to `new`; send `requested` or `messaged` with `contacted_on` once the
+    message went out, with the text sent as `linkedin_note` (300 characters) or `email_draft`.
+    `job_id` is a job's id or dashboard number; `agent` names who is reporting (stored as source).
+    Nothing is written when any contact in a list is invalid (422 names it)."""
+    from backend.accounts.owned import get_owned
+    from backend.curator import leads
+    items = body if isinstance(body, list) else [body]
+    if not items:
+        raise HTTPException(422, "No contacts")
+    if len(items) > 100:
+        raise HTTPException(422, "At most 100 contacts in one call")
+    out = []
+    for i, item in enumerate(items):
+        data = item.model_dump(exclude_unset=True)
+        ref = str(data.pop("job_id", "") or "").strip().lstrip("#")
+        if ref:
+            job = (db.query(Job).filter(Job.short_id == int(ref)).first() if ref.isdigit()
+                   else get_owned(db, Job, ref))
+            if job is None:
+                db.rollback()
+                raise HTTPException(422, f"contact {i} ({item.name}): no job {ref!r}")
+            data["job"] = job
+        try:
+            lead, created = leads.log_lead(db, data, default_source="api")
+            db.flush()
+        except leads.LeadError as exc:
+            db.rollback()
+            raise HTTPException(422, f"contact {i} ({item.name}): {exc}")
+        out.append((lead, created))
+    db.commit()
+    rows = [{**_contact_out(lead), "created": created} for lead, created in out]
+    return rows if isinstance(body, list) else rows[0]
 
 
 @router.get("/contacts", summary="Contacts and leads")

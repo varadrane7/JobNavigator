@@ -198,7 +198,10 @@ from backend.accounts import auth as acct_auth
 
 # Paths that NEVER require auth (exact or prefix match)
 _PUBLIC_PREFIXES = ("/health", "/docs", "/openapi.json", "/redoc", "/cv", "/api/telegram/webhook", "/api/auth/set-session", "/api/auth/verify", "/api/auth/logout", "/api/auth/oidc",
-                    "/api/gmail/callback")  # Google redirects the browser there (MT-19; signed state)
+                    "/api/gmail/callback",  # Google redirects the browser there (MT-19; signed state)
+                    # The connector (backend/connector): /mcp takes its own bearer token; the OAuth
+                    # endpoints are how a client gets one (the consent page checks the dashboard session).
+                    "/mcp", "/oauth", "/.well-known")
 # Need the install password but no account (the picker reads and calls these).
 _ACCOUNT_OPTIONAL = ("/api/auth/accounts", "/api/auth/switch", "/api/auth/verify-pin")
 
@@ -699,6 +702,10 @@ app.include_router(accounts_router, prefix="/api")
 app.include_router(oidc_router, prefix="/api")
 app.include_router(credentials_router, prefix="/api")
 app.include_router(gmail_router, prefix="/api")
+from backend.connector.routes import router as connector_router
+from backend.connector.oauth import router as connector_oauth_router
+app.include_router(connector_router)
+app.include_router(connector_oauth_router)
 
 
 # A malformed UUID in a path (/api/jobs/abc) makes Postgres raise DataError deep in

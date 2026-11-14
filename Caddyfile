@@ -19,6 +19,17 @@
     }
 
     # Health check
+    # The connector: MCP endpoint and its OAuth sign-in (backend/connector)
+    handle /mcp {
+        reverse_proxy backend:8000
+    }
+    handle /oauth/* {
+        reverse_proxy backend:8000
+    }
+    handle /.well-known/oauth-* {
+        reverse_proxy backend:8000
+    }
+
     handle /health {
         reverse_proxy backend:8000
     }
