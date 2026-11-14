@@ -138,3 +138,15 @@ def test_card_details():
                      "Technical Recruiter")
     assert d == {"location": "New York, NY", "country": "US", "current_text": "Technical Recruiter at Ramp", "past_text": None}
     assert card_details("Jo\nEM at Brex\nPast: Engineer at Ramp", "EM at Brex")["past_text"] == "Engineer at Ramp"
+
+
+def test_card_details_reads_the_untagged_current_position_line():
+    """Late 2026 cards state a current job as "<title> at <company> since <when>", no "Current:" tag."""
+    card = ("Guy Alster\n• 2nd\nEngineering Leader | Distributed Systems\nRedmond, Washington, United States\nConnect\n"
+            "Engineering Manager at Stripe since March 2023, building a credential platform.")
+    d = card_details(card, "Engineering Leader | Distributed Systems")
+    assert d["current_text"] == "Engineering Manager at Stripe" and d["country"] == "US"
+    from backend.curator.people import names_company
+    assert names_company(d["current_text"], "Stripe")
+    # a headline that happens to say "since" is not a position line
+    assert card_details("Jo\nBuilding things since 2010\nConnect", "Building things since 2010")["current_text"] is None

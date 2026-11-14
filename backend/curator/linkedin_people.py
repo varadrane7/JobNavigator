@@ -7,6 +7,7 @@ spaced 20-60 s apart.
 """
 import asyncio
 import json
+import re
 import logging
 import os
 import random
@@ -48,10 +49,15 @@ def parse_card(text: str) -> tuple[str, str]:
     return name, headline
 
 
+# "<title> at <company> since <when>": how a card states a current position without the "Current:" tag
+_SINCE_LINE = re.compile(r"(?<=\S)\s+since\b", re.I)
+
+
 def card_details(text: str, headline: str) -> dict:
     """{location, country, current_text, past_text} from a people-search card: the location line
-    under the headline, and the "Current: ..." / "Past: ..." lines LinkedIn adds when the keywords
-    matched a position."""
+    under the headline, and the line LinkedIn adds when the keywords matched a position:
+    "Current: ..." / "Past: ...", or (since late 2026) an untagged "Engineering Manager at Stripe
+    since March 2023, ..." for a current one."""
     from backend.analyzer.location import parse as parse_location
     lines = [l.strip(" •·") for l in (text or "").splitlines() if l.strip(" •·")]
     out = {"location": None, "country": None, "current_text": None, "past_text": None}
@@ -61,6 +67,8 @@ def card_details(text: str, headline: str) -> dict:
             out["current_text"] = l.split(":", 1)[1].strip()
         elif low.startswith("past:"):
             out["past_text"] = l.split(":", 1)[1].strip()
+        elif out["current_text"] is None and l != headline and _SINCE_LINE.search(l):
+            out["current_text"] = _SINCE_LINE.split(l, 1)[0].strip()
     after = lines[lines.index(headline) + 1:] if headline in lines else []
     for l in after[:3]:
         if l.lower().startswith(("current:", "past:", "summary:")) or l.lower() in _NOISE:
@@ -282,7 +290,8 @@ class LinkedInPeople:
         out = []
         for c in cards:
             name, headline = parse_card(c.get("text", ""))
-            if name and "linkedin member" not in name.lower():
+            # "Jane Doe is a mutual connection" is a caption under a result, not a result
+            if name and "linkedin member" not in name.lower() and "mutual connection" not in name.lower():
                 d = card_details(c.get("text", ""), headline)
                 out.append({"name": name, "headline": headline, "url": c["url"],
                             "source": f"linkedin_{self.account}", "location": d["location"],
