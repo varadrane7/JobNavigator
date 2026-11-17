@@ -100,23 +100,56 @@ async def test_scrape_workday_sends_q_as_search_text(monkeypatch):
     assert len(jobs) == 1
 
 
-@pytest.mark.asyncio
-async def test_scrape_workday_handles_http_error(monkeypatch):
-    """scrape() returns empty list on HTTP error, doesn't raise."""
+def _client_answering(monkeypatch, status, text, url="https://nvidia.wd5.myworkdayjobs.com/x"):
     mock_resp = MagicMock()
-    mock_resp.status_code = 500
-    mock_resp.text = ""
-
+    mock_resp.status_code = status
+    mock_resp.text = text
+    mock_resp.url = url
     mock_client = MagicMock()
     mock_client.post = AsyncMock(return_value=mock_resp)
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-
     monkeypatch.setattr("httpx.AsyncClient", lambda **kw: mock_client)
 
+
+@pytest.mark.asyncio
+async def test_scrape_workday_client_error_is_empty(monkeypatch):
+    """A 4xx that is not "board gone" (a bad filter) reads as no postings, not a crash."""
+    _client_answering(monkeypatch, 422, "")
     from backend.scraper.ats.workday import scrape
-    jobs = await scrape("https://nvidia.wd5.myworkdayjobs.com/Site")
-    assert jobs == []
+    assert await scrape("https://nvidia.wd5.myworkdayjobs.com/Site") == []
+
+
+@pytest.mark.asyncio
+async def test_scrape_workday_server_error_says_unavailable(monkeypatch):
+    _client_answering(monkeypatch, 500, "")
+    from backend.scraper.ats.workday import scrape
+    from backend.scraper._shared.errors import BoardUnavailableError
+    with pytest.raises(BoardUnavailableError, match="HTTP 500"):
+        await scrape("https://nvidia.wd5.myworkdayjobs.com/Site")
+
+
+_MAINTENANCE = "<!DOCTYPE html><html><body><h1>Workday is currently unavailable.</h1></body></html>"
+
+
+@pytest.mark.asyncio
+async def test_scrape_workday_maintenance_page_says_unavailable(monkeypatch):
+    """An outage redirects the API to an HTML page that answers 200: that is reported as
+    Workday being down, not as a JSONDecodeError."""
+    _client_answering(monkeypatch, 200, _MAINTENANCE,
+                      url="https://static.community.workday.com/maintenance-page.html")
+    from backend.scraper.ats.workday import scrape
+    from backend.scraper._shared.errors import BoardUnavailableError
+    with pytest.raises(BoardUnavailableError, match="Workday is down"):
+        await scrape("https://clearwateranalytics.wd1.myworkdayjobs.com/Clearwater_Analytics_Careers")
+
+
+@pytest.mark.asyncio
+async def test_scrape_workday_maintenance_page_in_debug_is_a_rejection(monkeypatch):
+    _client_answering(monkeypatch, 200, _MAINTENANCE)
+    from backend.scraper.ats.workday import scrape
+    jobs, rejected = await scrape("https://nvidia.wd5.myworkdayjobs.com/Site", debug=True)
+    assert jobs == [] and "Workday is down" in rejected[0]["reason"]
 
 
 @pytest.mark.asyncio

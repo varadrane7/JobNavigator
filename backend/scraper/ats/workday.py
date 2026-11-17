@@ -8,7 +8,7 @@ import httpx
 
 from backend.scraper._shared.urls import host_matches
 from backend.scraper._shared.filters import _validate_job
-from backend.scraper._shared.errors import raise_if_board_gone
+from backend.scraper._shared.errors import BoardUnavailableError, raise_if_board_gone
 from backend.analyzer.location import COUNT_ONLY, canonical, group_pieces
 
 logger = logging.getLogger("jobnavigator.scraper.ats.workday")
@@ -182,6 +182,16 @@ def _split_facet(options, applied: dict, total: int):
     return min(candidates, key=rank)
 
 
+def _not_json_reason(resp) -> str:
+    """Why a 200 from the jobs API held no JSON, in words for the scrape log."""
+    text = resp.text if isinstance(resp.text, str) else ""
+    where = str(getattr(resp, "url", "") or "")
+    if ("currently unavailable" in text.lower() or "maintenance-page" in where
+            or "/drs/outage" in where):
+        return "Workday is down for this company (its maintenance page answered)"
+    return "Workday answered with a page instead of job data"
+
+
 async def _walk(client, api_url: str, facets: dict, label: str, debug: bool, rejected: list,
                 search_text: str = ""):
     """Page through one search. Returns (status of the first page, total, facets, postings)."""
@@ -197,8 +207,28 @@ async def _walk(client, api_url: str, facets: dict, label: str, debug: bool, rej
             if debug:
                 rejected.append({"title": "(none)", "url": api_url, "selector": "workday_api",
                                  "reason": f"HTTP {resp.status_code}"})
+            elif resp.status_code >= 500 or resp.status_code == 429:
+                # Also half way through a board: a partial read would look like a full one
+                # and count its missing postings as closed.
+                raise BoardUnavailableError(
+                    f"Workday is not answering for {label} (HTTP {resp.status_code}); "
+                    f"nothing was read, the next run tries again")
             return (resp.status_code if offset == 0 else 200), total or 0, first_facets, postings
-        data = json.loads(resp.text)
+        try:
+            data = json.loads(resp.text)
+            if not isinstance(data, dict):
+                raise ValueError("not an object")
+        except ValueError:
+            # During an outage or its maintenance window Workday redirects every request of
+            # the tenant, this API included, to an HTML "Workday is currently unavailable" page
+            # that answers 200.
+            reason = _not_json_reason(resp)
+            logger.warning(f"Workday API: {label}: {reason}")
+            if debug:
+                rejected.append({"title": "(none)", "url": api_url, "selector": "workday_api",
+                                 "reason": reason})
+                return 503, total or 0, first_facets, postings
+            raise BoardUnavailableError(f"{reason} ({label}); nothing was read, the next run tries again")
         if total is None:
             total = data.get("total", 0) or 0
             first_facets = data.get("facets") or []
