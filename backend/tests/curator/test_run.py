@@ -265,25 +265,15 @@ async def test_us_lane_still_drops_jobs_abroad(seeded):
     assert "BerlinCo" not in {t["company"] for t in out["top"]}
 
 
-def test_tailor_base_is_the_best_scoring_base():
+def test_job_out_resolves_an_old_tailored_copy_and_offers_no_tailor_base():
     from types import SimpleNamespace
     from backend.curator.routes import _job_out
-    gen, sec, copy = "g-1", "s-1", "t-1"
-    resumes = {gen: ("General", True, None), sec: ("Security", True, None), copy: ("General → Acme", False, gen)}
-    ids = {"Persona": "persona", "General": gen, "Security": sec}
-
-    def job(best, scores):
-        return SimpleNamespace(id="j-1", short_id=1, curated_rank=1, title="t", company="Acme", url="", location="",
-                               status="new", source="direct", posted_at=None, discovered_at=None, best_cv=best,
-                               best_cv_score=70, cv_scores=scores, salary_min=None, salary_max=None,
-                               h1b_verdict=None, h1b_company_lca_count=None, curation={})
-
-    def base(best, scores):
-        out = _job_out(job(best, scores), ids, resumes, gen, {"j-1": copy})
-        return out["tailor_base_id"], out["tailor_base"]
-
-    assert base("Security", {"Security": 74, "General": 62}) == (sec, "Security")          # older rows: names
-    assert base(sec, {sec: 74, gen: 62}) == (sec, "Security")                              # résumé ids
-    # a tailored copy of General fitting best never pulls the next Tailor back to General
-    assert base("Tailored", {"Tailored": 76, "Security": 74, "General": 62, "Persona": 80}) == (sec, "Security")
-    assert base("Persona", {"Persona": 60}) == (gen, "General")
+    gen, copy = "g-1", "t-1"
+    resumes = {gen: ("General", True, None), copy: ("General -> Acme", False, gen)}
+    job = SimpleNamespace(id="j-1", short_id=1, curated_rank=1, title="t", company="Acme", url="", location="",
+                          status="new", source="direct", posted_at=None, discovered_at=None, best_cv="Tailored",
+                          best_cv_score=70, cv_scores={"Tailored": 76, "General": 62}, salary_min=None,
+                          salary_max=None, h1b_verdict=None, h1b_company_lca_count=None, curation={})
+    out = _job_out(job, {"General": gen}, resumes, gen, {"j-1": copy})
+    assert out["best_cv_id"] == copy and out["best_cv"] == "General -> Acme"
+    assert "tailor_base_id" not in out and "tailor_base" not in out

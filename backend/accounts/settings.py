@@ -39,7 +39,7 @@ INHERIT = "inherit"
 OWN = "own"
 POLICY_MODES = (INHERIT, OWN)
 
-_LLM_FEATURES = ("", "llm_fallback_", "scoring_", "cv_tailor_", "cover_letter_", "autofill_", "email_")
+_LLM_FEATURES = ("", "llm_fallback_", "scoring_", "cover_letter_", "autofill_", "email_")
 
 
 # One API key per provider (3.1): every model slot on a provider uses its key, so switching a
@@ -83,8 +83,7 @@ _SECTIONS = [
     # Process-wide semaphores: one value for the install.
     ("limits", "Parallel limits", OWNER_ONLY, INHERIT, ["scoring", "tailoring", "scheduler"], [
         "scoring_max_concurrent", "tailoring_max_concurrent", "scrape_max_concurrent"]),
-    ("tailoring", "Résumé & tailoring", POLICY, INHERIT, ["tailoring"], [
-        "cv_tailor_prompt", "persona_tailor_prompt", "tailor_auto_quick_score", "resume_template"]),
+    ("tailoring", "Résumé", POLICY, INHERIT, ["tailoring"], ["resume_template"]),
     ("letters", "Cover letters", POLICY, INHERIT, ["letters"], [
         "cover_letter_default_voice", "cover_letter_voice_presets", "cover_letter_prompt",
         "cover_letter_template"]),
@@ -134,7 +133,7 @@ _SECTIONS = [
         "curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore",
         "curate_title_exclude", "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max",
         "curate_max_years", "curate_drop_unlikely_sponsors", "curate_ignore_h1b", "curate_release_hours", "curate_countries", "curate_source_penalty", "curate_max_age_days",
-        "outreach_count", "outreach_network_count",
+        "outreach_count", "outreach_network_count", "outreach_drafts_enabled", "curate_runs_per_day",
         "linkedin_mock_daily_cap", "linkedin_main_daily_cap", "linkedin_cooldown_hours",
         "scout_daily_leads", "scout_min_score", "github_token", "nag_apply_target", "nag_request_target", "nag_calendar"]),
     ("curator_llm", "Curator model", POLICY, INHERIT, ["curator"], [

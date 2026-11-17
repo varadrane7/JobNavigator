@@ -906,7 +906,7 @@ function LogModal({ onClose, onSaved, onJobSaved, pushToast, onDirty }) {
   const [title, setTitle] = useState('')
   const [company, setCompany] = useState('')
   const [resumes, setResumes] = useState([])
-  const [cv, setCv] = useState('')                  // a résumé id: the API takes the name, the tailor call the id
+  const [cv, setCv] = useState('')                  // a résumé id: the API takes the name
   const [status, setStatus] = useState('applied')
   const [when, setWhen] = useState(() => { const t = new Date(), p = (n) => String(n).padStart(2, '0'); return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}` })   // local date, not UTC
   const [notes, setNotes] = useState('')
@@ -963,9 +963,7 @@ function LogModal({ onClose, onSaved, onJobSaved, pushToast, onDirty }) {
     return { jobId: data.job_id, done: () => onSaved(data.id) }
   }
 
-  // `tailorFrom` is a base résumé row {id, name}, or null for a plain save. The row is
-  // saved first either way, because tailoring needs the job id.
-  const submit = async (tailorFrom) => {
+  const submit = async () => {
     if (!title.trim() || !company.trim() || !url.trim()) {
       pushToast({ kind: 'error', msg: !url.trim() ? 'The posting URL is required — it identifies the job' : 'Title and company are required' })
       const first = [url, title, company].findIndex((v) => !v.trim()); document.querySelectorAll('input[placeholder]')[first]?.focus()
@@ -973,14 +971,7 @@ function LogModal({ onClose, onSaved, onJobSaved, pushToast, onDirty }) {
     }
     setBusy(true)
     try {
-      const { jobId, done } = await persist(tailorFrom?.name || cvName)
-      if (tailorFrom && jobId) {
-        // A failed tailor must not lose the row that is already saved — report it and go on.
-        try {
-          await api.post('/resumes/tailor', { base_resume_id: tailorFrom.id, job_id: jobId })
-          pushToast({ kind: 'progress', msg: `Tailoring ${tailorFrom.name} for "${title.trim()}"…` })
-        } catch (e) { console.error(e); pushToast({ kind: 'error', msg: 'Saved, but tailoring could not start' + errSuffix(e) }) }
-      }
+      const { done } = await persist(cvName)
       done()
     } catch (e) {
       const existing = e.response?.status === 409 ? e.response?.data?.detail?.application_id : null
@@ -1014,25 +1005,17 @@ function LogModal({ onClose, onSaved, onJobSaved, pushToast, onDirty }) {
               <Input value={company} onChange={setCompany} placeholder="Acme" ariaLabel="Company" />
             </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <Label>{isApp ? 'Applied with' : 'Tailor from'}</Label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5 }}>
-              {resumes.map((r) => {
-                const on = cv === r.id
-                return (
-                  <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                    <Pill size="sm" on={on} onClick={() => setCv(on ? '' : r.id)}>{r.name}</Pill>
-                    {/* the trigger sits opposite its résumé and saves first, since tailoring needs the job id */}
-                    <Pill size="sm" disabled={busy} onClick={() => { setCv(r.id); submit(r) }}
-                      title={`Save, then tailor a copy of ${r.name} for this job`}>
-                      <span style={{ color: 'var(--ai)' }}>✦</span>Tailor
-                    </Pill>
-                  </div>
-                )
-              })}
+          {isApp && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Label>Applied with</Label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5 }}>
+                {resumes.map((r) => {
+                  const on = cv === r.id
+                  return <Pill key={r.id} size="sm" on={on} onClick={() => setCv(on ? '' : r.id)}>{r.name}</Pill>
+                })}
+              </div>
             </div>
-            <Helper>✦ saves the row first, then tailors a copy of that résumé in the background.</Helper>
-          </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             <Label>Status</Label>
             <Segmented value={status} onChange={setStatus} ariaLabel="Status"

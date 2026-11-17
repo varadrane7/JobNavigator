@@ -239,7 +239,7 @@ def test_member_own_models_without_a_key_resolves_empty(test_db, owner_key):
     _policy(test_db, b, "models", "own")
     _own(test_db, b, "llm_provider", "openrouter")
     with use_account(b):
-        for f in ("", "scoring", "cv_tailor", "cover_letter", "autofill", "email"):
+        for f in ("", "scoring", "cover_letter", "autofill", "email"):
             assert resolve_llm_config(f, db=test_db)["api_key"] == "", f
     with use_account(a):
         assert resolve_llm_config("", db=test_db)["api_key"] == "sk-owner"

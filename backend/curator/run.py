@@ -46,7 +46,8 @@ def _settings() -> dict:
     keys = ("curate_count", "curate_window_hours", "curate_llm_pool", "curate_auto_ignore", "curate_title_exclude",
             "curate_company_exclude", "curate_weights", "target_base_min", "target_base_max", "outreach_count",
             "outreach_network_count", "curate_max_years", "curate_drop_unlikely_sponsors", "curate_ignore_h1b",
-            "curate_release_hours", "curate_countries", "curate_source_penalty", "curate_max_age_days")
+            "curate_release_hours", "curate_countries", "curate_source_penalty", "curate_max_age_days",
+            "curate_runs_per_day")
     db = SessionLocal()
     try:
         rows = {k: get_setting(db, k) for k in keys}
@@ -86,6 +87,9 @@ def _settings() -> dict:
         "source_penalty": {str(k): v for k, v in (j("curate_source_penalty", {}) or {}).items()
                            if isinstance(v, (int, float))} if isinstance(j("curate_source_penalty", {}), dict) else {},
         "max_age_days": max(1, i("curate_max_age_days", RELEASE_MAX_AGE_DAYS)),
+        # how many times a day the curator runs (curate_cron): outreach counts are per DAY and are shared out
+        # across the runs, so a second window does not double the people search
+        "runs_per_day": max(1, i("curate_runs_per_day", 1)),
     }
 
 
@@ -383,12 +387,16 @@ def write_results(top: list[dict], pool_ids: list, auto_ignore: bool, dropped: d
     top_ids = {j["id"] for j in top}
     db = SessionLocal()
     try:
+        # A second run on the same day (curate_cron twice a day) continues the day's numbering, so the Today
+        # list holds both windows in order and no two picks share a rank. The apply window still uses the
+        # rank within this run.
+        offset = (db.query(func.max(Job.curated_rank)).filter(Job.curated_on == today).scalar() or 0)
         for i, j in enumerate(top, 1):
             row = db.get(Job, j["id"])
             if row is None or row.status != "new":
                 continue
             row.status, row.saved = "saved", True
-            row.curated_on, row.curated_rank = today, i
+            row.curated_on, row.curated_rank = today, offset + i
             row.curation = {"score": j["score"], "parts": j["parts"], "reason": j["reason"],
                             "apply_window": scoring.apply_window(i, j["parts"]["fresh"]), "intel": j["intel"],
                             "released": (row.curation or {}).get("released") or 0}
@@ -404,6 +412,29 @@ def write_results(top: list[dict], pool_ids: list, auto_ignore: bool, dropped: d
         return ignored
     finally:
         db.close()
+
+
+def _drafts_enabled() -> bool:
+    from backend.curator.people import drafts_enabled
+    return drafts_enabled()
+
+
+def per_run_quota(daily: int, runs: int, found_today: int) -> int:
+    """People to look for in this run. One run a day: the whole daily count, as before. Several: an even
+    share of it, never more than what is left of the day's count, so the people search (and the LinkedIn
+    budget behind it) does not grow with the number of windows."""
+    if runs <= 1:
+        return daily
+    return max(0, min(-(-daily // runs), daily - found_today))
+
+
+def _found_today(db, today, purpose: str) -> int:
+    q = db.query(Contact).filter(Contact.found_on == today)
+    if purpose == "network":
+        # the curator's own people only: lead-scout leads are also purpose "network" but carry a score,
+        # and must not eat the curator's quota
+        return q.filter(Contact.purpose == "network", Contact.lead_kind == "network", Contact.score.is_(None)).count()
+    return q.filter(or_(Contact.purpose == "job", Contact.purpose.is_(None))).count()
 
 
 def _with_db(fn, *args):
@@ -498,6 +529,7 @@ async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[d
     from backend.curator.linkedin_people import LinkedInPeople
     from backend.curator.people import draft, find_people, guess_email
     me, profile, _ = _me()
+    drafts = await asyncio.to_thread(_drafts_enabled)     # once per run, not once per person
     today = local_today()
     found, seen_companies = [], set()
     async with LinkedInPeople() as li:
@@ -520,7 +552,7 @@ async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[d
                 continue
             for p in people:
                 email, conf = guess_email(p["name"], it)
-                d = await draft(p, j["company"], j, me, profile)
+                d = await draft(p, j["company"], j, me, profile, drafts)
                 found.append({"job_id": j["id"], "company": j["company"], "name": p["name"],
                               "title": p.get("headline"), "kind": p.get("kind"), "linkedin_url": p["url"],
                               "location": p.get("location"),
@@ -587,6 +619,7 @@ async def find_network_contacts(companies: list[str], want_total: int, abroad: s
     if want_total <= 0 or not companies:
         return []
     me, profile, contact = _me()
+    drafts = await asyncio.to_thread(_drafts_enabled)     # once per run, not once per person
     areas = profile_areas(profile) or ["backend"]
     city = (contact.get("city") or "").strip() or None
     region = parse_location(", ".join(x for x in (contact.get("city"), contact.get("state")) if x)).get("region") if city else None
@@ -610,7 +643,7 @@ async def find_network_contacts(companies: list[str], want_total: int, abroad: s
                 continue
             for p in people:
                 email, conf = guess_email(p["name"], it)
-                d = await draft_network(p, company, it, me, profile)
+                d = await draft_network(p, company, it, me, profile, drafts)
                 found.append({"job_id": None, "company": company, "name": p["name"], "title": p.get("headline"),
                               "kind": p.get("kind"), "linkedin_url": p["url"], "location": p.get("location"),
                               "email": email, "email_confidence": conf, "source": p.get("source"),
@@ -712,21 +745,30 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     ignored = await asyncio.to_thread(write_results, top, pool_ids, cfg["auto_ignore"], dropped)
 
     contacts, network, again = [], [], []
+    today_ = local_today()
+    outreach_n = await asyncio.to_thread(
+        _with_db, lambda db: per_run_quota(cfg["outreach"], cfg["runs_per_day"], _found_today(db, today_, "job")))
+    network_n = await asyncio.to_thread(
+        _with_db, lambda db: per_run_quota(cfg["network"], cfg["runs_per_day"], _found_today(db, today_, "network")))
     _OUTREACH_ERRORS.clear()
     from backend.curator import people as _people
     _people.NO_PROFILES.clear()
-    if outreach and cfg["outreach"] > 0:
+    drafts_off = outreach and not await asyncio.to_thread(_people.drafts_enabled)
+    if drafts_off:
+        logger.info("curator: outreach drafts are off for this profile (outreach_drafts_enabled=false); "
+                    "people are found and stored without notes or emails")
+    if outreach and outreach_n > 0:
         # people never contacted come back first, taking up to half the day's slots
         again = await asyncio.to_thread(_with_db, resurface_contacts, local_today(), cfg["release_hours"],
-                                        -(-cfg["outreach"] // 2), [j["company"] for j in top])
-    if outreach and cfg["outreach"] - len(again) > 0 and top:
+                                        -(-outreach_n // 2), [j["company"] for j in top])
+    if outreach and outreach_n - len(again) > 0 and top:
         try:
-            contacts = await find_contacts(top, intel, cfg["outreach"] - len(again))
+            contacts = await find_contacts(top, intel, outreach_n - len(again))
         except Exception as e:
             logger.exception(f"curator outreach failed: {e}")
             _OUTREACH_ERRORS.append(f"outreach: {e}")
     # Job slots nobody filled go to people at companies with no posting for the user today.
-    network_want = cfg["network"] + max(0, cfg["outreach"] - len(again) - len(contacts)) if cfg["network"] > 0 else 0
+    network_want = network_n + max(0, outreach_n - len(again) - len(contacts)) if network_n > 0 else 0
     if outreach and network_want > 0:
         try:
             abroad = {"abroad": cfg["countries"][0]} if relocation else {}
@@ -744,6 +786,8 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
                "llm_pool": len(shortlist), "saved": len(top), "ignored": ignored, "contacts": len(contacts),
                "network": len(network), "released": released["released"], "retired": released["retired"],
                "resurfaced": len(again)}
+    if drafts_off:
+        summary["outreach_drafts"] = "off: no notes or emails drafted"
     if _people.NO_PROFILES:
         _OUTREACH_ERRORS.insert(0, f"web search returned no LinkedIn profiles for {len(set(_people.NO_PROFILES))} "
                                    "companies (the search engines are not answering site: queries)")

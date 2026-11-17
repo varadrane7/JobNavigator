@@ -171,67 +171,6 @@ def test_on_save_auto_score_meta(client, test_db):
         gate.set()
 
 
-def _patch_tailor(monkeypatch, gate):
-    import backend.api.routes_resumes as rr
-
-    async def _slow(**kw):
-        await gate.wait()
-    monkeypatch.setattr(rr, "_tailor_impl", _slow, raising=False)
-
-
-def test_tailor_meta_carries_base_name_and_replaces_false(client, test_db, monkeypatch):
-    set_setting(test_db, "cv_tailor_prompt", "do it")
-    base = make_resume(test_db, name="PM")
-    job = make_job(test_db, description="JD")
-    gate = asyncio.Event()
-    _patch_tailor(monkeypatch, gate)
-    try:
-        resp = client.post("/api/resumes/tailor",
-                           json={"base_resume_id": str(base.id), "job_id": str(job.id)})
-        assert resp.status_code == 202
-        data = client.get(f"/api/monitor/in-flight?detail=1&job_ids={job.id}").json()
-        assert data[str(job.id)][0]["meta"] == {"base_name": "PM", "replaces": False}
-    finally:
-        gate.set()
-
-
-def test_tailor_meta_replaces_true_when_a_copy_exists(client, test_db, monkeypatch):
-    from backend.models.db import Resume
-    set_setting(test_db, "cv_tailor_prompt", "do it")
-    base = make_resume(test_db, name="PM")
-    job = make_job(test_db, description="JD")
-    test_db.add(Resume(name="PM → Acme", is_base=False, job_id=job.id,
-                       json_data={"header": {"name": "A"}}))
-    test_db.commit()
-    gate = asyncio.Event()
-    _patch_tailor(monkeypatch, gate)
-    try:
-        resp = client.post("/api/resumes/tailor",
-                           json={"base_resume_id": str(base.id), "job_id": str(job.id)})
-        assert resp.status_code == 202
-        data = client.get(f"/api/monitor/in-flight?detail=1&job_ids={job.id}").json()
-        assert data[str(job.id)][0]["meta"] == {"base_name": "PM", "replaces": True}
-    finally:
-        gate.set()
-
-
-def test_tailor_from_persona_meta_base_name(client, test_db, monkeypatch):
-    from backend.models.db import Persona
-    set_setting(test_db, "cv_tailor_prompt", "do it")
-    test_db.add(Persona(id=1, resume_content={"summary": "P"}))
-    test_db.commit()
-    job = make_job(test_db, description="JD")
-    gate = asyncio.Event()
-    _patch_tailor(monkeypatch, gate)
-    try:
-        resp = client.post("/api/resumes/tailor",
-                           json={"base_resume_id": "persona", "job_id": str(job.id)})
-        assert resp.status_code == 202
-        data = client.get(f"/api/monitor/in-flight?detail=1&job_ids={job.id}").json()
-        assert data[str(job.id)][0]["meta"]["base_name"] == "Persona"
-    finally:
-        gate.set()
-
 
 def test_score_check_meta_labels_a_job_linked_copy_tailored(client, test_db, monkeypatch):
     """POST /api/resumes/{id}/score-check tags the run with the cv_scores label + depth."""

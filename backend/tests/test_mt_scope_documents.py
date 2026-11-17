@@ -89,16 +89,12 @@ def test_patch_resume_cannot_point_at_another_accounts_rows(client, test_db, b_r
     assert client.patch(f"/api/resumes/{own.id}", json={"job_id": None}).status_code == 200
 
 
-def test_copy_and_tailor_refuse_another_accounts_rows(client, test_db, b_rows):
+def test_copy_refuses_another_accounts_rows(client, test_db, b_rows):
     own_job = make_job(test_db, description="x" * 200)
     own_base = make_resume(test_db, name="A base", json_data={"summary": "a"})
     assert client.post("/api/resumes/copy", json={
         "base_resume_id": str(b_rows["resume"]), "job_id": str(own_job.id)}).status_code == 404
     assert client.post("/api/resumes/copy", json={
-        "base_resume_id": str(own_base.id), "job_id": str(b_rows["job"])}).status_code == 404
-    assert client.post("/api/resumes/tailor", json={
-        "base_resume_id": str(b_rows["resume"]), "job_id": str(own_job.id)}).status_code == 404
-    assert client.post("/api/resumes/tailor", json={
         "base_resume_id": str(own_base.id), "job_id": str(b_rows["job"])}).status_code == 404
 
 

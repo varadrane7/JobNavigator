@@ -38,11 +38,13 @@ SETTINGS = {
     "curate_countries": json.dumps(COUNTRIES),
     "curate_count": "20",
     "outreach_count": "8",
+    "outreach_drafts_enabled": "false",   # another agent writes this profile's notes; people are still found and stored
     "outreach_network_count": "4",
 }
 VISA_ROUTE = ("MS in Computer Science (NJIT, May 2026). Eligible for an EU Blue Card at the reduced "
               "threshold (recent graduate, IT shortage occupation); no German needed for the visa. "
-              "Can apply for the work visa from the US, where I live on F-1 OPT.")
+              "Can apply for the work visa from the US, where I currently live.")
+# a script default; the owner's own status lives in the profile (networking.visa_note, work_auth)
 TITLE_EXCLUDE = ["intern", "junior", "associate", "working student", "werkstudent", "praktikum",
                  "praktikant", "ausbildung", "trainee"]
 

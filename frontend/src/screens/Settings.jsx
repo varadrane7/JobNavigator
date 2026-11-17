@@ -69,12 +69,12 @@ const PROVIDER_KEY = { claude_api: 'anthropic_api_key', openai: 'openai_api_key'
 const keyHelp = (prov, member) => `Saved for ${PROVIDER_LABEL[prov] || prov}: every model slot on it uses this key.`
   + (member || !PROVIDER_KEY[prov] ? '' : ` Empty uses ${PROVIDER_KEY[prov].toUpperCase()} from .env.`)
 // Provider settings whose value 'claude_code' makes the Claude Code token row relevant.
-const CLAUDE_CODE_SLOTS = ['llm_provider', 'scoring_llm_provider', 'llm_fallback_provider', 'cv_tailor_llm_provider',
+const CLAUDE_CODE_SLOTS = ['llm_provider', 'scoring_llm_provider', 'llm_fallback_provider',
   'cover_letter_llm_provider', 'autofill_llm_provider', 'email_llm_provider']
-const SLOT_NAMES = { llm_provider: 'Primary', scoring_llm_provider: 'Scoring', llm_fallback_provider: 'Scoring fallback', cv_tailor_llm_provider: 'Tailoring',
+const SLOT_NAMES = { llm_provider: 'Primary', scoring_llm_provider: 'Scoring', llm_fallback_provider: 'Scoring fallback',
   cover_letter_llm_provider: 'Cover letters', autofill_llm_provider: 'Autofill', email_llm_provider: 'Email classification' }
 // provider settings whose base_url field is llm_local_base_url — one shared setting, not per-section
-const LOCAL_PROVIDER_KEYS = ['llm_provider', 'llm_fallback_provider', 'scoring_llm_provider', 'cv_tailor_llm_provider', 'cover_letter_llm_provider', 'autofill_llm_provider', 'email_llm_provider', 'curator_llm_provider', 'curator_fallback_llm_provider']
+const LOCAL_PROVIDER_KEYS = ['llm_provider', 'llm_fallback_provider', 'scoring_llm_provider', 'cover_letter_llm_provider', 'autofill_llm_provider', 'email_llm_provider', 'curator_llm_provider', 'curator_fallback_llm_provider']
 
 // The value rows' fields are `Input` now (adornment slot and all), so the box
 // lives in ui.jsx with every other field. What is left here is the type these
@@ -369,7 +369,7 @@ export default function Settings() {
       setS(values); setMeta(metaMap || null); setEffective(eff || {}); setDefaults(d.data || {}); setEfforts(e.data?.efforts || {})
       // an override row starts open when it actually has a provider or an effort set
       const o = {}
-      for (const k of ['scoring_llm', 'llm_fallback', 'cv_tailor_llm', 'cover_letter_llm', 'autofill_llm', 'email_llm', 'curator_llm', 'curator_fallback_llm']) {
+      for (const k of ['scoring_llm', 'llm_fallback', 'cover_letter_llm', 'autofill_llm', 'email_llm', 'curator_llm', 'curator_fallback_llm']) {
         o[k] = !!((s.data || {})[`${k}_provider`] || (s.data || {})[`${k}_effort`])
       }
       setOvr(o)
@@ -595,7 +595,6 @@ export default function Settings() {
         LLM('Scoring', 'Model that scores new jobs against your résumés.', 'scoring_llm'),
         LLM('Scoring fallback', 'Retries scoring once on error or rate limit — scoring only.', 'llm_fallback',
           { info: 'Used only when the scoring call fails or is rate-limited. One retry, then the job stays unscored until the next run. Choose a cheap model from a different provider than the primary.' }),
-        LLM('Tailoring', 'Model that rewrites résumé bullets for a posting.', 'cv_tailor_llm'),
         LLM('Cover letters', 'Model that drafts letters from résumé + posting + Persona.', 'cover_letter_llm'),
         LLM('Autofill', 'Model that answers application-form questions in the extension.', 'autofill_llm'),
         LLM('Email classification', 'Model that sorts Gmail replies into application events.', 'email_llm'),
@@ -616,14 +615,10 @@ export default function Settings() {
         E('Light output schema', 'JSON shape for Light runs.', 'scoring_output_light', { sub: 'CV_NAMES_HERE expands to your résumé names' }),
         E('Full output schema', 'JSON shape for Full runs.', 'scoring_output_full', { sub: 'CV_NAMES_HERE expands to your résumé names' }),
       ]],
-      ['tailoring', '', 'Résumé & tailoring', '', [
+      ['tailoring', '', 'Résumé', '', [
         SEL('Default résumé template', 'The template a new résumé starts with.', 'resume_template', resTplOpts, { w: '260px', dflt: 'last_selected',
-          info: 'Last selected: the template you last picked in the résumé editor (yours only, never another account’s). A template: every new résumé gets it. Applies to a blank or imported résumé and one tailored from Persona; a copy tailored from a résumé keeps that résumé’s template. Before any pick, the first template on the list.' }),
-        E('Résumé tailoring prompt', 'Default: rewrites only bullets that the job description makes relevant.', 'cv_tailor_prompt', { sub: 'placeholders: {job_description} {resume_json}' }),
-        E('Persona tailoring prompt', 'Default: uses the Persona résumé content; falls back to the résumé prompt if empty.', 'persona_tailor_prompt', { sub: 'placeholders: {job_description} {persona_json}' }),
-        B('Max parallel tailors', 'Tailoring and cover-letter generation share this limit.', 'tailoring_max_concurrent', { mono: true, int: true, w: '135px' }),
-        SEL('Auto-score after tailoring', 'Scores a tailored résumé as soon as tailoring finishes.', 'tailor_auto_quick_score',
-          [['off', "Off — don't score after tailoring"], ['light', 'Light — score only'], ['full', 'Full — score + keywords + report']], { w: '260px', dflt: 'light' }),
+          info: 'Last selected: the template you last picked in the résumé editor (yours only, never another account’s). A template: every new résumé gets it. Applies to a blank or imported résumé; a copy of a résumé keeps that résumé’s template. Before any pick, the first template on the list.' }),
+        B('Max parallel cover letters', 'Cover letters generated at once; the rest wait their turn.', 'tailoring_max_concurrent', { mono: true, int: true, w: '135px' }),
       ]],
       ['letters', '', 'Cover letters', '', [
         SEL('Default voice', 'The list comes from the voice presets below.', 'cover_letter_default_voice', voiceOpts, { w: '260px' }),
@@ -714,6 +709,8 @@ export default function Settings() {
         LLM('Curator model', 'Company research and outreach drafts. Fit scoring stays on the Scoring model.', 'curator_llm'),
         LLM('Curator fallback', 'Used when the curator model fails or hits its limit; the local model is the last resort.', 'curator_fallback_llm'),
         B('Curator parallel calls', 'Company research and drafts in parallel.', 'curate_concurrency', { mono: true, int: true, w: '135px' }),
+        B('Runs per day', 'How many times a day the curator runs (the hours in the curator schedule). People per day below stay daily totals shared across the runs.', 'curate_runs_per_day', { mono: true, int: true, w: '135px' }),
+        SW('Draft outreach', 'Write a LinkedIn note, cold email and talking points for each person found.', 'Off — people are found and listed, nothing is drafted. Drafts already written stay.', 'outreach_drafts_enabled', { dflt: true }),
         B('People per day', 'Founders, hiring managers and recruiters found for the top companies.', 'outreach_count', { mono: true, int: true, w: '135px' }),
         B('People to know per day', 'Engineering leaders at good companies with no posting for you today; job slots left unused add to this.', 'outreach_network_count', { mono: true, int: true, w: '135px' }),
         B('Max years asked', 'A posting that asks for this many years of experience or more is dropped.', 'curate_max_years', { mono: true, int: true, w: '135px' }),

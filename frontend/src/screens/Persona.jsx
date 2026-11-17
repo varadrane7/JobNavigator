@@ -12,7 +12,7 @@ import {
 } from './ResumeSections'
 
 // The Persona is the singleton applicant record, in two independent halves:
-// left · resume_content (same shape as a Resume's json_data, edited with ResumeSections.jsx; feeds tailoring, cover letters, scoring).
+// left · resume_content (same shape as a Resume's json_data, edited with ResumeSections.jsx; feeds cover letters, scoring).
 // right · autofill nodes (contact/demographics/work_auth/preferences/compensation, read by the extension) plus the Q&A bank.
 //
 // Every node write spreads the existing node: `preferences` carries keys no control shows
@@ -160,7 +160,7 @@ function ColumnHead({ title, help }) {
 const NET_TEXT = [
   ['github_user', 'GitHub user', 'Projects sync from this account’s repositories'],
   ['blog_rss', 'Blog RSS', 'Latest posts become talking points'],
-  ['visa_note', 'Work authorization', 'e.g. F-1 STEM OPT; will need H-1B sponsorship'],
+  ['visa_note', 'Work authorization', 'Your current status and whether you will need sponsorship'],
 ]
 const NET_LISTS = [
   ['target_roles', 'Target roles', 'backend engineer, AI engineer'],
@@ -451,14 +451,14 @@ export default function Persona() {
         {/* left — résumé content, edited with the Résumé editor's own components */}
         <div style={{ flex: 1.1, minWidth: 0, borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <ColumnHead title="Résumé content"
-            help="Your full work history, summary, skills and achievements. Used for tailored résumés, cover letters and job scoring." />
+            help="Your full work history, summary, skills and achievements. Used for cover letters and job scoring." />
           <div className="v2-scroll" style={{ flex: 1, overflow: 'auto', padding: '0 26px 24px', display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 }}>
             {SECTION_ORDER.map((name) => (
               <SectionShell key={name} name={name} count={counts[name]} open={sections.has(name)} onToggle={() => toggleSection(name)}>
                 <SectionEditor name={name} data={resume} setField={setField} mutate={mutate}
                   onError={(msg) => pushToast({ kind: 'error', msg })}
                   onRemoved={(msg, undo) => pushToast({ kind: 'undo', msg, action: 'Undo', onAction: undo })}
-                  pageHint={false} emptyNote="Tailored résumés use whatever you add here." />
+                  pageHint={false} emptyNote="Cover letters and scoring use whatever you add here." />
               </SectionShell>
             ))}
           </div>

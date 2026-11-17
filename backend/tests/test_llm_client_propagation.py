@@ -1,4 +1,4 @@
-"""Tests that call_llm/call_email_llm/call_cv_tailor_llm return dicts and pass cached_prefix through."""
+"""Tests that call_llm/call_email_llm/call_cover_letter_llm return dicts and pass cached_prefix through."""
 import pytest
 from unittest.mock import AsyncMock, patch
 

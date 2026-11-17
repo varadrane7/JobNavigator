@@ -11,13 +11,13 @@ def _seed_primary_only(db):
     """Primary set, every per-feature override empty — the shipped state."""
     for k, v in PRIMARY.items():
         db.add(Setting(key=k, value=v))
-    for feature in ("email", "cv_tailor", "cover_letter", "autofill", "scoring"):
+    for feature in ("email", "cover_letter", "autofill", "scoring"):
         for suffix in ("provider", "model", "api_key"):
             db.add(Setting(key=f"{feature}_llm_{suffix}", value=""))
     db.commit()
 
 
-@pytest.mark.parametrize("feature", ["", "email", "cv_tailor", "cover_letter", "autofill", "scoring"])
+@pytest.mark.parametrize("feature", ["", "email", "cover_letter", "autofill", "scoring"])
 def test_resolve_falls_back_to_primary(test_db, feature):
     from backend.analyzer.llm_client import resolve_llm_config
 
@@ -43,7 +43,6 @@ def test_resolve_prefers_feature_override(test_db):
 @pytest.mark.parametrize("feature,purpose,fn_name", [
     ("", "pdf", "call_llm"),
     ("email", "email", "call_email_llm"),
-    ("cv_tailor", "tailor", "call_cv_tailor_llm"),
     ("cover_letter", "cover_letter", "call_cover_letter_llm"),
     ("autofill", "autofill", "call_autofill_llm"),
 ])

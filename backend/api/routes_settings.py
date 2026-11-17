@@ -209,7 +209,13 @@ def get_sections(db: Session = Depends(get_db)):
 @router.patch("")
 def update_settings(updates: dict, db: Session = Depends(get_db)):
     """Update one or more settings; only keys the app reads are writable (unknown -> 400 as a group), and values are validated (integers non-negative, `*_cron` a parseable 5-field expression, enums known) since a bad one could crash configure_scheduler() and prevent the backend from starting. The owner writes install values; a member writes its own values, and only in sections it owns (else 403, nothing written)."""
-    from backend.seed import invalid_setting_values, unknown_setting_keys
+    from backend.seed import REMOVED_SETTING_KEYS, invalid_setting_values, unknown_setting_keys
+
+    # keys of removed features: ignored, so an old client that still sends one is not refused
+    ignored = sorted(k for k in updates if k in REMOVED_SETTING_KEYS)
+    updates = {k: v for k, v in updates.items() if k not in REMOVED_SETTING_KEYS}
+    if ignored and not updates:
+        return {"updated": [], "warnings": [], "ignored": ignored}
 
     unknown = unknown_setting_keys(updates.keys())
     if unknown:

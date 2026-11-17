@@ -52,8 +52,9 @@ Evidence: {evidence}
 Score how likely this person is to help the sender get hired (hire them, refer them, introduce them,
 or give useful feedback on a project) within the next month. Consider: are they hiring or able to
 refer for roles the sender fits (early-career backend / AI engineering), is the company likely to
-sponsor an F-1 STEM OPT holder later (H-1B) or is the role abroad with a work visa, does a sender
-project match their work, is there a shared school or employer.
+support the sender's work authorization as stated under "Work authorization" in the sender profile
+above (sponsorship, or a work visa when the role is abroad; if none is stated, do not assume one),
+does a sender project match their work, is there a shared school or employer.
 
 Return JSON:
 {{"score": <0-100>,
@@ -62,6 +63,12 @@ Return JSON:
   "talking_points": ["<2-3 specific openers tied to their work or post and the sender's projects>"],
   "project": "<name of the one sender project to show them, or empty>",
   "note": "<LinkedIn connection note, under 280 characters, specific, ends with a light ask>"}}"""
+
+# With outreach drafts off for the profile the model is not asked for talking points or a note.
+_PROMPT_NO_DRAFTS = _PROMPT.replace(
+    """  "talking_points": ["<2-3 specific openers tied to their work or post and the sender's projects>"],\n""", "").replace(
+    """  "project": "<name of the one sender project to show them, or empty>",\n  "note": "<LinkedIn connection note, under 280 characters, specific, ends with a light ask>"}}""",
+    """  "project": "<name of the one sender project to show them, or empty>"}}""")
 
 
 # ── candidate discovery ──────────────────────────────────────────────────────
@@ -154,9 +161,9 @@ async def _searx_leads(queries: list[str], kind: str, n: int = 10) -> list[dict]
 
 # ── scoring and saving ───────────────────────────────────────────────────────
 
-async def score_lead(c: dict, brief: str) -> dict | None:
+async def score_lead(c: dict, brief: str, drafts: bool = True) -> dict | None:
     from backend.curator.llm import ask_json
-    out = await ask_json(_PROMPT.format(
+    out = await ask_json((_PROMPT if drafts else _PROMPT_NO_DRAFTS).format(
         brief=brief, kind=c.get("lead_kind"), name=c.get("name"), headline=c.get("headline") or "",
         company=c.get("company") or "unknown", location=c.get("location") or "unknown",
         evidence=(c.get("evidence") or "")[:600]), _SYSTEM, "scout_lead_score", max_tokens=700)
@@ -166,6 +173,8 @@ async def score_lead(c: dict, brief: str) -> dict | None:
         score = int(out.get("score") or 0)
     except (TypeError, ValueError):
         score = 0
+    if not drafts:
+        out = {**out, "talking_points": None, "note": None}
     tp = out.get("talking_points")
     return {**c, "score": max(0, min(100, score)), "kind": out.get("kind") or None,
             "why": (out.get("why") or "")[:500],
@@ -265,6 +274,11 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
         return summary
 
     llm.reset_run()
+    from backend.curator.people import drafts_enabled
+    drafts = drafts_enabled()
+    if not drafts:
+        logger.info("scout: outreach drafts are off for this profile; leads are scored without notes or talking points")
+        summary["drafts"] = "off"
     q = plan_queries(net, contact)
     cands: list[dict] = []
     async with LinkedInPeople() as li:
@@ -304,7 +318,7 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
                 seen.add(c["url"])
                 uniq.append(c)
         summary["candidates"] = len(uniq)
-        scored = await asyncio.gather(*(score_lead(c, brief) for c in uniq[:MAX_SCORED]), return_exceptions=True)
+        scored = await asyncio.gather(*(score_lead(c, brief, drafts) for c in uniq[:MAX_SCORED]), return_exceptions=True)
         best = sorted((s for s in scored if isinstance(s, dict) and s["score"] >= _min_score()),
                       key=lambda s: -s["score"])[:want]
         summary["scored"] = sum(1 for s in scored if isinstance(s, dict))

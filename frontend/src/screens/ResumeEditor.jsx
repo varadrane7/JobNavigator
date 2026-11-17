@@ -90,7 +90,6 @@ export default function ResumeEditor() {
   })
   const [tplOpen, setTplOpen] = useState(false)
   const [fmtOpen, setFmtOpen] = useState(false)
-  const [tailorOpen, setTailorOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [reviewed, setReviewed] = useState(false)   // tailoring changes acknowledged for this copy
   const [pdfErr, setPdfErr] = useState(false)      // last preview render failed
@@ -106,10 +105,8 @@ export default function ResumeEditor() {
   const [confirm, setConfirm] = useState(null)   // v2 dialog, not window.confirm
   const [jobErr, setJobErr] = useState(false)   // the linked job failed to load
   const [parentName, setParentName] = useState(null)   // the base this copy came from
-  const [tailorChain, setTailorChain] = useState('light')   // 'light' | 'full' | null
   const saveTimer = useRef(null)
   const pdfTimer = useRef(null)
-  const pendingRef = useRef([])   // [{baseId, jobId, company, since}]
 
   const isCopy = doc && !doc.is_base
 
@@ -118,84 +115,6 @@ export default function ResumeEditor() {
   useEscape(() => setHeadMenu(false), headMenu)
 
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts()
-
-  // Background tailoring: watches the launched run on /monitor/active by scope key
-  // `{base}:{job|freeform}` (routes_resumes.py) and reports when it's gone — matched by scope rather than parent_id+job_id, since a persona tailor has parent_id null and a freeform one has no job at all.
-  useEffect(() => {
-    const iv = setInterval(async () => {
-      if (!pendingRef.current.length) return
-      let live
-      try { const { data } = await api.get('/monitor/active'); live = (data || []).filter((r) => r.job_type === 'tailor_resume').map((r) => r.scope_key) }
-      catch { return }
-      const done = []
-      pendingRef.current = pendingRef.current.filter((p) => {
-        if (live.includes(p.scope)) { p.seen = true; return true }
-        if (Date.now() - p.since > 120000) return false            // give up after 2m
-        if (!p.seen && Date.now() - p.since < 8000) return true    // not started yet ≠ finished
-        done.push(p); return false
-      })
-      if (!done.length) return
-      let list = []
-      try { const { data } = await api.get('/resumes', { params: { is_base: false } }); list = data || [] } catch {}
-      // Leaving /monitor/active only means the run ended, not that it succeeded.
-      // Check the run's real status before picking which toast to show.
-      for (const p of done) {
-        const since = p.since - 1000
-        const mine = list.filter((r) => new Date(r.updated_at).getTime() >= since)
-        // a job-linked run is identified by its job; a freeform one by being the
-        // newest job-less copy written since the run started
-        const hit = p.jobId
-          ? mine.find((r) => String(r.job_id) === String(p.jobId))
-          : mine.filter((r) => !r.job_id).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))[0]
-        const run = await fetchRunOutcome(p.runId, 'tailor_resume')
-        if (runFailed(run)) {
-          pushToast({ kind: 'error', msg: `Tailoring failed — ${runFailureReason(run)}` })
-          continue
-        }
-        const msg = p.company ? `Tailored copy for ${p.company} is ready.` : 'Tailored copy from your pasted description is ready.'
-        if (hit) pushToast({ kind: 'success', msg, action: 'Open ↗', onAction: () => navigate(`/resumes/${hit.id}`) })
-        else if (run) pushToast({ kind: 'success', msg: 'Tailoring finished.', action: 'Résumés ↗', onAction: () => navigate('/resumes') })
-        // run unknown and no copy found: say exactly that rather than claim either way
-        else pushToast({ kind: 'progress', spin: false, ttl: 6000, msg: 'Tailoring finished, but the copy could not be located.', action: 'Résumés ↗', onAction: () => navigate('/resumes') })
-      }
-    }, 3000)
-    return () => clearInterval(iv)
-  }, [pushToast, navigate])
-
-  const runTailor = useCallback(async ({ baseId, jobId, jobDescription, company }) => {
-    setTailorOpen(false)
-    try {
-      const { data: started } = await api.post('/resumes/tailor', { base_resume_id: baseId, job_id: jobId || undefined, job_description: jobDescription || undefined })
-      track('tailor_started', { from: jobId ? 'job' : 'pasted' })
-      // the run_id lets the watcher read the run's real status
-      pendingRef.current.push({ scope: `${baseId}:${jobId || 'freeform'}`, runId: started?.run_id || null, jobId: jobId || null, company: company || null, since: Date.now() })
-      pushToast({ kind: 'progress', msg: company ? `Tailoring for ${company}… runs in the background.` : 'Tailoring from a pasted description… runs in the background.' })
-    } catch (e) {
-      if (e.response?.status === 409) pushToast({ kind: 'error', msg: 'Already tailoring for that job.' })
-      else pushToast({ kind: 'error', msg: e.response?.data?.detail || 'Tailoring failed to start.' })
-    }
-  }, [pushToast])
-
-  // Re-tailor keeps this copy's job but swaps what it's built from: either re-run
-  // the tailoring LLM against another base, or take a plain copy for fresh tracer links.
-  const runRetailor = useCallback(async ({ mode, baseId }) => {
-    setTailorOpen(false)
-    const company = jobData?.company || 'this job'
-    try {
-      if (mode === 'copy') {
-        const { data } = await api.post('/resumes/copy', { base_resume_id: baseId, job_id: doc.job_id })
-        pushToast({ kind: 'success', msg: `Copy created for ${company}.`, action: 'Open ↗', onAction: () => navigate(`/resumes/${data.id}`) })
-      } else {
-        const { data: started } = await api.post('/resumes/tailor', { base_resume_id: baseId, job_id: doc.job_id })
-        track('tailor_started', { from: 'job' })
-        pendingRef.current.push({ scope: `${baseId}:${doc.job_id}`, runId: started?.run_id || null, jobId: doc.job_id, company, since: Date.now() })
-        pushToast({ kind: 'progress', msg: `Tailoring for ${company}… runs in the background.` })
-      }
-    } catch (e) {
-      if (e.response?.status === 409) pushToast({ kind: 'error', msg: 'Already tailoring for that job.' })
-      else pushToast({ kind: 'error', msg: e.response?.data?.detail || 'Could not start.' })
-    }
-  }, [doc, jobData, pushToast, navigate])
 
   // Closes both pickers on any outside click (each picker stops its own clicks) and on Escape.
   // Escape is marked handled so a modal opened over them isn't closed by the same keypress.
@@ -233,15 +152,6 @@ export default function ResumeEditor() {
   const { ready: tplReady } = useSettled([
     () => api.get('/resumes/templates').then(({ data }) => setTemplates(data || [])).catch((e) => { console.error(e); pushToast({ kind: 'error', msg: 'Could not load the layouts — the picker is empty.' }) }),
   ])
-
-  // A job-linked tailor chains a score of the new copy (routes_resumes.py reads
-  // `tailor_auto_quick_score` and maps it this way) — surfaced here so the extra LLM call isn't invisible.
-  useEffect(() => {
-    api.get('/settings').then(({ data }) => {
-      const v = String(data?.tailor_auto_quick_score ?? 'light').trim().toLowerCase()
-      setTailorChain(['off', 'false', 'no', '0'].includes(v) ? null : v === 'full' ? 'full' : 'light')
-    }).catch(() => { /* silent: the note falls back to the seeded default */ })
-  }, [])
 
   // The document these context loaders belong to — a response that arrives after
   // the user has moved to another résumé is dropped.
@@ -581,7 +491,6 @@ export default function ResumeEditor() {
                 <div onClick={() => setHeadMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 44 }} />
                 <Menu ariaLabel="Résumé actions" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 5, zIndex: 45, width: 244 }}>
                   <MenuHead>This copy</MenuHead>
-                  <MenuItem icon="✦" hint="adds a copy" onClick={() => { setHeadMenu(false); setTailorOpen(true) }}>Re-tailor…</MenuItem>
                   <MenuItem icon="◎" hint="score only" onClick={() => runScore('light')}>Score again · light</MenuItem>
                   <MenuItem icon="◎" hint="with report" onClick={() => runScore('full')}>Score again · full</MenuItem>
                   {changes.length > 0 && <MenuItem icon="≋" hint={`${changes.length} to review`} onClick={() => { setHeadMenu(false); setReviewOpen(true) }}>Review changes</MenuItem>}
@@ -608,7 +517,6 @@ export default function ResumeEditor() {
           {/* The copy count is part of the context settle; the whole sentence waits on ctxReady
               (not just the count) so it paints once instead of inserting the clause later. */}
           <span>{!ctxReady ? NBSP : <>Base résumé · {baseCopyCount != null && <><span style={{ color: 'var(--text)', fontWeight: 500 }}>{baseCopyCount} tailored cop{baseCopyCount === 1 ? 'y' : 'ies'}</span> · </>}edits here affect new copies only</>}</span>
-          <Button variant="ai" onClick={() => setTailorOpen(true)} style={{ marginLeft: 'auto' }}>✦ Tailor for a job…</Button>
           {/* Bases get the same ⋯ → Delete as copies (the confirm dialog already warns copies go too).
               Worded "Delete résumé" here since this document is the base and deleting it takes every copy with it. */}
           <div style={{ position: 'relative', flex: '0 0 auto', marginLeft: 8 }}>
@@ -619,7 +527,6 @@ export default function ResumeEditor() {
                 <div onClick={() => setHeadMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 44 }} />
                 <Menu ariaLabel="Résumé actions" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 5, zIndex: 45, width: 244 }}>
                   <MenuHead>This base</MenuHead>
-                  <MenuItem icon="✦" hint="adds a copy" onClick={() => { setHeadMenu(false); setTailorOpen(true) }}>Tailor for a job…</MenuItem>
                   <MenuItem icon="✎" onClick={startRename}>Rename</MenuItem>
                   <MenuItem danger icon="✕" onClick={deleteResume}>Delete résumé</MenuItem>
                 </Menu>
@@ -683,9 +590,6 @@ export default function ResumeEditor() {
         </Surface>
       </div>
 
-      {tailorOpen && (isCopy
-        ? <RetailorModal doc={doc} job={jobData} chain={tailorChain} onClose={() => setTailorOpen(false)} onRun={runRetailor} pushToast={pushToast} />
-        : <TailorModal doc={doc} chain={tailorChain} onClose={() => setTailorOpen(false)} onRun={runTailor} pushToast={pushToast} />)}
       {reviewOpen && <ReviewModal changes={changes} onClose={() => setReviewOpen(false)} onApply={applyReview} />}
       {confirm && <ConfirmDialog {...confirm} onCancel={() => setConfirm(null)} />}
 
@@ -741,150 +645,6 @@ export function DownloadMenu({ id, template, format, onError, beforeDownload }) 
         </Menu>
       )}
     </div>
-  )
-}
-
-// ── re-tailor (a tailored copy) ──────────────────────────────────────────────
-// The job is already decided; what's open is which base to work from, and whether
-// to run the tailoring LLM or just take an exact copy for a fresh set of tracer links.
-function RetailorModal({ doc, job, chain, onClose, onRun, pushToast }) {
-  const [mode, setMode] = useState('tailor')
-  const [bases, setBases] = useState([])
-  const [persona, setPersona] = useState(false)
-  const [baseId, setBaseId] = useState(doc.parent_id || 'persona')
-
-  useEffect(() => {
-    // an empty list with a disabled button says nothing about why, so surface load failures via toast
-    api.get('/resumes', { params: { is_base: true } }).then(({ data }) => setBases(data || [])).catch((e) => { console.error(e); pushToast?.({ kind: 'error', msg: 'Could not load your base résumés — there is nothing to re-tailor from.' }) })
-    api.get('/persona').then(({ data }) => setPersona(Object.keys(data?.resume_content || {}).length > 0)).catch((e) => { console.error(e); pushToast?.({ kind: 'error', msg: 'Could not load your Persona — it will not be offered as a source.' }) })
-  }, [pushToast])
-
-  // /resumes/copy takes a Resume row; the Persona isn't one, so it can only be tailored from, never copied.
-  const options = [
-    ...(persona ? [{ id: 'persona', name: 'Persona', note: 'your full profile' }] : []),
-    ...bases.map((b) => ({ id: String(b.id), name: b.name, note: 'base résumé' })),
-  ]
-  const disabled = (id) => mode === 'copy' && id === 'persona'
-  const canRun = !!baseId && !disabled(baseId)
-
-  const MODES = [
-    ['tailor', '✦ Tailor', 'Rewrites bullets against this job description'],
-    ['copy', 'Copy', 'Exact copy of the base, with its own tracked links'],
-  ]
-
-  return (
-    <ChoiceModal
-      title="Re-tailor for this job"
-      sub={<>{job?.company ? `${job.company}${job.title ? ` — ${job.title}` : ''}` : 'the job this copy is for'} · adds a new copy</>}
-      subClamp onClose={onClose}
-      note={<>
-        <Helper>{mode === 'tailor' ? 'Runs in the background' : 'Instant — no LLM call'}</Helper>
-        {mode === 'tailor' && <Helper size="xs" style={{ textWrap: 'pretty' }}>{chainNote(chain)}</Helper>}
-      </>}
-      action={mode === 'tailor' ? '✦ Re-tailor' : 'Make copy'} actionVariant={mode === 'tailor' ? 'ai' : 'primary'} actionDisabled={!canRun}
-      onAction={() => onRun({ mode, baseId })}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <Label>How</Label>
-        <div style={{ display: 'flex', gap: 7 }}>
-          {MODES.map(([id, label, hint]) => (
-            <ChoiceCard key={id} on={mode === id} label={label} hint={hint} title={hint} onClick={() => setMode(id)} />
-          ))}
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <Label>From which base</Label>
-        {options.map((o) => (
-          <ChoiceRow key={o.id} on={String(baseId) === String(o.id)} disabled={disabled(o.id)}
-            title={disabled(o.id) ? 'Persona is not a résumé, so it can’t be copied. Use Tailor instead.' : undefined}
-            label={o.name}
-            hint={String(doc.parent_id || 'persona') === String(o.id) ? 'current base' : o.note}
-            onClick={() => setBaseId(o.id)} />
-        ))}
-        {options.length === 0 && <Band interactive={false} style={{ padding: 12 }}><Helper>No base résumés yet.</Helper></Band>}
-      </div>
-    </ChoiceModal>
-  )
-}
-
-// The tailor endpoint chains a score of the copy it just made — a second LLM call the
-// modals should mention. Reads the setting that controls it; the control itself stays in Settings › AI.
-const chainNote = (chain) => (chain
-  ? `Also scores the copy afterwards at ${chain} depth · 1 more LLM call · change under Settings › AI`
-  : 'Scoring after tailoring is off')
-
-// ── tailor modal (job picker + freeform + persona) ───────────────────────────
-function TailorModal({ doc, chain, onClose, onRun, pushToast }) {
-  const baseId = doc.id
-  const [jobs, setJobs] = useState([])
-  const [existing, setExisting] = useState(new Set())
-  const [q, setQ] = useState('')
-  const [pick, setPick] = useState(null)
-  const [jd, setJd] = useState('')
-  // baseId is always the base's own id, never 'persona', so this box simply starts unticked.
-  const [personaBase, setPersonaBase] = useState(false)
-
-  useEffect(() => {
-    api.get('/jobs', { params: { status: 'saved,applied,new', sort_by: 'date', limit: 60, brief: 1 } })
-      // empty with no explanation would read as "you have no saved jobs", which may not be true
-      .then(({ data }) => setJobs((data.jobs || data.items || data || []))).catch((e) => { console.error(e); pushToast?.({ kind: 'error', msg: 'Could not load your jobs — paste a description instead.' }) })
-    api.get('/resumes', { params: { is_base: false } })
-      .then(({ data }) => setExisting(new Set((data || []).filter((r) => String(r.parent_id) === String(baseId)).map((r) => String(r.job_id))))).catch(() => { /* silent: drives only the “✦ exists” hint on a row */ })
-  }, [baseId, pushToast])
-
-  const baseName = (r) => (typeof r === 'string' ? r : r?.name)
-  const jobScore = (j) => {
-    const cs = j.cv_scores || {}
-    for (const k of [doc.name, 'Tailored']) if (typeof cs[k] === 'number') return Math.round(cs[k])
-    const nums = Object.values(cs).filter((v) => typeof v === 'number')
-    return nums.length ? Math.round(Math.max(...nums)) : null
-  }
-  const t = q.trim().toLowerCase()
-  const list = jobs.filter((j) => !t || `${j.title} ${j.company}`.toLowerCase().includes(t))
-    .sort((a, b) => (['saved', 'applied'].includes(b.status) ? 1 : 0) - (['saved', 'applied'].includes(a.status) ? 1 : 0))
-
-  const canRun = !!(pick || jd.trim())
-  const chosen = jobs.find((j) => String(j.id) === String(pick))
-  const run = () => onRun({ baseId: personaBase ? 'persona' : baseId, jobId: pick, jobDescription: pick ? '' : jd.trim(), company: chosen?.company })
-
-  return (
-    // bodyGap 12 (not the shell's default 13) is this modal's own spacing.
-    <ChoiceModal
-      title={<>Tailor {doc.name} for a job</>}
-      sub="Changes are applied automatically. You can decline any of them afterwards."
-      bodyGap={12} onClose={onClose}
-      note={<>
-        <Helper>Runs in the background</Helper>
-        {/* the chain only fires for a job-linked tailor (routes_resumes.py:
-            `if chain_depth and job_id`), so a freeform run says nothing */}
-        {pick && <Helper size="xs" style={{ textWrap: 'pretty' }}>{chainNote(chain)}</Helper>}
-      </>}
-      action="✦ Tailor" actionVariant="ai" actionDisabled={!canRun} onAction={run}>
-      <Check checked={personaBase} onChange={setPersonaBase} label="Tailor from Persona instead of this base" />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <Label>Pick a job · saved and scored first</Label>
-        <Input value={q} onChange={setQ} placeholder="Search jobs…" ariaLabel="Search jobs" />
-        {list.slice(0, 40).map((j) => {
-          const sc = jobScore(j), has = existing.has(String(j.id))
-          return (
-            <ChoiceRow key={j.id} on={String(pick) === String(j.id)}
-              label={j.title} sub={<>{j.company} · {j.status}</>}
-              onClick={() => { setPick(j.id); setJd('') }}
-              trail={<>
-                {sc != null && <Mono title="This base's fit on that job" line={16} tone="accent" style={{ flex: '0 0 auto' }}>{sc}</Mono>}
-                {has && <span title="A tailored copy already exists — tailoring again adds another" style={{ flex: '0 0 auto', fontSize: 9, lineHeight: '14px', color: 'var(--warn)' }}>✦ exists</span>}
-              </>} />
-          )
-        })}
-        {list.length === 0 && <Band interactive={false} style={{ padding: 12 }}><Helper>No jobs match — paste a description below instead.</Helper></Band>}
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-        <Label>…or a freeform job description</Label>
-        <Textarea value={jd} onChange={(v) => { setJd(v); if (v.trim()) setPick(null) }} rows={3}
-          placeholder="Paste a job description. The copy will not be linked to a job in the Feed." ariaLabel="Freeform job description"
-          style={{ borderStyle: 'dashed' }} />
-      </div>
-    </ChoiceModal>
   )
 }
 

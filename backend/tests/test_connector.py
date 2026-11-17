@@ -150,7 +150,7 @@ def test_tools_answer_for_the_tokens_account_only(browser, test_db, owner):
     resumes, _ = _call(browser, headers, "list_resumes")
     assert [r["name"] for r in resumes["resumes"]] == ["General a"]
     profile, _ = _call(browser, headers, "get_profile")
-    assert profile == {"contact": {"name": "Person a"}, "networking": {"pitch": "pitch a"}}
+    assert profile == {"contact": {"name": "Person a"}, "networking": {"pitch": "pitch a", "outreach_drafts_enabled": True}}
 
     for name, args in (("get_job", {"job_id": theirs["job"]}), ("get_application", {"application_id": theirs["app"]}),
                        ("get_lead", {"lead_id": theirs["lead"]}), ("get_resume", {"resume": theirs["resume"]}),

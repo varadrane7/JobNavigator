@@ -176,17 +176,6 @@ async def call_email_llm(prompt: str, system: str, max_tokens: int = 150) -> dic
     return {**res, "provider": provider, "model": model}
 
 
-async def call_cv_tailor_llm(prompt: str, system: str, max_tokens: int = 3000) -> dict:
-    """Route to CV-tailoring-specific LLM provider. Returns {text, usage}."""
-    cfg = resolve_llm_config("cv_tailor")
-    provider, model = cfg["provider"], cfg["model"]
-
-    logger.info(f"CV tailor LLM call: provider={provider}, model={model}, max_tokens={max_tokens}")
-    with llm_feature("cv_tailor"):
-        res = await _dispatch(provider, model, cfg["api_key"], prompt, system, max_tokens, effort=cfg["effort"])
-    return {**res, "provider": provider, "model": model}
-
-
 async def call_cover_letter_llm(prompt: str, system: str, max_tokens: int = 1500,
                                 cached_prefix: str | None = None) -> dict:
     """Route to cover-letter-specific LLM provider; the resume + persona-preferences prefix caches on Claude API so regenerating in a different voice/length only pays for the JD suffix."""

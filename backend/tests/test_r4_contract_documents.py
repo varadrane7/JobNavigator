@@ -181,71 +181,17 @@ def test_copy_resume_deep_copies_json_data(client, test_db):
     assert r.json()["is_base"] is False
 
 
-# ── /api/resumes/tailor ──────────────────────────────────────────────────────
+# ── /api/resumes/tailor (removed) ────────────────────────────────────────────
 
-def test_tailor_requires_a_base_resume_id(client):
-    assert_clean(client.post("/api/resumes/tailor", json={}), 400)
-
-
-def test_tailor_requires_a_job_or_a_description(client, test_db):
-    base = make_resume(test_db)
-    assert_clean(client.post("/api/resumes/tailor",
-                             json={"base_resume_id": str(base.id)}), 400)
-
-
-def test_tailor_unknown_base_resume_is_404(client, test_db):
-    job = make_job(test_db, description="Some JD")
-    assert_clean(client.post("/api/resumes/tailor", json={
-        "base_resume_id": MISSING_UUID, "job_id": str(job.id)}), 404)
-
-
-def test_tailor_unknown_job_is_404(client, test_db):
-    base = make_resume(test_db)
-    assert_clean(client.post("/api/resumes/tailor", json={
-        "base_resume_id": str(base.id), "job_id": MISSING_UUID}), 404)
-
-
-def test_tailor_job_without_any_text_is_400(client, test_db):
-    base = make_resume(test_db)
-    job = make_job(test_db, url="")
-    assert_clean(client.post("/api/resumes/tailor", json={
-        "base_resume_id": str(base.id), "job_id": str(job.id)}), 400)
-
-
-def test_tailor_empty_persona_is_400(client, test_db):
-    make_persona(test_db)
-    job = make_job(test_db, description="JD")
-    assert_clean(client.post("/api/resumes/tailor", json={
-        "base_resume_id": "persona", "job_id": str(job.id)}), 400)
-
-
-def test_tailor_missing_prompt_setting_is_500_with_a_reason(client, test_db):
-    """A deliberate 500 that names the misconfiguration — must not be a bare trace."""
+def test_tailor_route_is_gone(client, test_db):
+    """Per-job tailoring was removed; nothing may run it, and nothing may call an LLM for it."""
     base = make_resume(test_db)
     job = make_job(test_db, description="JD")
     r = client.post("/api/resumes/tailor",
                     json={"base_resume_id": str(base.id), "job_id": str(job.id)})
-    assert r.status_code == 500
-    assert_no_leak(r)
-    assert "cv_tailor_prompt" in r.text
-
-
-def test_tailor_second_call_on_the_same_pair_is_409(client, test_db, monkeypatch):
-    import asyncio
+    assert r.status_code in (404, 405)
     import backend.api.routes_resumes as rr
-    gate = asyncio.Event()
-
-    async def _slow(**kw):
-        await gate.wait()
-    monkeypatch.setattr(rr, "_tailor_impl", _slow, raising=False)
-
-    set_setting(test_db, "cv_tailor_prompt", "do it")
-    base = make_resume(test_db)
-    job = make_job(test_db, description="JD")
-    body = {"base_resume_id": str(base.id), "job_id": str(job.id)}
-    assert_clean(client.post("/api/resumes/tailor", json=body), 202)
-    assert_clean(client.post("/api/resumes/tailor", json=body), 409)
-    gate.set()
+    assert not hasattr(rr, "_tailor_impl") and not hasattr(rr, "tailor_resume")
 
 
 # ── /api/resumes/{id}/score-check ────────────────────────────────────────────

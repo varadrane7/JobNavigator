@@ -18,7 +18,7 @@ from backend.cli_runner import runtime as R, paths as runner_paths
 from backend.models.db import Account, SectionPolicy, Setting
 from backend.tests.r4_support import client, set_setting  # noqa: F401 (fixture)
 
-FEATURES = ("scoring", "cv_tailor", "cover_letter", "autofill", "email")
+FEATURES = ("scoring", "cover_letter", "autofill", "email")
 
 
 @pytest.fixture
@@ -78,11 +78,10 @@ def _capture_dispatch(monkeypatch, fail_primary=False):
 
 
 async def _every_entry_point():
-    """The six dispatching entry points, in order: scoring (call_llm), tailoring, letters,
+    """The five dispatching entry points, in order: scoring (call_llm), letters,
     autofill, email, and the résumé PDF / generic path (call_llm with no override)."""
     await L.call_llm("p", "s", 10, **{k: v for k, v in zip(
         ("provider", "model", "api_key"), _scoring_pair())})
-    await L.call_cv_tailor_llm("p", "s")
     await L.call_cover_letter_llm("p", "s")
     await L.call_autofill_llm("p", "s")
     await L.call_email_llm("p", "s")
@@ -120,7 +119,7 @@ async def test_every_entry_point_dispatches_with_the_member_own_key(test_db, two
     calls = _capture_dispatch(monkeypatch)
     with use_account(b):
         await _every_entry_point()
-    assert calls == [MEMBER] * 6
+    assert calls == [MEMBER] * 5
 
 
 @pytest.mark.asyncio
@@ -129,7 +128,7 @@ async def test_every_entry_point_dispatches_with_the_owner_key_on_inherit(test_d
     calls = _capture_dispatch(monkeypatch)
     with use_account(b):
         await _every_entry_point()
-    assert calls == [OWNER] * 6
+    assert calls == [OWNER] * 5
 
 
 @pytest.mark.asyncio
@@ -139,7 +138,7 @@ async def test_owner_entry_points_unchanged_by_a_member_own_config(test_db, two_
     calls = _capture_dispatch(monkeypatch)
     with use_account(a):
         await _every_entry_point()
-    assert calls == [OWNER] * 6
+    assert calls == [OWNER] * 5
 
 
 @pytest.mark.asyncio

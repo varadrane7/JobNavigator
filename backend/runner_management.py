@@ -10,7 +10,7 @@ from backend.cli_runner.protocol import SERVICES
 
 logger = logging.getLogger("jobnavigator.runner_management")
 PROVIDER_KEYS = ("llm_provider", "scoring_llm_provider", "llm_fallback_provider",
-                 "cv_tailor_llm_provider", "cover_letter_llm_provider",
+                 "cover_letter_llm_provider",
                  "autofill_llm_provider", "email_llm_provider")
 
 

@@ -114,28 +114,3 @@ async def test_score_resume_worker_returns_summary(test_db, monkeypatch):
 
     summary = await rr._score_resume_impl(str(copy.id), "light")
     assert "Staff PM" in summary and "77" in summary
-
-
-@pytest.mark.asyncio
-async def test_tailor_worker_returns_summary(test_db, monkeypatch):
-    """Needs the container (routes_resumes imports python-multipart)."""
-    pytest.importorskip("multipart")
-    import backend.api.routes_resumes as rr
-
-    base = Resume(name="Base PM", is_base=True,
-                  json_data={"summary": "s", "experience": [], "skills": []})
-    job = Job(company="Acme", title="Staff PM", url="https://acme.test/3",
-              external_id="e3", description="d " * 200, status="new")
-    test_db.add_all([base, job])
-    test_db.add(Setting(key="cv_tailor_prompt", value="{job_description} {resume_json}"))
-    test_db.add(Setting(key="tailor_auto_quick_score", value="off"))
-    test_db.commit()
-
-    async def fake_llm(prompt, system, max_tokens=3000):
-        return {"text": '{"summary": "tailored"}', "usage": {},
-                "provider": "claude_code", "model": "claude-sonnet-5"}
-
-    monkeypatch.setattr("backend.analyzer.llm_client.call_cv_tailor_llm", fake_llm)
-
-    summary = await rr._tailor_impl(str(base.id), str(job.id), None)
-    assert isinstance(summary, str) and "Created" in summary

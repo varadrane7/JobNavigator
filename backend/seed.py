@@ -64,12 +64,13 @@ DEFAULT_SETTINGS = {
     "searxng_url": ("http://searxng:8080", "SearXNG base URL the curator searches with (the compose service by default)"),
     "curate_cron": ("30 4 * * *", "Daily Top-N curation cron (min hour day month dow, app time zone). Empty = disabled"),
     "curate_count": ("50", "How many jobs the curator saves each day"),
+    "curate_runs_per_day": ("1", "How many times a day the curator runs (count the hours in curate_cron). With 2 or more, outreach_count and outreach_network_count stay per-day totals shared across the runs, and each run continues the day's pick numbering"),
     "curate_window_hours": ("36", "Only jobs posted (or first seen) within this many hours are considered"),
     "curate_llm_pool": ("150", "How many jobs (after the embedding pre-filter) get LLM-scored and ranked"),
     "curate_auto_ignore": ("true", "Mark the day's other candidates ignored so the feed only shows the Top-N"),
     "curate_title_exclude": (json.dumps(["staff", "principal", "lead", "manager", "director", "head of", "architect", "vp", "intern", "clearance",
                                          "contract", "contractor", "c2c", "1099", "freelance", "part-time", "part time", "temporary"]),
-                             "Title words that drop a job from curation (staff and above, clearance, contract work that STEM OPT does not cover). "
+                             "Title words that drop a job from curation (staff and above, clearance, contract work that a visa-dependent candidate cannot take). "
                              "Senior titles stay in; the 6+ years check judges them"),
     "curate_company_exclude": (json.dumps(["Kforce", "TEKsystems", "Insight Global", "Robert Half", "CyberCoders", "Jobot",
                                            "Motion Recruitment", "Randstad", "Infosys", "Wipro", "TCS", "Tata Consultancy",
@@ -82,6 +83,7 @@ DEFAULT_SETTINGS = {
     "target_base_max": ("150000", "Target base salary that scores full marks"),
     "curate_embed_model": ("text-embedding-nomic-embed-text-v1.5", "Embedding model on the OpenAI (Local) server used to pre-filter by résumé similarity. Empty = skip"),
     "outreach_count": ("20", "How many people to find each day for the curated jobs (founders, hiring managers, recruiters)"),
+    "outreach_drafts_enabled": ("true", "Draft connection notes, cold emails and talking points for the people the curator and the network scout find. 'false' still finds and stores people but drafts nothing; drafts already written stay. Per profile."),
     "outreach_network_count": ("10", "How many decision makers to find each day at good companies, open role or not (job slots left unused add to this)"),
     "github_token": ("", "GitHub token (read-only, repo scope) so the persona project sync sees private repositories. Empty = public repositories only"),
     "curate_max_years": ("5", "Drop a job whose posting asks for this many years of experience or more"),
@@ -254,9 +256,8 @@ DEFAULT_SETTINGS = {
         {"provider": "openrouter", "model": "mistralai/mistral-large-2512"},
     ]), "Known LLM models per provider (JSON array, user can add custom entries)"),
     "scoring_max_concurrent": ("5", "Max parallel scoring jobs (others queue until a slot opens)"),
-    "tailoring_max_concurrent": ("2", "Max concurrent resume-tailoring LLM calls"),
+    "tailoring_max_concurrent": ("2", "Max cover letters generated at once (others wait). The key keeps its old name"),
     "scrape_max_concurrent": ("1", "Scrapes at once, 1 or 2: Run all, one company, one search and the scheduled scrape; others wait their turn"),
-    "tailor_auto_quick_score": ("light", "After tailoring finishes, auto-launch a score chain. Values: 'off' | 'light' | 'full'. Default 'light'. Legacy 'true'='light', 'false'='off'."),
     "prompt_caching_enabled": ("true", "Use Anthropic prompt caching on resume scoring (claude_api only; ~50% cheaper input tokens on same-batch calls). Set false to disable as a rollback lever."),
     "scoring_default_depth": ("light", "Default scoring depth: light or full"),
     # Dashboard-only switch: the Jobs pane reads it, nothing on the backend does.
@@ -290,11 +291,6 @@ DEFAULT_SETTINGS = {
         "newsletter", "webinar", "course", "discount",
         "event invitation", "job search council", "matched new opportunities"
     ]), "Subject terms to exclude from Gmail search query"),
-    "cv_tailor_llm_provider": ("", "LLM provider for resume tailoring (empty = use primary llm_provider)"),
-    "cv_tailor_llm_model": ("", "LLM model for resume tailoring (empty = use primary llm_model)"),
-    "cv_tailor_llm_effort": ("", "Reasoning effort for resume tailoring (empty = the Primary's on the same provider, else the model's default)"),
-    "cv_tailor_prompt": ("Tailor this resume for the job description below.\n\nRules for MAIN bullets[]:\n- Rewrite the summary to target this specific role\n- For each experience bullet: if it benefits from JD keyword alignment, reformulate it. If it's already well-suited, leave it UNCHANGED\n- Keep the same number of bullets per experience entry - do not add or remove\n- Reorder skills to prioritize JD-relevant ones first\n- Do NOT invent new experience, skills, or facts in the main bullets. If something is missing, map to the closest truthful concept\n- NEVER add skills the candidate does not have\n- Preserve all company names, titles, dates, locations, education exactly\n- Do NOT use em-dashes or unicode special characters. Use regular hyphens (-) and ASCII only\n- Preserve **bold** formatting (double asterisks) from the original bullets. For reformulated bullets, wrap the strongest metric or achievement in **bold** (e.g. **40,000+ new clients**, **reduced error rates by 30%**). Each bullet should have at most one bold highlight\n- VERIFICATION: every reformulated bullet must trace to the original resume. If you cannot trace it, leave the original unchanged.\n\nRules for suggested_bullets[] (gap-fillers - DIFFERENT from main bullets):\n- For each experience entry, generate 1-2 PLAUSIBLE STAR-format bullets that cover JD keywords/skills no existing bullet in this role covers\n- These MAY invent realistic, believable facts/metrics that someone in this role/title at this company at this seniority would credibly have done\n- Specifically target keywords from the JD that no existing bullet mentions\n- Use STAR format: strong action verb, context, concrete (possibly invented) metric or outcome\n- The user reviews these in a diff modal and accepts/rejects each - they know suggestions are speculative gap-fillers\n- Wrap the strongest metric in **bold** (one per bullet)\n- Skip a role entirely if no JD keyword gap exists for it\n\nResume:\n{resume_json}\n\nJob Description:\n{job_description}\n\nReturn ONLY this JSON:\n{\"summary\": \"rewritten summary\", \"experience\": [{\"company\": \"unchanged\", \"title\": \"unchanged\", \"location\": \"unchanged\", \"date\": \"unchanged\", \"description\": \"unchanged or null\", \"bullets\": [\"reformulated or unchanged bullet from existing content\"], \"suggested_bullets\": [\"plausible gap-filler covering missing JD keyword\"]}], \"skills\": {\"reordered label\": \"reordered value\"}}", "Editable resume tailoring LLM prompt template"),
-    "persona_tailor_prompt": ("Tailor a FOCUSED resume from this rich candidate profile, targeted at the job description below.\n\nThe candidate profile is a deep pool - most roles have many bullets. SELECT only the strongest aligned with the JD; drop the rest.\n\nRules for MAIN bullets[]:\n- Rewrite the summary to target this specific role (2-4 sentences, lead with the most relevant strength)\n- For each experience entry: SELECT only 3-5 bullets (max 6 for the most senior/recent role) that best match JD keywords and required skills\n- Reformulate each selected bullet to use the JD's exact vocabulary where possible\n- Reorder skills to prioritize JD-relevant ones first; cap at 6 categories\n- Do NOT invent new experience, skills, or facts in the main bullets. Only reframe existing content from the candidate profile\n- NEVER add skills the candidate does not have\n- Preserve all company names, titles, dates, locations, education exactly\n- Do NOT use em-dashes or unicode special characters. Use regular hyphens (-) and ASCII only\n- Preserve **bold** formatting. For reformulated bullets, wrap the strongest metric in **bold** (one per bullet)\n- VERIFICATION: every selected/reformulated bullet must be traceable to the candidate profile\n\nRules for suggested_bullets[] (gap-fillers - DIFFERENT from main bullets):\n- For each experience entry, generate 1-2 PLAUSIBLE STAR-format bullets that cover JD keywords/skills no main bullet (selected from the pool) covers\n- These MAY invent realistic, believable facts/metrics that someone in this role at this company at this seniority would credibly have done\n- Specifically target JD keywords that no main bullet mentions\n- STAR format: strong action verb, context, concrete (possibly invented) metric or outcome\n- The user reviews these in a diff modal and accepts/rejects each\n- Wrap the strongest metric in **bold** (one per bullet)\n- Skip a role if no JD keyword gap exists\n\nCandidate Profile:\n{resume_json}\n\nJob Description:\n{job_description}\n\nReturn ONLY this JSON:\n{\"summary\": \"rewritten summary\", \"experience\": [{\"company\": \"unchanged\", \"title\": \"unchanged\", \"location\": \"unchanged\", \"date\": \"unchanged\", \"description\": \"unchanged or null\", \"bullets\": [\"selected + reformulated bullet from candidate profile\"], \"suggested_bullets\": [\"plausible gap-filler covering missing JD keyword\"]}], \"skills\": {\"reordered label\": \"reordered value\"}}", "Editable Persona tailoring LLM prompt template - used when base_resume_id='persona' to constrain bullet selection from the rich pool"),
     "cover_letter_llm_provider": ("", "LLM provider for cover-letter generation (empty = use primary llm_provider)"),
     "cover_letter_llm_model": ("", "LLM model for cover-letter generation (empty = use primary llm_model)"),
     "cover_letter_llm_effort": ("", "Reasoning effort for cover-letter generation (empty = the Primary's on the same provider, else the model's default)"),
@@ -309,7 +305,7 @@ DEFAULT_SETTINGS = {
     "cover_letter_default_voice": ("professional", "Default voice preset id for new cover letters (must match an id in cover_letter_voice_presets)"),
     "cover_letter_template": ("same_as_resume", "Template for a new cover letter: same_as_resume (the résumé's template when it has a cover-letter version), last_selected (the template last picked in the editor), or a folder under backend/cover_letter_templates/. Garamond Modern when none applies"),
     "cover_letter_last_template": ("", "The cover-letter template this account last picked in the editor (read by cover_letter_template = last_selected)"),
-    "resume_template": ("last_selected", "Template for a new résumé (blank, imported, tailored from Persona): last_selected (the template last picked in the résumé editor) or a folder under backend/resume_templates/. The first template when none applies; a copy of a résumé keeps that résumé's template"),
+    "resume_template": ("last_selected", "Template for a new résumé (blank or imported): last_selected (the template last picked in the résumé editor) or a folder under backend/resume_templates/. The first template when none applies; a copy of a résumé keeps that résumé's template"),
     "resume_last_template": ("", "The résumé template this account last picked in the editor (read by resume_template = last_selected)"),
     "autofill_field_patterns": (json.dumps({
         "gender": ["gender", "what is your gender", "gender identity"],
@@ -474,6 +470,13 @@ DEFAULT_SETTINGS = {
     ),
 }
 
+# Settings of removed features. Their rows may still sit in a database; a client that still sends one
+# (an old cached page) is ignored instead of refused, and nothing reads them. Not deleted here.
+REMOVED_SETTING_KEYS = {
+    "cv_tailor_prompt", "persona_tailor_prompt", "tailor_auto_quick_score",
+    "cv_tailor_llm_provider", "cv_tailor_llm_model", "cv_tailor_llm_effort",
+}
+
 # Settings the app writes at runtime but never seeds. PATCH /api/settings rejects
 # keys outside DEFAULT_SETTINGS, so these have to be listed explicitly.
 RUNTIME_SETTING_KEYS = {
@@ -518,8 +521,7 @@ INT_SETTING_KEYS = _int_setting_keys()
 # llm_provider", which every per-feature prefix does.
 _LLM_PROVIDERS = {"", "claude_api", "claude_code", "codex_cli", "antigravity_cli", "opencode_go", "openai", "openai_local", "ollama", "lmstudio", "openrouter"}
 
-# Depth words. `tailor_auto_quick_score` also honours legacy boolean spellings
-# (see routes_resumes._resolve_chain_score_depth).
+# Depth words.
 _DEPTHS = {"light", "full"}
 
 # Every effort any provider takes; llm_client drops a value the chosen provider lacks.
@@ -532,7 +534,6 @@ ENUM_SETTING_VALUES = {
     "curator_llm_provider": _LLM_PROVIDERS,
     "curator_fallback_llm_provider": _LLM_PROVIDERS,
     "email_llm_provider": _LLM_PROVIDERS,
-    "cv_tailor_llm_provider": _LLM_PROVIDERS,
     "cover_letter_llm_provider": _LLM_PROVIDERS,
     "autofill_llm_provider": _LLM_PROVIDERS,
     "llm_effort": _EFFORTS,
@@ -541,12 +542,10 @@ ENUM_SETTING_VALUES = {
     "curator_llm_effort": _EFFORTS,
     "curator_fallback_llm_effort": _EFFORTS,
     "email_llm_effort": _EFFORTS,
-    "cv_tailor_llm_effort": _EFFORTS,
     "cover_letter_llm_effort": _EFFORTS,
     "autofill_llm_effort": _EFFORTS,
     "scoring_default_depth": _DEPTHS,
     "on_save_action": {"off"} | _DEPTHS,
-    "tailor_auto_quick_score": {"off", "false", "no", "0", "true", "yes", "1", ""} | _DEPTHS,
     "tracer_links_url_style": {"path", "param", "path_jobid", "param_jobid"},
     "curate_auto_ignore": {"true", "false"},
     "telegram_bot_mode": {"household", "own"},
@@ -1296,6 +1295,8 @@ def cleanup_removed_settings(db):
         "autofill_structured_enabled",
         "autofill_structured_trigger",
     ]
+    # résumé tailoring was removed: its prompts, auto-score switch and model settings
+    removed_keys += sorted(REMOVED_SETTING_KEYS)
     for key in removed_keys:
         # the install row and every account's own row
         for row in db.query(Setting).filter(Setting.key == key).all():

@@ -349,7 +349,7 @@ def get_job(db, args):
 def today(db, args):
     day = _date(args.get("day"), "day") or local_today()
     jobs = (db.query(Job).filter(Job.curated_on == day, Job.curated_rank.isnot(None))
-            .order_by(Job.curated_rank).limit(_limit(args, 20)).all())
+            .order_by(Job.curated_rank).limit(_limit(args, MAX_ROWS)).all())
     rows = []
     for j in jobs:
         row = _job_row(j)
@@ -403,6 +403,11 @@ _NETWORKING_KEYS = ("pitch", "asks", "affinities", "visa_note", "target_roles", 
 _PROJECT_KEYS = ("name", "one_liner", "who_cares", "stack", "highlights", "url", "homepage")
 
 
+def _drafts_enabled() -> bool:
+    from backend.curator.people import drafts_enabled
+    return drafts_enabled()
+
+
 def get_profile(db, args):
     wanted = args.get("sections") or ["contact", "work_auth", "preferences", "networking"]
     if isinstance(wanted, str):
@@ -418,7 +423,9 @@ def get_profile(db, args):
               "compensation": persona.compensation,
               "networking": {**{k: net.get(k) for k in _NETWORKING_KEYS},
                              "projects": [p.get("name") for p in net.get("projects") or []
-                                          if isinstance(p, dict) and not p.get("hidden")]},
+                                          if isinstance(p, dict) and not p.get("hidden")],
+                             # False: JobNavigator drafts no notes for this profile; a connected agent may write them
+                             "outreach_drafts_enabled": _drafts_enabled()},
               "projects": [{k: p.get(k) for k in _PROJECT_KEYS} for p in net.get("projects") or []
                            if isinstance(p, dict) and not p.get("hidden")],
               "writing": net.get("writing"),

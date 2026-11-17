@@ -146,13 +146,13 @@ async def test_session_id_is_one_per_account_and_feature(monkeypatch):
 
     a, b = uuid.uuid4(), uuid.uuid4()
     with use_account(a):
-        await llm_client.call_cv_tailor_llm("p", "s")
-        await llm_client.call_cv_tailor_llm("p", "s")
+        await llm_client.call_cover_letter_llm("p", "s")
+        await llm_client.call_cover_letter_llm("p", "s")
         await llm_client.call_email_llm("p", "s")
         with llm_client.llm_feature("scoring"):
             await llm_client._dispatch("opencode_go", "glm-5.3", "sk-go", "p", "s", 10)
     with use_account(b):
-        await llm_client.call_cv_tailor_llm("p", "s")
+        await llm_client.call_cover_letter_llm("p", "s")
     a_tailor, a_tailor_again, a_email, a_scoring, b_tailor = sessions
 
     assert a_tailor == a_tailor_again                       # stable per (account, feature)
@@ -160,7 +160,7 @@ async def test_session_id_is_one_per_account_and_feature(monkeypatch):
     assert b_tailor != a_tailor                             # never shared across accounts
     assert llm_client._llm_feature.get() == ""              # the wrappers leave no feature behind
     with use_account(a):
-        assert llm_client._opencode_session("cv_tailor") == a_tailor
+        assert llm_client._opencode_session("cover_letter") == a_tailor
         assert llm_client._opencode_session("autofill") not in sessions
 
 

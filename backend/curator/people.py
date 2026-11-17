@@ -335,7 +335,26 @@ def _split_draft(out: dict | None) -> dict:
     return {"note": note, "email_draft": (f"Subject: {subj}\n\n{body}" if subj else body) or None}
 
 
-async def draft(contact: dict, company: str, job: dict, me: str, profile: str) -> dict:
+def drafts_enabled() -> bool:
+    """Whether this profile has LLM-drafted outreach (connection notes, cold emails, talking points) turned on.
+    Per-account setting `outreach_drafts_enabled`, default on. Off skips the drafting only: people are still
+    found and stored, and nothing already drafted is touched."""
+    from backend.accounts.settings import get_setting
+    from backend.models.db import SessionLocal
+    db = SessionLocal()
+    try:
+        raw = get_setting(db, "outreach_drafts_enabled")
+    except Exception as e:     # an unreadable setting never costs the run: draft as before
+        logger.warning(f"outreach_drafts_enabled unreadable, drafting: {e}")
+        raw = None
+    finally:
+        db.close()
+    return str(raw if raw is not None else "true").strip().lower() not in ("false", "0", "no", "off")
+
+
+async def draft(contact: dict, company: str, job: dict, me: str, profile: str, enabled: bool | None = None) -> dict:
+    if not (drafts_enabled() if enabled is None else enabled):
+        return {"note": None, "email_draft": None}
     out = await ask_json(
         _DRAFT_PROMPT.format(me=me, profile=profile, name=contact["name"], headline=contact.get("headline", ""),
                              company=company, job_title=job.get("title", ""), job_url=job.get("url", "")),
@@ -343,7 +362,10 @@ async def draft(contact: dict, company: str, job: dict, me: str, profile: str) -
     return _split_draft(out)
 
 
-async def draft_network(contact: dict, company: str, intel: dict | None, me: str, profile: str) -> dict:
+async def draft_network(contact: dict, company: str, intel: dict | None, me: str, profile: str,
+                        enabled: bool | None = None) -> dict:
+    if not (drafts_enabled() if enabled is None else enabled):
+        return {"note": None, "email_draft": None}
     intel = intel or {}
     about = " ".join(str(x) for x in (intel.get("notes"),
                                        f"Funding: {intel['funding_stage'].replace('_', ' ')}" if intel.get("funding_stage") not in (None, "", "unknown") else "",

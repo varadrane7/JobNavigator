@@ -48,6 +48,7 @@ def test_int_keys_match_the_rows_settings_marks_int():
         "target_base_max",
         "outreach_count",
         "outreach_network_count",
+        "curate_runs_per_day",
         "linkedin_mock_daily_cap",
         "linkedin_main_daily_cap",
         "linkedin_cooldown_hours",
@@ -145,10 +146,7 @@ def test_empty_provider_accepted_it_means_inherit():
     assert invalid_setting_values({"scoring_llm_provider": ""}) == []
 
 
-def test_legacy_boolean_tailor_depth_still_accepted():
-    """routes_resumes._resolve_chain_score_depth still maps 'true'/'false'."""
-    assert invalid_setting_values({"tailor_auto_quick_score": "true"}) == []
-    assert invalid_setting_values({"tailor_auto_quick_score": "off"}) == []
+
 
 
 def test_enum_is_case_insensitive():

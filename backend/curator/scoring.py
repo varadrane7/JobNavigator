@@ -18,7 +18,7 @@ STAGE_STABILITY = {
 FRIENDLY_ATS = ("greenhouse.io", "ashbyhq.com", "lever.co", "workable.com", "rippling.com")
 SLOW_ATS = ("myworkdayjobs.com", "taleo.net", "icims.com", "successfactors", "oraclecloud.com", "brassring")
 
-# Postings a STEM-OPT candidate who will need H-1B cannot take, whatever the
+# Postings a candidate who will need employer visa sponsorship cannot take, whatever the
 # company's sponsorship record says.
 _BLOCKERS = re.compile(
     # YC's "US citizen/visa only" means already authorized to work, which a visa holder is

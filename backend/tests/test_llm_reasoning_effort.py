@@ -35,8 +35,8 @@ def test_feature_on_another_provider_does_not_inherit_the_primary_effort(test_db
 
 
 def test_feature_effort_wins_over_the_primary_effort(test_db):
-    _settings(test_db, llm_provider="openai", llm_effort="high", cv_tailor_llm_effort="low")
-    assert L.resolve_llm_config("cv_tailor")["effort"] == "low"
+    _settings(test_db, llm_provider="openai", llm_effort="high", cover_letter_llm_effort="low")
+    assert L.resolve_llm_config("cover_letter")["effort"] == "low"
 
 
 # ── _dispatch: filter + cap ──────────────────────────────────────────────────

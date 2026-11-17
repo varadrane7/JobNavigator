@@ -6,7 +6,7 @@ import ConfirmDialog from '../ConfirmDialog'
 import { useEscape, useSettled, useSingleOpen, useWarm, NBSP, DASH } from '../hooks'
 import { LINK_KINDS, closedTag, linkKindParam, linkTag, openLink } from '../linkKinds'
 import { isShortcut, track } from '../telemetry'
-import { Button, Card, Check as UICheck, CheckGlyph, CopyGlyph, CrossGlyph, Dot, FooterRow, GlyphBadge, HeaderRow, Heading, Helper, IconButton, Input, kb, Label, Link, Menu, MenuItem, Meter, ModalPanel, NavLink, PageTitle, Pill, Row, Rule, ScoreRing, SearchInput, SectionHead, Segmented, Spinner, TableHead, TableRow, Tag, ZOOM_MAX, ZOOM_MIN, ZoomFloater } from '../ui'
+import { Button, Card, Check as UICheck, CheckGlyph, CrossGlyph, Dot, FooterRow, GlyphBadge, HeaderRow, Heading, Helper, IconButton, Input, kb, Label, Link, Menu, MenuItem, Meter, ModalPanel, NavLink, PageTitle, Pill, Row, Rule, ScoreRing, SearchInput, SectionHead, Segmented, Spinner, TableHead, TableRow, Tag, ZOOM_MAX, ZOOM_MIN, ZoomFloater } from '../ui'
 import { ANALYZE, NO_BASES_HINT, SCORE_RESUME, TAILOR, activityText, noScoreSource,feedActivity, flightDetail, flightTypes, ghostTabs, tabBusy, tabBusyHint, tailorMarkTitle } from './feedActivity'
 import { PICK_KEY, clickMods, clickSelection } from './rowSelect'
 import { useApifyBoards, apifySourceLabel } from '../apifyBoards'
@@ -159,7 +159,7 @@ function Check({ on, label, count, onClick }) {
 
 // pick modifier: ⌘ on macOS, Ctrl elsewhere (matches rowClick's metaKey||ctrlKey).
 // Shared with the Applications list, which carries the same selection gestures.
-const SHORTCUTS = [['j / f / ↓', 'Next job'], ['k / g / ↑', 'Previous job'], ['s', 'Save / unsave'], ['x', 'Skip'], ['a', 'Mark applied'], ['e / o', 'Open posting'], ['r', 'Rescore'], ['t', 'Tailor résumé'], ['c', 'Cover letter'], ['Esc', 'Close menus'], [`${PICK_KEY}-click`, 'Select'], ['Shift-click', 'Select range']]
+const SHORTCUTS = [['j / f / ↓', 'Next job'], ['k / g / ↑', 'Previous job'], ['s', 'Save / unsave'], ['x', 'Skip'], ['a', 'Mark applied'], ['e / o', 'Open posting'], ['r', 'Rescore'], ['c', 'Cover letter'], ['Esc', 'Close menus'], [`${PICK_KEY}-click`, 'Select'], ['Shift-click', 'Select range']]
 
 // ── component ────────────────────────────────────────────────────────────
 export default function V2JobFeed() {
@@ -263,9 +263,8 @@ export default function V2JobFeed() {
   const [resumes, setResumes] = useState([])
   const [resumesLoaded, setResumesLoaded] = useState(false)   // V-05: the base list answered
   const [stats, setStats] = useState({ arrived_today: 0, unscored: 0 })
-  const [picker, setPicker] = useState(null)      // {mode, jobs:[...]} — opens the Create-copy modal
-  const [cvMode, setCvMode] = useState('tailor')  // 'tailor' | 'copy' method toggle
-  const [cvBase, setCvBase] = useState(null)      // selected base résumé id (or 'persona')
+  const [picker, setPicker] = useState(null)      // {jobs:[...]} — opens the Create-copy modal
+  const [cvBase, setCvBase] = useState(null)      // selected base résumé id
   const [rowMenu, setRowMenu] = useState(null)
   const [headMenu, setHeadMenu] = useState(false)
   const [checked, setChecked] = useState(() => new Set())
@@ -667,46 +666,28 @@ export default function V2JobFeed() {
     }
   }, [rescoreJob, rescoreSel, rescoreOpts, rescoreDepth, pushToast, markFlight])
 
-  const runResume = useCallback(async (mode, list, baseId) => {
+  const runResume = useCallback(async (list, baseId) => {
     setPicker(null)
-    // the picker's own base list, read off `resumes` (cvBases is the same list
-    // plus the Persona entry, and is declared below this callback)
-    const baseName = baseId === 'persona' ? 'Persona' : ((resumes.find((r) => r.id === baseId) || {}).name || '')
     for (const job of list) {
       try {
-        if (mode === 'copy') { const { data } = await api.post('/resumes/copy', { base_resume_id: baseId, job_id: job.id }); if (list.length === 1) navigate(`/resumes/${data.id}`) }
-        else {
-          pendingRef.current[job.id] = { title: job.title, company: job.company, op: 'tailor' }
-          pushToast({ kind: 'progress', msg: `Tailoring for "${job.title}"…` })
-          await api.post('/resumes/tailor', { base_resume_id: baseId, job_id: job.id })
-          markFlight(job.id, TAILOR, { base_name: baseName, replaces: !!job.tailored_resume_id })
-        }
-      } catch (e) { delete pendingRef.current[job.id]; pushToast({ kind: 'error', msg: `${mode === 'copy' ? 'Copy' : 'Tailor'} failed for "${job.title}"${detailSuffix(e)}` }); console.error(`${mode} failed`, e.response?.data?.detail || e.message) }
+        const { data } = await api.post('/resumes/copy', { base_resume_id: baseId, job_id: job.id })
+        if (list.length === 1) navigate(`/resumes/${data.id}`)
+      } catch (e) { pushToast({ kind: 'error', msg: `Copy failed for "${job.title}"${detailSuffix(e)}` }); console.error('copy failed', e.response?.data?.detail || e.message) }
     }
     setChecked(new Set())
-  }, [pushToast, resumes, markFlight, navigate])
+  }, [pushToast, navigate])
   const openTailored = useCallback(async (job) => {
     if (job.tailored_resume_id) { navigate(`/resumes/${job.tailored_resume_id}`); return }
     try { const { data } = await api.get('/resumes'); const copy = (data || []).find((r) => !r.is_base && r.job_id === job.id); if (copy) { navigate(`/resumes/${copy.id}`); return } } catch {}
-    setPicker({ mode: 'tailor', jobs: [job] })
+    setPicker({ jobs: [job] })
   }, [navigate])
 
   // Create-copy modal: seed method + default base when it opens
   useEffect(() => {
     if (!picker) return
-    setCvMode(picker.mode || 'tailor')
     setCvBase(resumes[0]?.id ?? null)
   }, [picker, resumes])
-  // 'Copy with tracers' can't use the Persona base — fall back to a real base
-  const pickMethod = useCallback((m) => {
-    setCvMode(m)
-    if (m === 'copy') setCvBase((b) => (b === 'persona' ? (resumes[0]?.id ?? null) : b))
-  }, [resumes])
-  const cvBases = useMemo(() => {
-    const list = resumes.map((r) => ({ id: r.id, name: r.name }))
-    if (cvMode === 'tailor' && personaAvailable) list.push({ id: 'persona', name: 'Persona' })
-    return list
-  }, [resumes, cvMode, personaAvailable])
+  const cvBases = useMemo(() => resumes.map((r) => ({ id: r.id, name: r.name })), [resumes])
 
   const openRescoreBulk = useCallback(async () => {
     loadRescoreOpts()
@@ -793,7 +774,6 @@ export default function V2JobFeed() {
         case 'a': if (job) applyJob(job); break
         case 'e': case 'o': if (openLink(job)) { opened(job); window.open(openLink(job), '_blank', 'noopener,noreferrer') } break
         case 'r': if (job) openRescore(job); break
-        case 't': if (job) setPicker({ mode: 'tailor', jobs: [job] }); break   // the ⋯ menus hint t
         case 'c': if (job) navigate(`/cover-letters?job=${job.id}`); break   // and c
         default: break
       }
@@ -1279,7 +1259,6 @@ export default function V2JobFeed() {
               <div onClick={() => bulkStatus('skip')} className="v2-onrail v2-ctl" style={RAIL_BTN}>Skip</div>
               {/* ui: keep — RAIL_BTN, as above */}
               <div onClick={bulkScore} className="v2-onrail v2-ctl" style={RAIL_BTN}>Score</div>
-              <div onClick={() => setPicker({ mode: 'tailor', jobs: jobs.filter((j) => checked.has(j.id)) })} className="v2-onrail v2-ctl" style={{ ...RAIL_BTN, gap: 5 }}><span style={{ color: 'var(--rail-accent)' }}>✦</span>Tailor</div>
               <div onClick={() => setChecked(new Set())} className="v2-onrail" style={{ width: 27, height: 27, borderRadius: 'var(--radius-control)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: 'var(--on-rail-dim)', cursor: 'pointer' }}>✕</div>
             </div>
           )}
@@ -1408,9 +1387,9 @@ export default function V2JobFeed() {
                         <>
                           <div onClick={() => setRowMenu(null)} style={{ position: 'fixed', inset: 0, zIndex: 59 }} />
                           <Menu ariaLabel="Job actions" style={{ position: 'fixed', left: rowMenu.left, top: rowMenu.top, bottom: rowMenu.bottom, zIndex: 60, width: 228 }}>
-                            {[['Mark applied', 'a', () => applyJob(j)], ['Tailor résumé', 't', () => setPicker({ mode: 'tailor', jobs: [j] })], ['Rescore', 'r', () => openRescore(j)], [__DEMO__ ? 'Open posting ↗ · original may have expired' : 'Open posting ↗', 'e', () => openLink(j) && window.open(openLink(j), '_blank', 'noopener,noreferrer')]].map(([label, key, act]) => (
+                            {[['Mark applied', 'a', () => applyJob(j)], ['Rescore', 'r', () => openRescore(j)], [__DEMO__ ? 'Open posting ↗ · original may have expired' : 'Open posting ↗', 'e', () => openLink(j) && window.open(openLink(j), '_blank', 'noopener,noreferrer')]].map(([label, key, act]) => (
                               <MenuItem key={label} hint={key} hintMono onClick={() => { setRowMenu(null); act() }}
-                                style={label === 'Tailor résumé' ? { fontWeight: 600 } : undefined}>{label}</MenuItem>
+                                >{label}</MenuItem>
                             ))}
                             <MenuItem danger onClick={() => { setRowMenu(null); ignoreCompany(j) }}
                               style={{ display: j.company ? 'flex' : 'none' }}>Ignore {j.company} everywhere</MenuItem>
@@ -1493,12 +1472,10 @@ export default function V2JobFeed() {
                     {openLink(d) && <Button variant="secondary" size="sm" href={openLink(d)} target="_blank" title={openLink(d)} onClick={() => opened(d)} style={{ height: headOpen ? 36 : 30 }}>Open ↗</Button>}
                     {/* Routed through Button (not hand-drawn) so it reads --btn-shadow/--btn-weight/--btn-primary-bg/-ink
                         and the hover/pressed rules; the style override only restores height/padding/line-height, which track the collapsing header. */}
-                    {/* while a tailor runs the button says so and does nothing: `disabled`
-                        would repaint it --line on --muted, which reads as "unavailable"
-                        rather than "working", so it dims in place at .55 instead. */}
-                    <Button variant="ai" size="sm" title={dAct.tailoring ? tailorMarkTitle(dAct) : undefined}
-                      onClick={dAct.tailoring ? () => {} : () => d.tailored_resume_id ? openTailored(d) : setPicker({ mode: 'tailor', jobs: [d] })}
-                      style={{ height: headOpen ? 36 : 30, padding: '0 19px', lineHeight: 'inherit', opacity: dAct.tailoring ? 0.55 : 1, cursor: dAct.tailoring ? 'default' : undefined }}>{dAct.tailoring ? '✦ Tailoring…' : d.tailored_resume_id ? '✦ Open tailored ↗' : 'Tailor résumé'}</Button>
+                    {d.tailored_resume_id && (
+                      <Button variant="ai" size="sm" onClick={() => openTailored(d)}
+                        style={{ height: headOpen ? 36 : 30, padding: '0 19px', lineHeight: 'inherit' }}>✦ Open tailored ↗</Button>
+                    )}
                     <div style={{ position: 'relative', flex: '0 0 auto' }}>
                       {/* Round 9: IconButton's bordered 36, with a width/height
                           override so the square still tracks the collapsing header
@@ -1512,13 +1489,10 @@ export default function V2JobFeed() {
                           <div onClick={() => setHeadMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 44 }} />
                           <Menu ariaLabel="Job actions" style={{ position: 'absolute', top: '100%', right: 0, zIndex: 45, marginTop: 5, width: 236 }}>
                             {[
-                              // hidden while a tailor is already running: it would queue a second
-                              // run against the copy this one is about to write
-                              ...(d.tailored_resume_id && !dAct.tailoring ? [['✦ Re-tailor résumé', 't', () => setPicker({ mode: 'tailor', jobs: [d] }), true]] : []),
                               ['Mark applied', 'a', () => applyJob(d)],
                               ['Rescore', 'r', () => openRescore(d)],
                               ['Cover letter ↗', 'c', () => navigate(`/cover-letters?job=${d.id}`)],
-                              ['Copy résumé with tracked links', '', () => setPicker({ mode: 'copy', jobs: [d] })],
+                              ['Copy résumé with tracked links', '', () => setPicker({ jobs: [d] })],
                             ].map(([label, key, act, bold]) => (
                               <MenuItem key={label} hint={key} hintMono onClick={() => { setHeadMenu(false); act() }}
                                 style={bold ? { color: 'var(--text)', fontWeight: 600 } : undefined}>{label}</MenuItem>
@@ -1828,17 +1802,17 @@ export default function V2JobFeed() {
         </section>
       </div>
 
-      {/* create résumé copy modal — method (tailor / copy) + base pick */}
+      {/* create résumé copy modal — base pick */}
       {picker && (() => {
         const single = picker.jobs.length === 1 ? picker.jobs[0] : null
         const existing = single?.tailored_resume_id
         return (
           // escape={false}: the Feed closes every overlay from one handler that
           // stands down while a ConfirmDialog is up.
-          <ModalPanel width={436} title={`${cvMode === 'tailor' ? 'Tailor résumé' : 'Copy résumé'} — ${single ? single.title : `${picker.jobs.length} selected roles`}`} onClose={() => setPicker(null)} escape={false} zIndex={60} style={{ overflow: 'hidden' }}>
+          <ModalPanel width={436} title={`Copy résumé — ${single ? single.title : `${picker.jobs.length} selected roles`}`} onClose={() => setPicker(null)} escape={false} zIndex={60} style={{ overflow: 'hidden' }}>
               {/* header */}
               <HeaderRow align="stretch" pad="20px 24px 16px" style={{ flexDirection: 'column', gap: 5 }}>
-                <Label>{cvMode === 'tailor' ? 'Tailor résumé' : 'Copy résumé with tracked links'}</Label>
+                <Label>Copy résumé with tracked links</Label>
                 <Heading size={19} className="v2-dialogtitle">{single ? single.title : `${picker.jobs.length} selected roles`}</Heading>
                 {single?.company && <span style={{ fontSize: 12.5, color: 'var(--text-2)' }}>{single.company}</span>}
               </HeaderRow>
@@ -1852,20 +1826,6 @@ export default function V2JobFeed() {
               )}
               {/* body */}
               <div style={{ padding: '18px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <Label>Method</Label>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    {[['tailor', '✦ Tailor with AI', 'Rewrites bullets to match the posting · uses the LLM', undefined], ['copy', <><CopyGlyph />Copy with tracked links</>, 'Exact duplicate with tracked links · instant', 'tracked links — short links that record when a recruiter opens them']].map(([m, label, help, tip]) => {
-                      const on = cvMode === m
-                      return (
-                        <div key={m} onClick={() => pickMethod(m)} title={tip} style={{ flex: 1, padding: '10px 12px', border: `1px solid ${on ? 'var(--accent)' : 'var(--edge)'}`, background: on ? 'var(--accent-soft)' : 'transparent', borderRadius: 'var(--radius-cell)', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: on ? 'var(--accent)' : 'var(--text)' }}>{label}</span>
-                          <Helper>{help}</Helper>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <Label>Base résumé</Label>
                   {cvBases.length === 0 ? <span style={{ fontSize: 13, color: 'var(--muted)' }}>No base résumés found.</span>
@@ -1885,9 +1845,9 @@ export default function V2JobFeed() {
               </div>
               {/* footer */}
               <FooterRow variant="wide">
-                <Helper>{cvMode === 'tailor' ? 'Runs the LLM on the résumé' : 'Instant · no LLM cost'}</Helper>
+                <Helper>Exact duplicate with tracked links · instant, no LLM</Helper>
                 <Button variant="secondary" size="sm" onClick={() => setPicker(null)} style={{ marginLeft: 'auto' }}>Cancel</Button>
-                <Button variant={cvMode === 'tailor' ? 'ai' : 'primary'} size="sm" onClick={() => runResume(cvMode, picker.jobs, cvBase)} disabled={cvBase == null}>{cvMode === 'tailor' ? 'Tailor résumé' : 'Create copy'}</Button>
+                <Button variant="primary" size="sm" onClick={() => runResume(picker.jobs, cvBase)} disabled={cvBase == null}>Create copy</Button>
               </FooterRow>
           </ModalPanel>
         )

@@ -25,7 +25,7 @@ from backend.tests.r4_support import ACT_AS, client, set_setting  # noqa: F401 (
 
 ANT_KEY = "sk-ant-primary"
 ENV_OPENAI = "sk-openai-from-env"
-FEATURES = ("scoring", "cv_tailor", "cover_letter", "autofill", "email")
+FEATURES = ("scoring", "cover_letter", "autofill", "email")
 
 
 @pytest.fixture(autouse=True)
