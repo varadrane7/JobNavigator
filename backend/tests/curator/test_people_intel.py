@@ -1,18 +1,9 @@
-"""Parsing search hits into people, and email-format inference."""
+"""Reading people from LinkedIn cards, and email guessing from a stored format."""
 import pytest
 
-from backend.curator.intel import email_format_from_snippets, make_email, pattern_from_local
+from backend.curator.intel import make_email
 from backend.curator.linkedin_people import card_details, parse_card
-from backend.curator.people import (classify, guess_email, job_areas, names_company, parse_linkedin_hit,
-                                    priority, profile_country, same_company)
-
-
-@pytest.mark.parametrize("local,pat", [
-    ("jdoe", "flast"), ("jane.doe", "first.last"), ("john", "first"), ("JohnSmith", "firstlast"),
-    ("j.doe", "f.last"), ("doej", "lastf"), ("jane_doe", "first_last"), ("xyz", None),
-])
-def test_pattern_from_local(local, pat):
-    assert pattern_from_local(local) == pat
+from backend.curator.people import classify, guess_email, job_areas, names_company, priority, profile_country, same_company
 
 
 @pytest.mark.parametrize("pat,email", [
@@ -28,28 +19,9 @@ def test_make_email_needs_last_name_when_pattern_uses_it():
     assert make_email("Cher", "", "first", "x.com") == "cher@x.com"
 
 
-def test_email_format_from_snippets_prefers_com_and_skips_vendor_domains():
-    results = [
-        {"title": "Ramp Email Format - RocketReach", "snippet": "most common is [first].[last] (ex. jane.doe@ramp.se)"},
-        {"title": "Ramp | LeadIQ", "snippet": "email support@leadiq.com. Ramp uses FLast@ramp.com (ex. JDoe@ramp.com)"},
-    ]
-    assert email_format_from_snippets(results, "Ramp") == ("ramp.com", "flast")
-    assert email_format_from_snippets([{"title": "", "snippet": "jane.doe@other.com"}], "Ramp") == (None, None)
-
-
 def test_guess_email_uses_intel():
     assert guess_email("Daniel Katz", {"email_pattern": "flast", "domain": "ramp.com"}) == ("dkatz@ramp.com", 0.6)
     assert guess_email("Daniel Katz", {}) == (None, None)
-
-
-def test_parse_linkedin_hit():
-    hit = parse_linkedin_hit({"url": "https://www.linkedin.com/in/dkatz?trk=x",
-                              "title": "Daniel Katz - Engineering Manager at Ramp | LinkedIn", "snippet": ""}, "Ramp")
-    assert hit == {"name": "Daniel Katz", "headline": "Engineering Manager at Ramp", "url": "https://www.linkedin.com/in/dkatz",
-                   "location": None, "country": None, "current": True}
-    assert parse_linkedin_hit({"url": "https://ramp.com", "title": "Ramp", "snippet": ""}, "Ramp") is None
-    assert parse_linkedin_hit({"url": "https://www.linkedin.com/in/x", "title": "Jo Q - EM at Brex | LinkedIn",
-                               "snippet": ""}, "Ramp") is None
 
 
 @pytest.mark.parametrize("headline,kind", [
@@ -65,10 +37,8 @@ def test_classify(headline, kind):
     assert classify(headline) == kind
 
 
-def test_priority_founders_matter_at_small_companies():
-    assert priority("founder", True) > priority("recruiter", True)
-    assert priority("founder", False) < priority("recruiter", False)
-    assert priority("hiring_manager", False) == 3
+def test_priority_orders_hiring_managers_then_recruiters_then_founders():
+    assert priority("hiring_manager") == 3 > priority("recruiter") > priority("founder") > priority("engineer")
 
 
 def test_parse_card():
@@ -77,38 +47,11 @@ def test_parse_card():
     assert parse_card("") == ("", "")
 
 
-def _hit(url, title, snippet, company="Ramp"):
-    return parse_linkedin_hit({"url": url, "title": title, "snippet": snippet}, company)
-
-
-def test_hit_reads_location_and_current_employer():
-    h = _hit("https://www.linkedin.com/in/zw", "Zach Williams - Lead Technical Recruiter at Ramp | LinkedIn",
-             "Lead Technical Recruiter at Ramp · Experience: Ramp · Education: Kean University · "
-             "Location: New York City Metropolitan Area · 500+ connections on LinkedIn.")
-    assert (h["location"], h["country"], h["current"]) == ("New York City Metropolitan Area", "US", True)
-    assert _hit("https://www.linkedin.com/in/dk", "Daniel Katz - Engineering Manager at Ramp | LinkedIn",
-                "Engineering Manager at Ramp · Experience: Ramp · Location: 20005.")["country"] == "US"
-
-
-def test_hit_flags_people_who_left_or_work_elsewhere():
-    # headline is stale, Experience shows the current employer
-    assert _hit("https://www.linkedin.com/in/a", "Ann Lee - Engineering Manager at Ramp | LinkedIn",
-                "Engineering Manager at Ramp · Experience: Brex · Location: San Francisco")["current"] is False
-    assert _hit("https://www.linkedin.com/in/b", "Bo Chan - EM at Brex, ex-Ramp | LinkedIn", "") is None
-    assert _hit("https://www.linkedin.com/in/c", "Cy Dee - Head of Engineering @ Ramp Network | LinkedIn",
-                "Experience: Ramp Network · Location: Warsaw")["current"] is False
-    # only the snippet mentions the company
-    assert _hit("https://www.linkedin.com/in/d", "Di Eve - Engineering Manager at Plaid | LinkedIn",
-                "Previously built card products at Ramp.")["current"] is False
-
-
-def test_hit_country_from_location_or_subdomain():
-    assert _hit("https://ch.linkedin.com/in/x", "Xi Yu - Engineering Manager at Infosys | LinkedIn",
-                "Engineering Manager at Infosys", "Infosys")["country"] == "CH"
-    assert _hit("https://hr.linkedin.com/in/y", "Al M - Engineering Manager at Infosys | LinkedIn",
-                "Experience: Infosys · Location: Karlovac", "Infosys")["country"] == "HR"
+def test_profile_country_from_location_or_subdomain():
     assert profile_country("https://uk.linkedin.com/in/z", None) == "GB"
+    assert profile_country("https://ch.linkedin.com/in/x", None) == "CH"
     assert profile_country("https://in.linkedin.com/in/z", "San Francisco Bay Area") == "US"   # moved
+    assert profile_country("https://www.linkedin.com/in/z", "20005") == "US"
     assert profile_country("https://www.linkedin.com/in/z", None) is None
 
 

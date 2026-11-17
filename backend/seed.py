@@ -84,7 +84,6 @@ DEFAULT_SETTINGS = {
     "oidc_provider_name": ("", "Name shown on the sign-in button (default: the provider)"),
     "reject_cron": ("0 4 * * *", "Auto-reject cron (min hour day month dow). Empty = disabled"),
     # ── Daily curator (backend/curator) ──
-    "searxng_url": ("http://searxng:8080", "SearXNG base URL the curator searches with (the compose service by default)"),
     "curate_cron": ("30 4 * * *", "Daily Top-N curation cron (min hour day month dow, app time zone). Empty = disabled"),
     "curate_count": ("50", "How many jobs the curator saves each day"),
     "curate_runs_per_day": ("1", "How many times a day the curator runs (count the hours in curate_cron). With 2 or more, outreach_count and outreach_network_count stay per-day totals shared across the runs, and each run continues the day's pick numbering"),
@@ -100,7 +99,7 @@ DEFAULT_SETTINGS = {
                                            "Cognizant", "DynPro", "Revature", "Turing", "ELITEBRAIN", "Outlier", "DataAnnotation",
                                            "Mercor", "Micro1", "Dice", "Apex Systems", "Diverse Lynx", "Collabera"]),
                                "Companies the curator drops: staffing agencies, body shops, AI-training gigs (matched on the name's first words)"),
-    "curate_weights": (json.dumps({"fit": 0.40, "fresh": 0.20, "visa_comp": 0.20, "reply": 0.12, "stability": 0.08, "tracked": 0.05}),
+    "curate_weights": (json.dumps({"fit": 0.40, "fresh": 0.20, "visa_comp": 0.20, "reply": 0.12, "tracked": 0.05}),
                        "Weights of the curator's composite score"),
     "target_base_min": ("115000", "Target base salary floor (USD) for companies that are not well funded or sponsoring"),
     "target_base_max": ("150000", "Target base salary that scores full marks"),
@@ -131,7 +130,6 @@ DEFAULT_SETTINGS = {
     "followup_daily_limit": ("8", "Most follow-ups the Due list shows in one day, so leads that were open before the schedule existed come up over several days (default 8)"),
     "followup_days": ("4,9", "Days after the connection request or message when each follow-up is due, comma-separated and rising (default 4,9; invalid counts as default)"),
     "invites_daily_cap": ("8", "Connection requests a day (People screen and nag). Above 12 counts as 12; 0 or invalid counts as 8"),
-    "people_searxng": ("false", "Let people search query SearXNG (site:linkedin.com/in) before LinkedIn. Off by default: the engines return no LinkedIn profiles and it spends 4 queries per company. SearXNG is still used for company intel"),
     "people_company_cap": ("5", "Companies a day the US job lane searches for people (each costs 2-3 LinkedIn loads of the run's share; a company searched in the last 30 days is not searched again). At most 10"),
     "nag_calendar": ("{}", "JSON {\"YYYY-MM-DD\": \"task\"}: the day's planned post or task, added to the nag"),
     "network_scout_cron": ("15 6 * * *", "Daily lead-scout cron (people to network with, independent of jobs). Empty = disabled"),
@@ -504,10 +502,12 @@ DEFAULT_SETTINGS = {
 }
 
 # Settings of removed features. Their rows may still sit in a database; a client that still sends one
-# (an old cached page) is ignored instead of refused, and nothing reads them. Not deleted here.
+# (an old cached page) is ignored instead of refused, and nothing reads them. The startup cleanup
+# (see the removed-keys loop below) deletes their rows, the install row and every account's own.
 REMOVED_SETTING_KEYS = {
     "cv_tailor_prompt", "persona_tailor_prompt", "tailor_auto_quick_score",
     "cv_tailor_llm_provider", "cv_tailor_llm_model", "cv_tailor_llm_effort",
+    "searxng_url", "people_searxng",       # SearXNG was removed: the live rows are deleted at startup
 }
 
 # Settings the app writes at runtime but never seeds. PATCH /api/settings rejects
@@ -991,6 +991,7 @@ END $$;""",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS talking_points JSON",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS project_ref VARCHAR",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS evidence TEXT",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS from_post BOOLEAN",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS next_action_at DATE",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_action_at TIMESTAMPTZ",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS resurfaced INTEGER DEFAULT 0",
@@ -1422,7 +1423,7 @@ def migrate_llm_settings(db):
             _merge(member_row)
 
     provider_keys = ["llm_provider", "llm_fallback_provider", "email_llm_provider",
-                     "cv_tailor_llm_provider", "cover_letter_llm_provider", "autofill_llm_provider",
+                     "cover_letter_llm_provider", "autofill_llm_provider",
                      "scoring_llm_provider"]
     for key in provider_keys:
         for r in _all_rows(db, key):
@@ -1430,7 +1431,7 @@ def migrate_llm_settings(db):
                 r.value = "openai"
 
     model_keys = ["llm_model", "llm_fallback_model", "email_llm_model",
-                  "cv_tailor_llm_model", "cover_letter_llm_model", "autofill_llm_model",
+                  "cover_letter_llm_model", "autofill_llm_model",
                   "scoring_llm_model"]
     for key in model_keys:
         for r in _all_rows(db, key):
@@ -1477,7 +1478,7 @@ def clear_seeded_local_urls(db) -> list:
 # Marker of the one-time per-provider key migration below (install row, never served, not writable).
 PROVIDER_KEYS_MIGRATED_KEY = "llm_provider_keys_migrated"
 # Slot prefixes in the order a conflict is settled: the Primary's key wins.
-_KEY_SLOT_ORDER = (("", "llm"), ("scoring_", "scoring_llm"), ("cv_tailor_", "cv_tailor_llm"),
+_KEY_SLOT_ORDER = (("", "llm"), ("scoring_", "scoring_llm"),
                    ("cover_letter_", "cover_letter_llm"), ("autofill_", "autofill_llm"),
                    ("email_", "email_llm"), ("fallback", "llm_fallback"))
 

@@ -77,15 +77,15 @@ def test_each_slot_key_goes_to_its_own_provider(test_db):
 def test_on_a_conflict_the_primary_key_wins_and_the_log_names_the_others(test_db, caplog):
     set_setting(test_db, "llm_provider", "claude_api")
     set_setting(test_db, "llm_api_key", "sk-ant-primary")
-    set_setting(test_db, "cv_tailor_llm_provider", "claude_api")
-    set_setting(test_db, "cv_tailor_llm_api_key", "sk-ant-other")
+    set_setting(test_db, "cover_letter_llm_provider", "claude_api")
+    set_setting(test_db, "cover_letter_llm_api_key", "sk-ant-other")
     set_setting(test_db, "autofill_llm_provider", "claude_api")
     set_setting(test_db, "autofill_llm_api_key", "sk-ant-primary")       # same key: no conflict
     migrate_llm_provider_keys(test_db)
     assert _install(test_db, "anthropic_api_key") == "sk-ant-primary"
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
-    assert len(warnings) == 1 and "cv_tailor_llm" in warnings[0] and "sk-ant" not in warnings[0]
-    assert _install(test_db, "cv_tailor_llm_api_key") == "sk-ant-other"  # legacy row kept
+    assert len(warnings) == 1 and "cover_letter_llm" in warnings[0] and "sk-ant" not in warnings[0]
+    assert _install(test_db, "cover_letter_llm_api_key") == "sk-ant-other"  # legacy row kept
 
 
 def test_a_key_in_a_slot_without_a_provider_is_not_migrated(test_db):

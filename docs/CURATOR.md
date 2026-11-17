@@ -12,7 +12,7 @@ The run happens once per account, in turn, each on that account's own jobs, rés
 Persona. List size, window, excludes, weights, pay targets and outreach counts are personal
 settings (Settings › Daily curator; a new member starts from the defaults). The curator model
 and its fallback follow the account's choice: **Inherit** the owner's provider and key, or
-**Own** (the member's own provider and key). The schedule, SearXNG URL, embedding model and
+**Own** (the member's own provider and key). The schedule, embedding model and
 parallelism stay the owner's. An account with no résumé is skipped; everyone can press
 **Run curator** for their own list. Telegram summaries go to each account's own chat.
 
@@ -24,7 +24,7 @@ parallelism stay the owner's. An account with no résumé is skipped; everyone c
 | Hard drops | companies in `curate_company_exclude` (staffing agencies, body shops, AI-training gigs) and gig titles ("AI code evaluation", "annotation"), title words in `curate_title_exclude` (staff, lead, manager…; senior titles stay in), JD says no sponsorship, JD asks for 6+ years | regex |
 | Embedding pre-filter | résumé-vs-JD cosine similarity on the local embedding model (`curate_embed_model`) | seconds |
 | LLM fit | the top `curate_llm_pool` (150) get the usual light fit score, if they have none | local LLM |
-| Company intel | for the companies that could make the cut: funding stage, last raise, layoffs, how often candidates hear back, pay band for ~3 YOE, email format. 5 SearXNG queries + 1 LLM extraction, cached 30 days in `company_intel` | search + local LLM |
+| Company data | no web research. Your own reply rate at the company comes from your applications; the email format (domain + name pattern) is read from `company_intel` where an earlier version stored one | SQL |
 | Rank | composite of the parts below, at most 2 jobs per company, one copy of a posting seen on two boards (same first company word + same title) | none |
 | Write | top 50 → `saved` with `curated_rank`; the rest of the window → `ignored` (`curation.out = true`, reversible) | SQL |
 | Outreach | people for the top companies, then people to know (below), email guess, drafted note + email | search + LinkedIn + LLM |
@@ -33,13 +33,11 @@ Composite score (`curate_weights`):
 
 - **fit 0.40**: the LLM résumé score, blended with the embedding percentile.
 - **fresh 0.20**: full marks for the first 4 h after posting, then the value halves every 18 h.
-- **visa/pay 0.20**: the best of three signals:
+- **visa/pay 0.20**: the better of two signals:
   - H-1B sponsorship (LCA count and approval rate);
-  - pay against the target band (`target_base_min` 115k to `target_base_max` 150k, taken from the posting, else the LCA median, else the web estimate);
-  - "well funded" (Series C+, public, a recent Series B, or 50+ LCAs), which is never held to the band.
-- **reply 0.12**: your own reply rate at that company once you have 3+ applications there, else its interview-review reputation. Greenhouse/Ashby/Lever postings get a small bump; Workday/Taleo/iCIMS a small dip.
-- **stability 0.08**: funding stage, a raise in the last year, no layoffs.
-- **tracked 0.05**: 1 for a company on your Companies list. A saved `curate_weights` without this key still gets it.
+  - pay against the target band (`target_base_min` 115k to `target_base_max` 150k, taken from the posting, else the LCA median).
+- **reply 0.12**: your own reply rate at that company once you have 3+ applications there, else a neutral 0.5. Greenhouse/Ashby/Lever postings get a small bump; Workday/Taleo/iCIMS a small dip.
+- **tracked 0.05**: 1 for a company on your Companies list. The score is the weighted mean of the parts that are known, so a part left out (unknown pay with H-1B filings ignored) or a retired key in a saved `curate_weights` (`stability`) never skews it.
 
 Each pick gets an **apply window**:
 
@@ -47,7 +45,7 @@ Each pick gets an **apply window**:
 - **morning**: ranks 16–35.
 - **today**: the rest.
 
-It also gets a one-line reason, e.g. `fit 86 (SDE) · posted 5h ago · H-1B 320 LCAs · Series C '25 · ~$140k base (posted)`.
+It also gets a one-line reason, e.g. `fit 86 (SDE) · posted 5h ago · H-1B 320 LCAs · ~$140k base (posted)`.
 
 ## A lane abroad (relocation)
 
@@ -62,7 +60,7 @@ An account whose `curate_countries` has no `US` (Settings › Daily curator › 
   "English is our working language" 0.65, silence 0.35 (0.7 for a company on your list). Pay is
   the posted EUR or AED figure (AED per month × 12) against the market band: DE €60–80k,
   NL/IE €55–75k, UAE AED 216–300k. A German posting under the reduced Blue Card threshold
-  (€45,934) scores 0 on pay and says so. LCA medians and the web pay estimate (a US figure) are
+  (€45,934) scores 0 on pay and says so. LCA medians (a US figure) are
   not used.
 - **People to know** are looked for in the lane's first country.
 
@@ -82,22 +80,21 @@ day.
 |---|---|---|
 | Fit scoring of unscored shortlist jobs | the **Scoring** model (your local one) | per job, there are many |
 | Embedding pre-filter | `curate_embed_model` on the local server | seconds for hundreds of JDs |
-| Company research, outreach drafts | `curator_llm` → `curator_fallback_llm` → local | defaults: Antigravity `gemini-3.8-flash-medium`, then Claude Code `claude-sonnet-5`, then the local model. A model that fails or hits its limit is skipped for the rest of the run. `curate_concurrency` (4) calls run in parallel |
+| Outreach drafts | `curator_llm` → `curator_fallback_llm` → local | defaults: Antigravity `gemini-3.8-flash-medium`, then Claude Code `claude-sonnet-5`, then the local model. A model that fails or hits its limit is skipped for the rest of the run. `curate_concurrency` (4) calls run in parallel |
 
 ## People to contact
 
 For each top company (best-ranked first) until `outreach_count` people are found:
 
-1. SearXNG `site:linkedin.com/in <company> ("engineering manager" OR founder OR CTO …)` and a recruiter query. Results are classified as founder / hiring manager / recruiter. Founders rank higher at small companies (Series B or earlier, or under 300 people).
-2. If nothing useful turns up, LinkedIn's own people search runs in a headless browser:
+1. A US job's company goes through the **company-first** search (`curator/company_first.py`): companies searched in the last 30 days come from the `company_people` cache, otherwise LinkedIn's faceted search runs on your own session: your schools' alumni, then (top 3 companies only) the authors of the company's hiring posts of the past week (`authorCompany`), then recruiters and engineers, then ex-colleagues. Post authors are saved with audience `post` (`hiring_manager` when the headline says so) and the post text as evidence, so the draft can mention the post. Every step spends one load of the daily LinkedIn budget (15 on the main session, split across the day's runs) and stops once enough people are found. A company whose LinkedIn id is not known yet, and any job outside the US, uses LinkedIn's keyword people search:
    - It uses the **mock account** session first (the one Settings → LinkedIn refreshes).
    - It falls back to the **personal** account only if the mock session is dead or rate-limited.
    - It makes at most `linkedin_people_daily_cap` searches a day, spaced 20–60 s apart.
    Every hit is checked before it is kept:
-   - **Still there.** The profile's current employer (the `Experience:` line in the search snippet, or LinkedIn's `Current:`/`Past:` line) must be the company. Headlines like "ex-Ramp" or "formerly at Ramp", and hits where only the bio mentions the company, are dropped.
-   - **Same country as the job.** Read from the profile's `Location:` (a bare ZIP counts as US), else the LinkedIn subdomain (`in.linkedin.com`, `ch.linkedin.com`). LinkedIn's own search adds its location filter. A `www` profile with no location passes for US jobs only.
-   - **Close to the role.** The job title's area (ML, data, mobile, frontend, infra, security, backend) is added to the hiring-manager query and boosts managers whose headline matches. Technical recruiters beat general ones, and university / early-career recruiters rank up for new-grad roles. Someone in the job's state ranks above someone elsewhere in the country.
-3. An email address is guessed from the company's email format, which comes from RocketReach/LeadIQ snippets via SearXNG (e.g. `flast@ramp.com`). It is marked *(guess)*. Nothing is sent or verified.
+   - **Still there.** The card's current employer (LinkedIn's `Current:`/`Past:` line) must be the company. Headlines like "ex-Ramp" or "formerly at Ramp" are dropped.
+   - **Same country as the job.** Read from the card's location (a bare ZIP counts as US). LinkedIn's own search adds its location filter.
+   - **Close to the role.** The job title's area (ML, data, mobile, frontend, infra, security, backend) boosts managers whose headline matches. Technical recruiters beat general ones, and university / early-career recruiters rank up for new-grad roles. Someone in the job's state ranks above someone elsewhere in the country.
+3. An email address is guessed from the company's stored email format (e.g. `flast@ramp.com`), when there is one. It is marked *(guess)*. Nothing is sent or verified.
 4. The curator LLM drafts a LinkedIn note (≤ 290 chars, a Premium note) and a short cold email. Both can be copied from the Today screen.
    The drafts get a structured profile from the default résumé: summary, recent roles, skills, and **every project
    with its stack, one line and link**. The LLM names the one project closest to the role.
@@ -109,43 +106,13 @@ whether or not those companies have a posting for you today. Job slots nobody fi
 
 - **Which companies, best first:**
   1. your Companies list (tier 1, then 2);
-  2. companies that ranked just below today's cut;
-  3. well-funded companies already in `company_intel`.
+  2. companies that ranked just below today's cut.
   Left out: any company with a contact in the last 45 days, and anything in `curate_company_exclude`.
-- **Who:** engineering managers, directors / heads / VPs of engineering, plus founders and CTOs at small companies. Recruiters are skipped because they work open requisitions. The team areas come from your résumé (backend, platform, AI…), and people in your Persona city rank first.
-- **Drafts:** no "I applied". One line on why the company (from its research note), the closest project with its link, then the ask: a 15-minute chat, and a referral when a backend or AI role opens.
+- **Who:** engineering managers, directors / heads / VPs of engineering, plus founders and CTOs. Recruiters are skipped because they work open requisitions. The team areas come from your résumé (backend, platform, AI…), and people in your Persona city rank first.
+- **Drafts:** no "I applied". The closest project with its link, then the ask: a 15-minute chat, and a referral when a backend or AI role opens.
 - They are saved as `contacts.purpose = 'network'` with no job, and appear under **People to know** on the Today screen.
 
 LinkedIn allows roughly 100–200 invitations a week even with Premium. At 35 people a day, send the rest by email.
-
-## Search: SearXNG
-
-- The `searxng` compose service is reachable at `http://searxng:8080` from the backend and at `http://127.0.0.1:8888` from this host only. Its config is `searxng/settings.yml`.
-- From this host, Google, DuckDuckGo, Brave and Qwant answer with CAPTCHAs or bans. They are disabled; Bing, Yahoo, Presearch, Mojeek and Startpage do the work.
-- Set `SEARXNG_SECRET` in `.env`.
-
-### LM Studio
-
-The `mcp-searxng` compose service exposes SearXNG as an MCP server on `127.0.0.1:3010`. It provides these tools:
-
-- `searxng_web_search`
-- `web_url_read`
-- `searxng_search_suggestions`
-- `searxng_instance_info`
-
-To use it in LM Studio, put this in `~/.lmstudio/mcp.json` (or Program → Install → Edit mcp.json):
-
-```json
-{
-  "mcpServers": {
-    "searxng": { "url": "http://127.0.0.1:3010/mcp" }
-  }
-}
-```
-
-Then enable the `searxng` integration in a chat. Your local model can now search and read pages.
-
-The backend has its own tool loop with `web_search` and `fetch_page` over the same SearXNG (`backend/analyzer/agent_loop.py`) for open-ended agent tasks. The curator mostly uses fixed queries plus small JSON extractions instead, because those stay reliable on a 4B local model.
 
 ## Settings
 
@@ -154,7 +121,7 @@ Find these in Settings → Pipeline → Daily curator:
 - `curate_cron`, `curate_count`, `curate_window_hours`, `curate_llm_pool`, `curate_auto_ignore`
 - `target_base_min`, `target_base_max`, `curate_title_exclude`, `curate_weights`, `curate_embed_model`
 - `curator_llm_*`, `curator_fallback_llm_*`, `curate_concurrency`
-- `outreach_count`, `outreach_network_count`, `curate_company_exclude`, `linkedin_people_daily_cap`, `searxng_url`
+- `outreach_count`, `outreach_network_count`, `curate_company_exclude`, `linkedin_people_daily_cap`
 
 **Run now** (on the Today screen or in Settings) does the same thing as the cron run. `POST /api/curator/run` takes the flags `outreach=false` and `send=false`.
 

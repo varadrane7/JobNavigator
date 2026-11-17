@@ -265,12 +265,12 @@ async def _cache_job_page(job_id: str, url: str):
 
 
 async def _fetch_and_store_description(job_id: str, url: str) -> None:
-    """Write the ATS-quality JD onto a job that has none. `_resolve_tailoring_jd`
+    """Write the ATS-quality JD onto a job that has none. `_resolve_generation_jd`
     owns the fetch, the SSRF gate and the write, so this adds no second cascade."""
     from types import SimpleNamespace
-    from backend.api.routes_resumes import _resolve_tailoring_jd
+    from backend.api.routes_resumes import _resolve_generation_jd
     try:
-        await _resolve_tailoring_jd(
+        await _resolve_generation_jd(
             SimpleNamespace(id=job_id, description="", url=url, cached_page_text="")
         )
     except Exception as e:

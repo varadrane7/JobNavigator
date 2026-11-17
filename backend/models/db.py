@@ -295,7 +295,8 @@ class VisaCache(Base):
 
 
 class CompanyIntel(Base):
-    """What the curator learned about a company from the web (SearXNG + LLM), cached ~30 days."""
+    """Company facts stored by earlier versions of the curator's web research. Only `domain` and `email_pattern` are
+    still read (to guess a work email); the other columns are history and nothing writes them any more."""
     __tablename__ = "company_intel"
 
     name_key = Column(String, primary_key=True)          # lowercased company name
@@ -328,7 +329,7 @@ class Contact(AccountScoped, Base):
     linkedin_url = Column(String, nullable=True)
     email = Column(String, nullable=True)
     email_confidence = Column(Float, nullable=True)      # 0..1, from the company's known email pattern
-    source = Column(String, nullable=True)               # searxng | linkedin_mock | linkedin_personal
+    source = Column(String, nullable=True)               # linkedin_mock | linkedin_personal (older rows: searxng)
     location = Column(String, nullable=True)             # as the profile shows it ("New York City Metropolitan Area")
     note = Column(Text, nullable=True)                   # draft LinkedIn note (<300 chars)
     note_manual = Column(Boolean, default=False)         # True: no usable note could be drafted, write one by hand
@@ -346,6 +347,7 @@ class Contact(AccountScoped, Base):
     talking_points = Column(JSON, nullable=True)         # ["...", ...]
     project_ref = Column(String, nullable=True)          # the persona project to show them
     evidence = Column(Text, nullable=True)               # the post / snippet that surfaced them
+    from_post = Column(Boolean, nullable=True)           # evidence is a hiring post the person wrote (drafts cite it)
     next_action_at = Column(Date, nullable=True, index=True)   # due date of the next step (follow-up)
     last_action_at = Column(DateTime(timezone=True), nullable=True)
     resurfaced = Column(Integer, default=0)              # times the curator put this person back on Today uncontacted

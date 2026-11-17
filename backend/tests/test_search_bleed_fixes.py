@@ -15,7 +15,7 @@ def _job(**kw):
 
 
 def test_composite_leaves_out_an_unknown_part():
-    parts = {"fit": 0.8, "fresh": 0.8, "visa_comp": None, "reply": 0.8, "stability": 0.8, "tracked": 0.8}
+    parts = {"fit": 0.8, "fresh": 0.8, "visa_comp": None, "reply": 0.8, "tracked": 0.8}
     assert scoring.composite(parts) == pytest.approx(0.8, abs=1e-4)
 
 
@@ -38,7 +38,7 @@ def test_rank_with_filings_ignored_treats_filer_and_non_filer_alike(monkeypatch)
             {**base, "id": 2, "company": "New Startup", "lca": None, "approval": None}]
     cfg = {"target_min": 115000, "target_max": 150000, "weights": scoring.DEFAULT_WEIGHTS, "countries": ["US"],
            "ignore_h1b": True}
-    ranked = run.rank(jobs, {}, {}, {"big filer": 200000}, cfg, now)
+    ranked = run.rank(jobs, {}, {"big filer": 200000}, cfg, now)
     assert ranked[0]["score"] == ranked[1]["score"]
     assert all(j["parts"]["visa_comp"] is None and "LCA" not in j["reason"] for j in ranked)
 
@@ -52,7 +52,7 @@ def test_rank_still_uses_filings_by_default(monkeypatch):
     jobs = [{**base, "id": 1, "company": "Big Filer", "lca": 900, "approval": 99},
             {**base, "id": 2, "company": "New Startup", "lca": None, "approval": None}]
     cfg = {"target_min": 115000, "target_max": 150000, "weights": scoring.DEFAULT_WEIGHTS, "countries": ["US"]}
-    ranked = run.rank(jobs, {}, {}, {}, cfg, now)
+    ranked = run.rank(jobs, {}, {}, cfg, now)
     assert ranked[0]["company"] == "Big Filer" and ranked[0]["score"] > ranked[1]["score"]
 
 

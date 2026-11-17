@@ -8,7 +8,7 @@ Runs once a day per account (scheduler `network_scout`, after the curator) and o
 2. Alumni: one faceted people search on the main session for the user's schools (schoolFilter ids, network
    1st/2nd, US) when their LinkedIn ids are known; else a keyword search per school.
 3. Project fit: founders, CTOs and engineering managers whose profile matches a domain the user's projects
-   show (LinkedIn keyword search; SearXNG only when the account's `people_searxng` setting is on).
+   show (LinkedIn keyword search).
 The scout shares the LinkedIn allocator (curator/li_budget.py): with two or more curator runs a day it draws only on
 the reserve the runs leave over, never on their shares. People it finds are filed per company
 (curator/company_first.py) so the curator's company-first search can reuse them.
@@ -29,7 +29,6 @@ import re
 from datetime import timedelta
 
 from backend.models.db import Contact, SessionLocal
-from backend.search.searxng import SearchError, search
 from backend.tz import local_today
 
 logger = logging.getLogger("jobnavigator.curator.scout")
@@ -38,7 +37,6 @@ MAX_SCORED = 40          # candidates the model scores per run
 MIN_SCORE = 50
 
 _DEFAULT_ROLES = ["backend engineer", "software engineer"]
-_LEAD_TITLES = '("founder" OR "co-founder" OR "CTO" OR "engineering manager" OR "head of engineering" OR "technical recruiter")'
 
 _SYSTEM = ("You help a job seeker decide who is worth contacting on LinkedIn. Be blunt: most "
            "people are not worth it. Never invent facts about the sender or the person beyond what you "
@@ -76,26 +74,6 @@ _PROMPT_NO_DRAFTS = _PROMPT.replace(
 
 # ── candidate discovery ──────────────────────────────────────────────────────
 
-def parse_profile_hit(r: dict) -> dict | None:
-    """{name, headline, url, company, location} from a SearXNG result for a linkedin.com/in profile."""
-    from backend.curator.people import _EXPERIENCE, _LOCATION, profile_country
-    url = (r.get("url") or "").split("?")[0]
-    if "linkedin.com/in/" not in url:
-        return None
-    title = re.sub(r"\s*\|\s*LinkedIn.*$", "", r.get("title") or "").strip()
-    parts = re.split(r"\s+[-–—|]\s+", title, maxsplit=1)
-    name, headline = parts[0].strip(), (parts[1].strip() if len(parts) > 1 else "")
-    if not name or len(name) > 60:
-        return None
-    snippet = r.get("snippet") or ""
-    exp = _EXPERIENCE.search(snippet)
-    loc = _LOCATION.search(snippet)
-    location = loc.group(1).strip(" .…") if loc else None
-    company = exp.group(1).strip(" .…") if exp else company_from_headline(headline)
-    return {"name": name, "headline": headline or snippet[:140], "url": url, "company": company or "",
-            "location": location, "country": profile_country(url, location), "evidence": snippet[:400]}
-
-
 def company_from_headline(headline: str) -> str:
     m = re.search(r"(?:\bat|@)\s+([A-Z0-9][\w&.\- ]{1,40}?)(?:\s*[|,·•(]|$)", headline or "")
     return m.group(1).strip() if m else ""
@@ -119,7 +97,7 @@ def parse_post(p: dict) -> dict | None:
 
 
 def plan_queries(net: dict, contact: dict) -> dict:
-    """{posts: [...], project_fit: [...], affinity: [...]} search strings from the networking profile."""
+    """{posts: [...], li_people: [(kind, keywords)]} search strings from the networking profile."""
     roles = [r for r in net.get("target_roles") or [] if r][:3] or _DEFAULT_ROLES
     domains = [d for d in net.get("target_domains") or [] if d]
     if not domains:
@@ -135,31 +113,15 @@ def plan_queries(net: dict, contact: dict) -> dict:
     # posts are worldwide unless a place is named: the user's city, and US remote
     posts = [f'hiring "{r}" {city}' for r in roles[:2]] + [f'hiring "{roles[0]}" remote US'] \
         + [f"hiring {_DOMAIN_WORDS.get(d, d.replace('-', ' '))} engineer {city}" for d in domains[:2]]
-    project_fit = [f'site:linkedin.com/in {_LEAD_TITLES} "{d.replace("-", " ")}" startup {city}' for d in domains[:3]]
-    affinity = [f'site:linkedin.com/in "{a}" {_LEAD_TITLES}' for a in (net.get("affinities") or [])[:4] if a]
     # LinkedIn's own people search (mock session) takes plain keywords, one title at a time
     words = [_DOMAIN_WORDS.get(d, d.replace("-", " ")) for d in domains[:3]]
     li_people = [("project_fit", f"{t} {w}") for w in words for t in ("engineering manager", "founder")][:4]
     li_people += [("alumni", f"{a} engineering manager") for a in (net.get("affinities") or [])[:2] if a]
-    return {"posts": posts, "project_fit": project_fit, "affinity": affinity, "li_people": li_people}
+    return {"posts": posts, "li_people": li_people}
 
 
 _DOMAIN_WORDS = {"llm-infra": "LLM", "devtools": "developer tools", "healthtech": "health tech",
                  "fintech": "fintech", "homelab": "self-hosted"}
-
-
-async def _searx_leads(queries: list[str], kind: str, n: int = 10) -> list[dict]:
-    out = []
-    for q in queries:
-        try:
-            for r in await search(q, n=n):
-                hit = parse_profile_hit(r)
-                if hit:
-                    out.append({**hit, "lead_kind": kind, "source": "searxng"})
-        except SearchError as e:
-            logger.warning(f"scout search failed ({q!r}): {e}")
-            break
-    return out
 
 
 # ── scoring and saving ───────────────────────────────────────────────────────
@@ -335,36 +297,30 @@ async def _run_network_scout(sync_projects: bool) -> dict:
                 break
             summary["posts"] += len(posts)
             cands.extend({**lead, "lead_kind": "hiring_post"} for lead in (parse_post(p) for p in posts) if lead)
-        from backend.curator.people import searxng_for_people
-        searx = []
-        if searxng_for_people():
-            searx = await _searx_leads(q["project_fit"], "project_fit") + await _searx_leads(q["affinity"], "alumni")
-            cands.extend(searx)
-        if len(searx) < want:
-            # LinkedIn's own people search, inside the scout's share of the allocator (the reserve); the alumni
-            # query goes first, as one faceted search over the user's schools when their ids are known
-            hits_all = []
-            for kind, kw, facets in await asyncio.to_thread(li_queries, q["li_people"], aff):
-                if not (li_budget.available(li_budget.MOCK) or li_budget.available(li_budget.MAIN)):
-                    summary["errors"].append("LinkedIn budget for the scout is spent")
-                    break
-                try:
-                    hits = await li.search(kw, country="US", **facets)
-                except Exception as e:
-                    summary["errors"].append(f"people: {e}")
-                    break
-                for h in hits:
-                    c = {"name": h["name"], "headline": h.get("headline") or "", "url": h["url"],
-                         "company": h.get("current_text") or company_from_headline(h.get("headline") or ""),
-                         "location": h.get("location"), "country": h.get("country"),
-                         "degree": h.get("degree"), "evidence": h.get("headline") or "",
-                         "lead_kind": kind, "source": h.get("source"),
-                         "company_verified": bool(h.get("current_text"))}
-                    cands.append(c)
-                    hits_all.append(c)
-            if hits_all:
-                from backend.curator import company_first
-                await asyncio.to_thread(company_first.remember_scouted, hits_all)
+        # LinkedIn's own people search, inside the scout's share of the allocator (the reserve); the alumni
+        # query goes first, as one faceted search over the user's schools when their ids are known
+        hits_all = []
+        for kind, kw, facets in await asyncio.to_thread(li_queries, q["li_people"], aff):
+            if not (li_budget.available(li_budget.MOCK) or li_budget.available(li_budget.MAIN)):
+                summary["errors"].append("LinkedIn budget for the scout is spent")
+                break
+            try:
+                hits = await li.search(kw, country="US", **facets)
+            except Exception as e:
+                summary["errors"].append(f"people: {e}")
+                break
+            for h in hits:
+                c = {"name": h["name"], "headline": h.get("headline") or "", "url": h["url"],
+                     "company": h.get("current_text") or company_from_headline(h.get("headline") or ""),
+                     "location": h.get("location"), "country": h.get("country"),
+                     "degree": h.get("degree"), "evidence": h.get("headline") or "",
+                     "lead_kind": kind, "source": h.get("source"),
+                     "company_verified": bool(h.get("current_text"))}
+                cands.append(c)
+                hits_all.append(c)
+        if hits_all:
+            from backend.curator import company_first
+            await asyncio.to_thread(company_first.remember_scouted, hits_all)
 
         db = SessionLocal()
         try:

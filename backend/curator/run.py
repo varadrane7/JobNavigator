@@ -8,8 +8,8 @@ Pipeline (each step narrows the pool before the next, more expensive one):
               sponsorship, JD asks for 6+ years
   embed       résumé-vs-JD similarity on the local embedding model (seconds)
   LLM score   the top curate_llm_pool by similarity get the usual light fit score
-  intel       company research (SearXNG + one LLM extraction, cached 30 days)
-  rank        fit / freshness / visa-or-pay / reply odds / stability / tracked (scoring.py),
+  intel       each company's stored email format (local data only)
+  rank        fit / freshness / visa-or-pay / reply odds / tracked (scoring.py),
               one copy of a posting seen on two boards
   write       Top-N -> saved + curated_rank; the rest of the pool -> ignored
   release     a Top pick left unapplied for curate_release_hours goes back to the pool (it may be
@@ -311,21 +311,18 @@ def _resume_names() -> dict:
         db.close()
 
 
-def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: dict, now: datetime) -> list[dict]:
+def rank(jobs: list[dict], replies: dict, lca_median: dict, cfg: dict, now: datetime) -> list[dict]:
     from backend.analyzer.score_keys import is_resume_key
-    year = local_today().year
     relocation = market.is_relocation(cfg.get("countries") or market.DEFAULT_COUNTRIES)
     ignore_h1b = bool(cfg.get("ignore_h1b"))
     names = _resume_names() if any(is_resume_key(j.get("best_cv")) for j in jobs) else {}
     for j in jobs:
         k = name_key(j["company"])
-        it = intel.get(k) or {}
         hours = scoring.hours_since(j["posted_at"], now)
         if relocation:
-            # abroad: sponsorship and pay come from the posting; intel's pay guess is a US one
+            # abroad: sponsorship and pay come from the posting
             pay, cur = market.posted_pay(j["description"])
             base, src, pay_note = None, "", market.pay_note(pay, cur)
-            funded = scoring.well_funded(it.get("funding_stage"), it.get("last_raise_year"), 0, year)
             sponsor = market.relocation_score(j["description"], j.get("tracked"))
             if sponsor >= 1.0:
                 pay_note = " · ".join(x for x in ("visa/relocation offered", pay_note) if x)
@@ -333,16 +330,12 @@ def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: di
             if market.below_blue_card(pay, cur, j.get("loc_country")):
                 comp, pay_note = 0.0, pay_note + " (under the Blue Card floor)"
         elif ignore_h1b:
-            # No filings anywhere: not a sponsor signal, not an LCA wage guess, not "funded because it files".
-            base, src = scoring.comp_estimate(j["salary_min"], j["salary_max"], None,
-                                              it.get("est_base_min"), it.get("est_base_max"))
-            funded = scoring.well_funded(it.get("funding_stage"), it.get("last_raise_year"), 0, year)
+            # No filings anywhere: not a sponsor signal, not an LCA wage guess.
+            base, src = scoring.comp_estimate(j["salary_min"], j["salary_max"], None)
             sponsor, pay_note = None, ""
             comp = scoring.comp_score(base, cfg["target_min"], cfg["target_max"]) if base else None
         else:
-            base, src = scoring.comp_estimate(j["salary_min"], j["salary_max"], lca_median.get(k),
-                                              it.get("est_base_min"), it.get("est_base_max"))
-            funded = scoring.well_funded(it.get("funding_stage"), it.get("last_raise_year"), j["lca"], year)
+            base, src = scoring.comp_estimate(j["salary_min"], j["salary_max"], lca_median.get(k))
             sponsor = scoring.sponsor_score(j["lca"], j["approval"], j["jd_flag"])
             comp, pay_note = scoring.comp_score(base, cfg["target_min"], cfg["target_max"]), ""
         own_rate, own_n = replies.get(k, (None, 0))
@@ -350,10 +343,8 @@ def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: di
             "fit": scoring.fit_score(j["best_cv_score"], j.get("embed_pct")),
             "fresh": scoring.freshness(hours),
             # None = unknown pay with filings ignored: left out of the score, neither help nor harm
-            "visa_comp": comp if ignore_h1b and not relocation else scoring.visa_comp_score(sponsor, comp, funded),
-            "reply": scoring.reply_score(own_rate, own_n, it.get("reply_reputation"), j["url"]),
-            "stability": scoring.stability_score(it.get("funding_stage"), it.get("last_raise_year"),
-                                                 it.get("recent_layoffs"), year),
+            "visa_comp": comp if ignore_h1b and not relocation else scoring.visa_comp_score(sponsor, comp),
+            "reply": scoring.reply_score(own_rate, own_n, j["url"]),
             "tracked": 1.0 if j.get("tracked") else 0.0,
         }
         reply_note = f"you heard back {round(own_rate * 100)}% of {own_n}" if own_n >= 3 else ""
@@ -364,12 +355,8 @@ def rank(jobs: list[dict], intel: dict, replies: dict, lca_median: dict, cfg: di
         j["source_penalty"] = penalty
         j["hours"] = hours
         j["reason"] = scoring.reason(best_cv=names.get(str(j["best_cv"]), j["best_cv"]), llm_score=j["best_cv_score"], hours=hours,
-                                     lca_count=None if relocation or ignore_h1b else j["lca"], stage=it.get("funding_stage"),
-                                     last_raise_year=it.get("last_raise_year"), base=base, base_src=src,
+                                     lca_count=None if relocation or ignore_h1b else j["lca"], base=base, base_src=src,
                                      reply_note=" · ".join(x for x in (pay_note, reply_note) if x))
-        j["intel"] = {x: it.get(x) for x in ("funding_stage", "last_raise_year", "headcount",
-                                             "recent_layoffs", "reply_reputation", "notes")}
-        j["funded"] = funded
     return sorted(jobs, key=lambda j: -j["score"])
 
 
@@ -407,7 +394,7 @@ def write_results(top: list[dict], pool_ids: list, auto_ignore: bool, dropped: d
             row.status, row.saved = "saved", True
             row.curated_on, row.curated_rank = today, offset + i
             row.curation = {"score": j["score"], "parts": j["parts"], "reason": j["reason"],
-                            "apply_window": scoring.apply_window(i, j["parts"]["fresh"]), "intel": j["intel"],
+                            "apply_window": scoring.apply_window(i, j["parts"]["fresh"]),
                             "released": (row.curation or {}).get("released") or 0}
         ignored = 0
         if auto_ignore:
@@ -525,10 +512,6 @@ def _me() -> tuple[str, str, dict]:
         db.close()
 
 
-def _is_small(it: dict) -> bool:
-    return (it.get("headcount") or 10**6) < 300 or (it.get("funding_stage") or "") in ("seed", "pre_seed", "series_a", "series_b")
-
-
 # What went wrong finding people in the current run, shown in the run's summary (curator/routes.py)
 # instead of only the log: a broken LinkedIn session stayed invisible for ten days.
 _OUTREACH_ERRORS: list = []
@@ -541,7 +524,7 @@ _SURFACED: list = []
 async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[dict]:
     """People for the day's top jobs, one company at a time. A US job's company goes through the company-first
     search (curator/company_first.py: cache, then LinkedIn facets, then keywords when the company's LinkedIn id is
-    unknown); any other country keeps the per-job keyword search. SearXNG is not asked unless `people_searxng`."""
+    unknown); any other country keeps the per-job keyword search."""
     from backend.curator.linkedin_people import LinkedInPeople
     from backend.curator import audience as aud
     from backend.curator import company_first as cf
@@ -565,16 +548,15 @@ async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[d
                 continue
             seen_companies.add(k)
             it = intel.get(k) or {}
-            small = _is_small(it)
             city = (j.get("loc_city") or "").title() or None
             want = 1 if want_total - len(found) <= len(top) else 2
             country = j.get("loc_country") or "US"
             try:   # one company failing never costs the people already found
                 if country == "US":
                     people = await cf.people_for(li, j, plan.get(cf.key_of(j["company"])) or {}, want=want, aff=aff,
-                                                 known=known, small=small, city=city, today=today)
+                                                 known=known, city=city, today=today)
                 else:
-                    people = await find_people(j["company"], j["title"], small, li, want=want,
+                    people = await find_people(j["company"], j["title"], li, want=want,
                                                country=country, region=j.get("loc_region"), city=city)
             except Exception as e:
                 logger.exception(f"curator outreach: {j['company']} failed: {e}")
@@ -590,6 +572,8 @@ async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[d
                               "email": email, "email_confidence": conf, "source": p.get("source"),
                               "note": d.get("note"), "email_draft": d.get("email_draft"), "found_on": today,
                               "note_manual": bool(d.get("note_manual")), "note_issue": d.get("note_issue"),
+                              "evidence": (p.get("evidence") or "")[:600] if p.get("from_post") else None,
+                              "from_post": True if p.get("from_post") else None,
                               "purpose": "job", "lead_kind": "job"})
     _OUTREACH_ERRORS.extend(n for n in li.notes if n not in _OUTREACH_ERRORS)
     if connected_ids:      # the only write of the planning's findings, after the run's searching, 3 at most
@@ -615,25 +599,21 @@ NETWORK_COOLDOWN_DAYS = 45
 
 def network_companies(ranked: list[dict], top: list[dict], cfg: dict, limit: int) -> list[str]:
     """Companies to meet decision makers at, best first: the Companies list (tier 1, then 2, ...), then
-    companies ranked just below today's cut, then well-funded researched companies. Leaves out any
+    companies ranked just below today's cut. Leaves out any
     company with a contact found in the last 45 days (today's job contacts included) and staffing firms."""
-    from backend.models.db import CompanyIntel
     today = local_today()
-    year = today.year
     db = SessionLocal()
     try:
         recent = {name_key(c) for (c,) in db.query(Contact.company)
                   .filter(Contact.found_on >= today - timedelta(days=NETWORK_COOLDOWN_DAYS)).all()}
         tracked = [n for (n,) in db.query(Company.name).filter(Company.active == True)  # noqa: E712
                    .order_by(func.coalesce(Company.tier, 99), Company.name).all()]
-        funded = [r.display_name or r.name_key for r in db.query(CompanyIntel).order_by(CompanyIntel.fetched_at.desc()).all()
-                  if scoring.well_funded(r.funding_stage, r.last_raise_year, None, year)]
     finally:
         db.close()
     top_ids = {j["id"] for j in top}
     below_cut = [j["company"] for j in ranked if j["id"] not in top_ids]
     out, seen = [], set(recent)
-    for name in tracked + below_cut + funded:
+    for name in tracked + below_cut:
         k = name_key(name)
         if not k or k in seen or scoring.company_excluded(name, cfg["company_exclude"]):
             continue
@@ -665,7 +645,7 @@ async def find_network_contacts(companies: list[str], want_total: int, abroad: s
     country = "US"
     if abroad:
         country, city, region = abroad, None, None
-    intel = await get_intel(companies[: want_total * 2])
+    intel = get_intel(companies[: want_total * 2])
     today = local_today()
     found = []
     async with LinkedInPeople() as li:
@@ -674,7 +654,7 @@ async def find_network_contacts(companies: list[str], want_total: int, abroad: s
                 break
             it = intel.get(name_key(company)) or {}
             try:
-                people = await find_decision_makers(company, areas, _is_small(it), li, want=1,
+                people = await find_decision_makers(company, areas, li, want=1,
                                                     country=country, region=region, city=city)
             except Exception as e:
                 logger.exception(f"curator network outreach: {company} failed: {e}")
@@ -770,7 +750,6 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     shortlist = keep[: cfg["llm_pool"]]
     await _score_unscored(shortlist)
 
-    # prelim rank (no intel) to choose which companies to research
     db = SessionLocal()
     try:
         keys = list({name_key(j["company"]) for j in shortlist})
@@ -779,10 +758,9 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
         replies = own_reply_rates(db)
     finally:
         db.close()
-    prelim = pick_top(rank(shortlist, {}, replies, lca_median, cfg, now), min(len(shortlist), cfg["count"] * 2))
-    intel = await get_intel(list({j["company"] for j in prelim}))
-    ranked = rank(shortlist, intel, replies, lca_median, cfg, now)
+    ranked = rank(shortlist, replies, lca_median, cfg, now)
     top = pick_top(ranked, cfg["count"])
+    intel = get_intel([j["company"] for j in top])
     if dry_run:
         return {"pool": len(pool_ids), "candidates": len(pool), "dropped": len(dropped), "llm_pool": len(shortlist),
                 "top": [{"rank": i, "title": j["title"], "company": j["company"], "score": j["score"],
@@ -799,7 +777,6 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     _OUTREACH_ERRORS.clear()
     _SURFACED.clear()
     from backend.curator import people as _people
-    _people.NO_PROFILES.clear()
     drafts_off = outreach and not await asyncio.to_thread(_people.drafts_enabled)
     if drafts_off:
         logger.info("curator: outreach drafts are off for this profile (outreach_drafts_enabled=false); "
@@ -837,9 +814,6 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
         summary["surfaced_connected"] = len(set(_SURFACED))
     if drafts_off:
         summary["outreach_drafts"] = "off: no notes or emails drafted"
-    if _people.NO_PROFILES:
-        _OUTREACH_ERRORS.insert(0, f"web search returned no LinkedIn profiles for {len(set(_people.NO_PROFILES))} "
-                                   "companies (the search engines are not answering site: queries)")
     if _OUTREACH_ERRORS:
         summary["outreach_errors"] = list(dict.fromkeys(_OUTREACH_ERRORS))[:5]
     logger.info(f"curator done: {summary}")

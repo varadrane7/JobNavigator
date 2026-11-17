@@ -16,7 +16,7 @@ from backend.models.db import DEFAULT_COVER_LETTER_TEMPLATE, get_db, CoverLetter
 from backend.accounts.settings import get_setting
 from backend.api._input import str_field, uuid_filter
 from backend.job_monitor import launch_background, JobAlreadyRunningError
-from backend.api.routes_resumes import _content_disposition, _header_name, _render_pdf, _rewrite_urls_with_tracers, _resolve_tailoring_jd  # shared with resumes
+from backend.api.routes_resumes import _content_disposition, _header_name, _render_pdf, _rewrite_urls_with_tracers, _resolve_generation_jd  # shared with resumes
 from backend.scraper._shared.link_kinds import job_link
 
 logger = logging.getLogger("jobnavigator.cover_letters")
@@ -485,7 +485,7 @@ async def _generate_inner(resume_id, job_id, voice, length, template, page_forma
         db.close()
 
     # -- Phase 1b: resolve the JD (may fetch the page), no session held ------
-    job_description = await _resolve_tailoring_jd(job_ref)
+    job_description = await _resolve_generation_jd(job_ref)
     if not job_description:
         raise RuntimeError(f"cover letter: job {job_id} has no usable description")
 

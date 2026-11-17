@@ -105,7 +105,7 @@ def test_scores_are_identical_with_and_without_the_flag(test_db, monkeypatch):
     def ranked():
         jobs = [job(1, "Acme", "Build APIs. Acme participates in E-Verify."), job(2, "Beta", "Build APIs."),
                 job(3, "Gamma", "Build APIs. We do not use E-Verify.")]
-        return [(j["id"], j["score"], j["parts"]) for j in run.rank(jobs, {}, {}, {}, cfg, now)]
+        return [(j["id"], j["score"], j["parts"]) for j in run.rank(jobs, {}, {}, cfg, now)]
     plain = ranked()
     for company, status in (("Acme", "yes"), ("Beta", "no"), ("Gamma", "unknown")):
         everify.set_status(test_db, company, status, "test")
@@ -113,7 +113,7 @@ def test_scores_are_identical_with_and_without_the_flag(test_db, monkeypatch):
     assert ranked() == plain
     # and the same jobs without the sentence score the same as with it
     bare = [job(1, "Acme", "Build APIs."), job(2, "Beta", "Build APIs."), job(3, "Gamma", "Build APIs.")]
-    assert [(j["id"], j["score"]) for j in run.rank(bare, {}, {}, {}, cfg, now)] == [(i, s_) for i, s_, _p in plain]
+    assert [(j["id"], j["score"]) for j in run.rank(bare, {}, {}, cfg, now)] == [(i, s_) for i, s_, _p in plain]
 
 
 def test_the_flag_is_on_job_and_lead_payloads_and_settable_by_api_and_tool(api_client, test_db):

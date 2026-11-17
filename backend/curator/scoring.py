@@ -8,13 +8,8 @@ from datetime import datetime, timezone
 from backend.analyzer.location import fold
 
 # `tracked` is 1 for a company on the Companies list (picked by hand), else 0.
-DEFAULT_WEIGHTS = {"fit": 0.40, "fresh": 0.20, "visa_comp": 0.20, "reply": 0.12, "stability": 0.08, "tracked": 0.05}
+DEFAULT_WEIGHTS = {"fit": 0.40, "fresh": 0.20, "visa_comp": 0.20, "reply": 0.12, "tracked": 0.05}
 
-LATE_STAGES = {"series_c", "series_d", "series_e", "series_f", "series_g", "public"}
-STAGE_STABILITY = {
-    "public": 0.8, "series_g": 0.9, "series_f": 0.9, "series_e": 0.9, "series_d": 0.9, "series_c": 0.85,
-    "series_b": 0.7, "series_a": 0.55, "seed": 0.4, "pre_seed": 0.3, "bootstrapped": 0.55,
-}
 FRIENDLY_ATS = ("greenhouse.io", "ashbyhq.com", "lever.co", "workable.com", "rippling.com")
 SLOW_ATS = ("myworkdayjobs.com", "taleo.net", "icims.com", "successfactors", "oraclecloud.com", "brassring")
 
@@ -133,7 +128,7 @@ def sponsor_score(lca_count: int | None, approval_rate: float | None, jd_flag: b
     return s
 
 
-def comp_estimate(salary_min, salary_max, lca_median=None, intel_min=None, intel_max=None) -> tuple[int | None, str]:
+def comp_estimate(salary_min, salary_max, lca_median=None) -> tuple[int | None, str]:
     """(estimated base, where it came from)."""
     # under $20k is an hourly/monthly figure or a placeholder, not an annual base
     lo = salary_min if salary_min and salary_min >= 20000 else 0
@@ -144,10 +139,6 @@ def comp_estimate(salary_min, salary_max, lca_median=None, intel_min=None, intel
         return lo or hi, "posted"
     if lca_median:
         return int(lca_median), "lca"
-    if intel_min and intel_max:
-        return (intel_min + intel_max) // 2, "web"
-    if intel_min or intel_max:
-        return intel_min or intel_max, "web"
     return None, ""
 
 
@@ -158,22 +149,13 @@ def comp_score(base: int | None, target_min: int, target_max: int) -> float:
     return clamp((base - floor) / max(1, target_max - floor))
 
 
-def well_funded(stage: str | None, last_raise_year: int | None, lca_count: int | None, this_year: int) -> bool:
-    stage = (stage or "").lower()
-    if stage in LATE_STAGES or (lca_count or 0) >= 50:
-        return True
-    return stage == "series_b" and bool(last_raise_year) and last_raise_year >= this_year - 2
+def visa_comp_score(sponsor: float, comp: float) -> float:
+    return max(sponsor, comp)
 
 
-def visa_comp_score(sponsor: float, comp: float, funded: bool) -> float:
-    return max(sponsor, comp, 0.8 if funded else 0.0)
-
-
-def reply_score(own_rate: float | None, own_n: int, reputation: float | None, url: str = "") -> float:
+def reply_score(own_rate: float | None, own_n: int, url: str = "") -> float:
     if own_rate is not None and own_n >= 3:
         s = clamp(own_rate * 2)
-    elif reputation is not None:
-        s = clamp(reputation)
     else:
         s = 0.5
     host = (url or "").lower()
@@ -181,15 +163,6 @@ def reply_score(own_rate: float | None, own_n: int, reputation: float | None, ur
         s += 0.1
     elif any(a in host for a in SLOW_ATS):
         s -= 0.1
-    return clamp(s)
-
-
-def stability_score(stage: str | None, last_raise_year: int | None, layoffs: bool | None, this_year: int) -> float:
-    s = STAGE_STABILITY.get((stage or "").lower(), 0.5)
-    if last_raise_year and last_raise_year >= this_year - 1:
-        s += 0.1
-    if layoffs:
-        s -= 0.3
     return clamp(s)
 
 
@@ -206,7 +179,9 @@ def fit_score(llm_score: float | None, embed_pct: float | None) -> float:
 
 def composite(parts: dict, weights: dict | None = None) -> float:
     """Weighted mean of the parts. A part set to None is unknown and leaves the mean entirely."""
-    w = {k: v for k, v in {**DEFAULT_WEIGHTS, **(weights or {})}.items() if parts.get(k, 0.0) is not None}
+    # `stability` (a retired part: company funding / layoffs) may still sit in a stored weights setting; it is ignored
+    w = {k: v for k, v in {**DEFAULT_WEIGHTS, **(weights or {})}.items()
+         if k in DEFAULT_WEIGHTS and parts.get(k, 0.0) is not None}
     total = sum(w.values()) or 1.0
     return round(sum(w[k] * parts.get(k, 0.0) for k in w) / total, 4)
 
@@ -220,7 +195,7 @@ def apply_window(rank: int, fresh: float) -> str:
     return "today"
 
 
-def reason(*, best_cv, llm_score, hours, lca_count, stage, last_raise_year, base, base_src, reply_note="") -> str:
+def reason(*, best_cv, llm_score, hours, lca_count, base, base_src, reply_note="") -> str:
     bits = []
     if llm_score is not None:
         bits.append(f"fit {round(llm_score)}" + (f" ({best_cv})" if best_cv else ""))
@@ -228,8 +203,6 @@ def reason(*, best_cv, llm_score, hours, lca_count, stage, last_raise_year, base
         bits.append(f"posted {round(hours)}h ago" if hours < 48 else f"posted {round(hours / 24)}d ago")
     if lca_count:
         bits.append(f"H-1B {lca_count} LCAs")
-    if stage and stage != "unknown":
-        bits.append(stage.replace("_", " ").title() + (f" '{str(last_raise_year)[-2:]}" if last_raise_year else ""))
     if base:
         bits.append(f"~${base // 1000}k base ({base_src})")
     if reply_note:

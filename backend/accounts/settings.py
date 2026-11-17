@@ -49,7 +49,7 @@ PROVIDER_KEY_SETTINGS = {"claude_api": "anthropic_api_key", "openai": "openai_ap
 # The per-slot keys they replace: migrated once (seed.migrate_llm_provider_keys), then neither
 # served nor writable nor read; the rows stay one release for a downgrade.
 LEGACY_LLM_KEY_SETTINGS = ("llm_api_key", "llm_fallback_api_key", "scoring_llm_api_key",
-                           "cv_tailor_llm_api_key", "cover_letter_llm_api_key",
+                           "cover_letter_llm_api_key",
                            "autofill_llm_api_key", "email_llm_api_key")
 
 
@@ -135,13 +135,13 @@ _SECTIONS = [
         "curate_max_years", "curate_drop_unlikely_sponsors", "curate_ignore_h1b", "curate_release_hours", "curate_countries", "curate_source_penalty", "curate_max_age_days",
         "outreach_count", "outreach_network_count", "outreach_drafts_enabled", "curate_runs_per_day",
         "linkedin_mock_daily_cap", "linkedin_main_daily_cap", "linkedin_run_split", "linkedin_run_reserve", "linkedin_cooldown_hours",
-        "scout_daily_leads", "scout_min_score", "github_token", "nag_apply_target", "nag_request_target", "invites_daily_cap", "people_searxng", "people_company_cap", "followup_max", "followup_days", "followup_close_after_days", "followup_daily_limit", "due_ageing_days", "nag_calendar"]),
+        "scout_daily_leads", "scout_min_score", "github_token", "nag_apply_target", "nag_request_target", "invites_daily_cap", "people_company_cap", "followup_max", "followup_days", "followup_close_after_days", "followup_daily_limit", "due_ageing_days", "nag_calendar"]),
     ("curator_llm", "Curator model", POLICY, INHERIT, ["curator"], [
         "curator_llm_provider", "curator_llm_model", "curator_llm_api_key", "curator_llm_effort",
         "curator_fallback_llm_provider", "curator_fallback_llm_model", "curator_fallback_llm_api_key",
         "curator_fallback_llm_effort"]),
     ("curator_infra", "Curator infrastructure", OWNER_ONLY, INHERIT, ["curator"], [
-        "curate_cron", "network_scout_cron", "nag_cron", "curate_concurrency", "curate_embed_model", "llm_local_base_url", "llm_local_api_key", "searxng_url",
+        "curate_cron", "network_scout_cron", "nag_cron", "curate_concurrency", "curate_embed_model", "llm_local_base_url", "llm_local_api_key",
         "linkedin_lookup_max_per_scrape"]),
     ("advanced", "Advanced", OWNER_ONLY, INHERIT, ["advanced"], ["proxy_url", "dashboard_api_key"]),
     # OIDC single sign-on (MT-20): the provider the install trusts; env OIDC_* are the defaults.

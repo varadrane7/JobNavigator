@@ -302,3 +302,12 @@ def test_the_people_endpoint_reports_whether_drafts_are_on(api_client, test_db):
     put_setting(test_db, "outreach_drafts_enabled", "false")
     test_db.commit()
     assert api_client.get("/api/contacts/invites").json()["drafts_enabled"] is False
+
+
+def test_a_redraft_of_a_post_lead_still_cites_the_post(drafting_env):
+    post_text = "We're hiring a backend engineer for the payments team. DM me."
+    c = _contact(drafting_env.db, linkedin_url="post", audience="post", lead_kind="job",
+                 evidence=post_text, from_post=True)
+    r = drafting_env.client.post(f"/api/contacts/{c.id}/draft", json={"stage": "after_acceptance"})
+    assert r.status_code == 200
+    assert "The hiring post they wrote" in drafting_env.prompts[0] and post_text in drafting_env.prompts[0]

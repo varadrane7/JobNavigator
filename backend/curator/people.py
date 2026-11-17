@@ -6,8 +6,7 @@ technical / early-career recruiters rank first.
 
 LinkedIn's own people search (curator/linkedin_people.py; the US lane goes through curator/company_first.py first),
 then a best-guess work email from the company's known email format, and a short LinkedIn note + cold email drafted
-by the LLM (curator/drafting.py). SearXNG `site:linkedin.com/in` is used only when the account's setting
-`people_searxng` is on (default off: the engines return no LinkedIn profiles); SearXNG still serves company intel.
+by the LLM (curator/drafting.py).
 """
 import asyncio
 import logging
@@ -20,7 +19,6 @@ from backend.analyzer.location import parse as parse_location
 from backend.curator.intel import make_email
 from backend.curator.linkedin_people import LinkedInPeople
 from backend.curator.scoring import co_words as _co_words
-from backend.search.searxng import SearchError, search
 
 logger = logging.getLogger("jobnavigator.curator.people")
 
@@ -49,12 +47,8 @@ def split_name(name: str) -> tuple[str, str]:
 
 
 # ── where they are, and whether they still work there ──────────────────────
-# Public profile snippets read "Engineering Manager at Ramp · Experience: Ramp ·
-# Location: New York City Metropolitan Area". The Experience line is the current
-# employer; the profile's country shows in the Location line or, failing that, in
-# the LinkedIn subdomain (in.linkedin.com, ch.linkedin.com; www is mostly the US).
-_LOCATION = re.compile(r"\b(?:Location|Lokalizacja|Ubicación|Localização|Standort|Lieu|Locatie|Località|Plats)\s*:\s*([^·\n]+)", re.I)
-_EXPERIENCE = re.compile(r"\b(?:Experience|Doświadczenie|Experiencia|Experiência|Berufserfahrung|Expérience|Ervaring|Esperienza|Erfarenhet)\s*:\s*([^·\n]+)", re.I)
+# The country of a profile shows in its Location text or, failing that, in the LinkedIn subdomain
+# (in.linkedin.com, ch.linkedin.com; www is mostly the US).
 _LI_SUBDOMAIN = {"uk": "GB"}
 _ZIP = re.compile(r"^\d{5}(?:-\d{4})?$")
 _FORMER = re.compile(r"\b(?:ex|former(?:ly)?|previously|prev|past|alum\w*|retired)\b[^|·,;/]*$", re.I)
@@ -93,71 +87,45 @@ def profile_country(url: str, location: str | None) -> str | None:
     return None
 
 
-def parse_linkedin_hit(r: dict, company: str) -> dict | None:
-    """{name, headline, url, location, country, current} from a SearXNG result for a linkedin.com/in
-    profile that mentions `company`. `current` is False when the profile shows they left (or never
-    worked there: the hit only matched on the snippet)."""
-    url = (r.get("url") or "").split("?")[0]
-    if "linkedin.com/in/" not in url:
-        return None
-    title = re.sub(r"\s*\|\s*LinkedIn.*$", "", r.get("title") or "").strip()
-    parts = re.split(r"\s+[-–—|]\s+", title, maxsplit=1)
-    name, headline = parts[0], (parts[1] if len(parts) > 1 else "")
-    snippet = r.get("snippet") or ""
-    headline = headline or snippet[:140]
-    if not name or not company or not names_company(f"{title} {snippet}", company):
-        return None
-    exp = _EXPERIENCE.search(snippet)
-    loc = _LOCATION.search(snippet)
-    location = loc.group(1).strip(" .…") if loc else None
-    if exp:
-        current = same_company(exp.group(1).strip(" .…"), company)
-    else:
-        current = names_company(headline, company)
-    return {"name": name.strip(), "headline": headline.strip(), "url": url, "location": location,
-            "country": profile_country(url, location), "current": current}
-
-
-def priority(kind: str | None, small_company: bool) -> int:
+def priority(kind: str | None) -> int:
     if kind == "hiring_manager":
         return 3
     if kind == "founder":
-        return 3 if small_company else 1
+        return 1
     if kind == "recruiter":
         return 2
     return 0
 
 
 # ── what team the role sits on ──────────────────────────────────────────────
-# (area, pattern on a job title or a headline, SearXNG query terms, LinkedIn search word)
+# (area, pattern on a job title or a headline, LinkedIn search word)
 _AREAS = [
     ("ml", r"machine learning|\bml\b|\bai\b|applied scien|deep learning|\bllm|\bnlp\b|computer vision|perception",
-     '("machine learning" OR AI OR ML)', "machine learning"),
-    ("data", r"\bdata\b|analytics", "data", "data"),
-    ("mobile", r"\bios\b|android|mobile", "(mobile OR iOS OR Android)", "mobile"),
-    ("frontend", r"front[- ]?end|\bui\b|\bweb\b", "(frontend OR web)", "frontend"),
-    ("infra", r"infra|platform|devops|\bsre\b|site reliability|\bcloud\b|distributed|kubernetes",
-     "(infrastructure OR platform)", "infrastructure"),
-    ("security", r"secur", "security", "security"),
-    ("backend", r"back[- ]?end|\bapi\b|server|payments", "(backend OR platform)", "backend"),
-    ("fullstack", r"full[- ]?stack", "", ""),
+     "machine learning"),
+    ("data", r"\bdata\b|analytics", "data"),
+    ("mobile", r"\bios\b|android|mobile", "mobile"),
+    ("frontend", r"front[- ]?end|\bui\b|\bweb\b", "frontend"),
+    ("infra", r"infra|platform|devops|\bsre\b|site reliability|\bcloud\b|distributed|kubernetes", "infrastructure"),
+    ("security", r"secur", "security"),
+    ("backend", r"back[- ]?end|\bapi\b|server|payments", "backend"),
+    ("fullstack", r"full[- ]?stack", ""),
 ]
 _EARLY = re.compile(r"new grad|graduate|university|entry|junior|early career|\bassociate\b|\b(?:i|1)\b\s*$", re.I)
 
 
 def job_areas(title: str) -> list[str]:
-    return [a for a, rx, _, _ in _AREAS if re.search(rx, title or "", re.I)]
+    return [a for a, rx, _ in _AREAS if re.search(rx, title or "", re.I)]
 
 
-def _area_terms(areas: list[str], li: bool = False) -> str:
-    return next((row[3 if li else 2] for row in _AREAS if row[0] in areas and row[2]), "")
+def _area_terms(areas: list[str]) -> str:
+    return next((row[2] for row in _AREAS if row[0] in areas and row[2]), "")
 
 
-def relevance(c: dict, areas: list[str], small_company: bool, job_region: str | None, early: bool) -> int:
+def relevance(c: dict, areas: list[str], job_region: str | None, early: bool) -> int:
     """Ordering score: who they are first, then how close they sit to this role."""
     h = c.get("headline") or ""
-    score = priority(c["kind"], small_company) * 10
-    if areas and any(re.search(rx, h, re.I) for a, rx, _, _ in _AREAS if a in areas):
+    score = priority(c["kind"]) * 10
+    if areas and any(re.search(rx, h, re.I) for a, rx, _ in _AREAS if a in areas):
         score += 4                                  # manages / hires for this kind of role
     if c["kind"] == "recruiter":
         if re.search(r"technical|tech\b|engineering|software", h, re.I):
@@ -171,66 +139,44 @@ def relevance(c: dict, areas: list[str], small_company: bool, job_region: str | 
     return score
 
 
-async def find_people(company: str, job_title: str, small_company: bool, li: LinkedInPeople | None,
+async def find_people(company: str, job_title: str, li: LinkedInPeople | None,
                       want: int = 2, country: str = "US", region: str | None = None,
                       city: str | None = None) -> list[dict]:
     """Up to `want` people who work at `company` now, in the job's `country`, best first:
-    hiring managers for the role's area, then technical recruiters, founders at small companies."""
+    hiring managers for the role's area, then technical recruiters, founders."""
     areas = job_areas(job_title)
     early = bool(_EARLY.search(job_title or ""))
-    q_co = f'"{company}"'
-    queries = []
-    if areas and _area_terms(areas):
-        queries.append(f'site:linkedin.com/in {q_co} ("engineering manager" OR "head of engineering" OR director) {_area_terms(areas)}')
-    queries.append(f'site:linkedin.com/in {q_co} ("engineering manager" OR "head of engineering" OR founder OR CTO)')
-    queries.append(f'site:linkedin.com/in {q_co} ("technical recruiter" OR recruiter OR "talent acquisition"'
-                   + (' OR "university recruiter" OR "early career"' if early else "") + ")")
-    if city:
-        queries.append(f'site:linkedin.com/in {q_co} ("engineering manager" OR recruiter) "{city}"')
-    li_keywords = [f"{company} engineering manager {_area_terms(areas, li=True)}".strip(), f"{company} technical recruiter"]
-    return await _search_people(company, queries, li_keywords, li, areas=areas, small_company=small_company,
-                                want=want, country=country, region=region, early=early)
+    li_keywords = [f"{company} engineering manager {_area_terms(areas)}".strip(), f"{company} technical recruiter"]
+    return await _search_people(company, li_keywords, li, areas=areas, want=want, country=country, region=region,
+                                early=early)
 
 
 # Who can put someone forward when there is no open role to apply to: the people who
 # own a team's headcount. Recruiters are left out; they work open requisitions.
 DECISION_MAKERS = {"hiring_manager", "founder"}
-# Companies whose web search came back with no LinkedIn profile at all, this run (curator/run.py
-# clears it and reports the count: the search engines stopped honouring `site:` queries).
-NO_PROFILES: list = []
-_PROFILE_AREA_WORDS = {"ml": "AI", "backend": "backend", "infra": "platform", "data": "data",
-                       "mobile": "mobile", "frontend": "frontend", "security": "security"}
 
 
 def profile_areas(text: str) -> list[str]:
     """The team areas the sender's résumé speaks to, in _AREAS order ("backend", "ml", ...)."""
-    return [a for a, rx, _, _ in _AREAS if a != "fullstack" and re.search(rx, text or "", re.I)]
+    return [a for a, rx, _ in _AREAS if a != "fullstack" and re.search(rx, text or "", re.I)]
 
 
-async def find_decision_makers(company: str, areas: list[str], small_company: bool, li: LinkedInPeople | None,
+async def find_decision_makers(company: str, areas: list[str], li: LinkedInPeople | None,
                                want: int = 1, country: str = "US", region: str | None = None,
                                city: str | None = None) -> list[dict]:
-    """Up to `want` engineering managers / directors / heads of engineering at `company` (founders and
-    CTOs too when it is small) who run the kind of team the sender fits, whether or not it is hiring."""
-    q_co = f'"{company}"'
-    words = [_PROFILE_AREA_WORDS[a] for a in areas if a in _PROFILE_AREA_WORDS][:4]
-    area_or = f"({' OR '.join(words)})" if words else ""
-    queries = [f'site:linkedin.com/in {q_co} ("engineering manager" OR "director of engineering" OR "head of engineering") {area_or}'.strip(),
-               f'site:linkedin.com/in {q_co} ("VP of engineering" OR "VP engineering" OR CTO'
-               + (' OR founder OR "co-founder"' if small_company else "") + ")"]
-    if city:
-        queries.append(f'site:linkedin.com/in {q_co} ("engineering manager" OR "director of engineering") "{city}"')
-    li_keywords = [f"{company} engineering manager {_area_terms(areas, li=True)}".strip(),
+    """Up to `want` engineering managers / directors / heads of engineering (founders and CTOs too) at
+    `company` who run the kind of team the sender fits, whether or not it is hiring."""
+    li_keywords = [f"{company} engineering manager {_area_terms(areas)}".strip(),
                    f"{company} director of engineering"]
-    return await _search_people(company, queries, li_keywords, li, areas=areas, small_company=small_company,
-                                want=want, country=country, region=region, early=False, kinds=DECISION_MAKERS)
+    return await _search_people(company, li_keywords, li, areas=areas, want=want, country=country,
+                                region=region, early=False, kinds=DECISION_MAKERS)
 
 
-async def _search_people(company: str, queries: list[str], li_keywords: list[str], li: LinkedInPeople | None, *,
-                         areas: list[str], small_company: bool, want: int, country: str, region: str | None,
+async def _search_people(company: str, li_keywords: list[str], li: LinkedInPeople | None, *,
+                         areas: list[str], want: int, country: str, region: str | None,
                          early: bool, kinds: set[str] | None = None) -> list[dict]:
-    """Run `queries` on SearXNG (then `li_keywords` on LinkedIn when nobody useful turned up) and
-    return the best `want` current employees in `country` whose kind is in `kinds` (default: all but engineers)."""
+    """Run `li_keywords` on LinkedIn until somebody useful turns up and return the best `want` current
+    employees in `country` whose kind is in `kinds` (default: all but engineers)."""
     cands: dict[str, dict] = {}
     rejected = {"left": 0, "country": 0}
 
@@ -252,32 +198,11 @@ async def _search_people(company: str, queries: list[str], li_keywords: list[str
             kind = classify(c["headline"])
             if kind and kind != "engineer" and (kinds is None or kind in kinds):
                 c = {**c, "kind": kind}
-                out.append({**c, "_p": priority(kind, small_company),
-                            "_r": relevance(c, areas, small_company, region, early)})
+                out.append({**c, "_p": priority(kind), "_r": relevance(c, areas, region, early)})
         return sorted(out, key=lambda c: -c["_r"])
 
-    profiles = 0
-    if not searxng_for_people():
-        queries = []                                    # people_searxng is off: LinkedIn only
-    for q in queries:
-        try:
-            for r in await search(q, n=10):
-                profiles += "linkedin.com/in/" in (r.get("url") or "")
-                hit = parse_linkedin_hit(r, company)
-                if hit and keep(hit):
-                    hit["source"] = "searxng"
-                    cands.setdefault(hit["url"], hit)
-        except SearchError as e:
-            logger.warning(f"people search for {company} failed: {e}")
-            break
-        if len([c for c in ranked() if c["_p"] >= 2]) >= want + 2:
-            break
-
-    if queries and not profiles:
-        # the engines answered without a single profile: they are not honouring site:linkedin.com/in
-        NO_PROFILES.append(company)
     best = ranked()
-    if (not best or best[0]["_p"] < 2) and li is not None:
+    if li is not None:
         from backend.curator import names as _names
         li.wanted_ids.add(_names.company_key(company))   # the page this loads may carry the company's LinkedIn id
         for kw in li_keywords:
@@ -297,21 +222,6 @@ async def _search_people(company: str, queries: list[str], li_keywords: list[str
         logger.info(f"people at {company}: dropped {rejected['left']} no longer there, "
                     f"{rejected['country']} outside {country}")
     return [{k: v for k, v in c.items() if not k.startswith("_")} for c in best[:want]]
-
-
-def searxng_for_people() -> bool:
-    """Whether people search may query SearXNG (per-account setting `people_searxng`, default off)."""
-    from backend.accounts.settings import get_setting
-    from backend.models.db import SessionLocal
-    db = SessionLocal()
-    try:
-        raw = get_setting(db, "people_searxng")
-    except Exception as e:
-        logger.warning(f"people_searxng unreadable, leaving SearXNG off for people: {e}")
-        raw = None
-    finally:
-        db.close()
-    return str(raw if raw is not None else "false").strip().lower() in ("true", "1", "yes", "on")
 
 
 def drafts_enabled() -> bool:

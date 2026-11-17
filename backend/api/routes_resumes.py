@@ -829,8 +829,8 @@ def _persist_job_description(job_id, description: str) -> None:
         db.close()
 
 
-async def _resolve_tailoring_jd(job, db=None) -> str:
-    """Resolve the JD text to tailor against, best-quality first: job.description, then a live fetch persisted back to job.description, then the noisier job.cached_page_text as a last resort; returns "" when nothing usable exists.
+async def _resolve_generation_jd(job, db=None) -> str:
+    """Resolve the JD text for a job (cover letters, application prep), best-quality first: job.description, then a live fetch persisted back to job.description, then the noisier job.cached_page_text as a last resort; returns "" when nothing usable exists.
 
     `job` may be a detached snapshot: with db=None the fetched text is persisted
     through a short session of its own, so no connection is held across the

@@ -17,7 +17,7 @@ _SEARCH_SOURCES = {m.source for m in SEARCH_MODES.values()}   # ScrapeLog.source
 # Searches whose run reads several boards: each board is its own kind (None = any board key)
 _BOARD_SPLIT = {"jobspy": None, "creative": frozenset(CREATIVE_BOARDS)}
 _LLM_SLOTS = (("primary", "llm"), ("fallback", "llm_fallback"), ("scoring", "scoring_llm"),
-              ("tailor", "cv_tailor_llm"), ("letter", "cover_letter_llm"),
+              ("letter", "cover_letter_llm"),
               ("autofill", "autofill_llm"), ("email", "email_llm"))
 
 
@@ -100,7 +100,6 @@ def heartbeat(db, event: str) -> dict:
         "linkedin_mock": bool(str(get_install_setting(db, "linkedin_mock_email") or "").strip()),
         "jobs_found_7d": bucket(db.query(Job.id).filter(Job.discovered_at >= week).count()),
         "scored_7d": bucket(_calls("score")),
-        "tailored_7d": bucket(_calls("tailor")),
         "letters_7d": bucket(_calls("cover_letter")),
         "applications_7d": bucket(db.query(Application.id).filter(Application.applied_at >= week).count()),
         "applications_total": bucket(db.query(Application.id).count()),

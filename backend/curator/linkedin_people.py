@@ -520,14 +520,17 @@ class LinkedInPeople:
         url = posts_url(keywords, author_company=author_company)
         try:
             if not await self._open(url, main_only=bool(author_company)):
+                self.bad_pages += 1
                 return []
             if author_company and await self._facets_dropped(url, qtype, {"authorCompany": name or ""}):
+                self.bad_pages += 1
                 return []
             await self.page.mouse.wheel(0, 2500)
             await asyncio.sleep(2)
             posts = await self.page.evaluate(_POSTS_JS)
         except Exception as e:
             logger.warning(f"LinkedIn post search failed ({keywords!r}): {e}")
+            self.bad_pages += 1
             return []
         return [{"author_url": p["url"], "actor": p.get("actor", ""), "text": p.get("text", ""),
                  "urn": p.get("urn", ""), "source": f"linkedin_{self.account}"} for p in posts]

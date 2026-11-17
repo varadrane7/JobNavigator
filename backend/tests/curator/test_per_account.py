@@ -37,7 +37,7 @@ def two_accounts(test_db, monkeypatch):
     async def none(*a, **k):
         return None
 
-    async def no_intel(companies, concurrency=3):
+    def no_intel(companies):
         return {}
     monkeypatch.setattr(run, "similarity", none)
     monkeypatch.setattr(run, "get_intel", no_intel)
@@ -85,7 +85,7 @@ def test_curator_sections_split_personal_model_and_infrastructure():
     assert (sec["curator"]["scope"], sec["curator"]["default"]) == ("policy", "own")
     assert (sec["curator_llm"]["scope"], sec["curator_llm"]["default"]) == ("policy", "inherit")
     assert sec["curator_infra"]["scope"] == "owner_only"
-    for key in ("curate_cron", "searxng_url", "curate_embed_model", "curate_concurrency", "llm_local_base_url"):
+    for key in ("curate_cron", "curate_embed_model", "curate_concurrency", "llm_local_base_url"):
         assert S.section_of(key) == "curator_infra"
     assert S.section_of("curate_count") == "curator" and S.section_of("curator_llm_api_key") == "curator_llm"
 

@@ -259,6 +259,18 @@ class FakeLI:
             r = r.get(kw.get("title"), []) if isinstance(r, dict) else r
         return list(r)
 
+    async def search_posts(self, keywords="", *, author_company=None, qtype=None, name=None):
+        if self.spend and not li_budget.take("main"):
+            self.bad_pages += 1
+            return []
+        self.loads += 1
+        self.calls.append({"keywords": keywords, "author_company": author_company, "qtype": qtype, "name": name})
+        r = self.script.get(qtype, [])
+        if r is BLOCKED:
+            self.bad_pages += 1
+            return []
+        return list(r)
+
     async def __aenter__(self):
         return self
 
@@ -296,8 +308,8 @@ async def test_company_search_runs_alumni_then_role_then_ex_colleague_and_stops_
 async def test_ex_colleague_search_only_for_top_three_and_only_when_nothing_else_was_found(budget, ids):
     li = FakeLI({"ex_colleague": [person("Kay Kotak", "SWE at Stripe | ex-Kotak")]})
     out = await cf.facet_search(li, "Stripe", want=2, top3=True, aff=AFF)
-    assert [c["qtype"] for c in li.calls] == ["alumni", "role", "ex_colleague"]      # recruiter found nobody: no engineer query
-    assert li.calls[2]["past_company"] == ["110647982"] and out[0]["audience"] == "ex_colleague"
+    assert [c["qtype"] for c in li.calls] == ["alumni", "role", "posts_company", "ex_colleague"]   # recruiter found nobody: no engineer query
+    assert li.calls[3]["past_company"] == ["110647982"] and out[0]["audience"] == "ex_colleague"
     li = FakeLI({"ex_colleague": [person("Kay Kotak", "SWE")]})
     assert await cf.facet_search(li, "Stripe", want=2, top3=False, aff=AFF) == []
     assert [c["qtype"] for c in li.calls] == ["alumni", "role"]                       # not a top-3 company: 2 loads
@@ -317,7 +329,7 @@ async def test_unknown_company_falls_back_to_the_keyword_search(budget, ids, mon
     import backend.curator.company_first as mod
     import backend.curator.people as people
 
-    async def fake_find(company, title, small, li, want, country, region, city):
+    async def fake_find(company, title, li, want, country, region, city):
         li.loads += 1
         return [{**person("Kim Keyword", "Technical Recruiter at Mystery Co"), "kind": "recruiter"}]
     monkeypatch.setattr(people, "find_people", fake_find)
@@ -452,25 +464,6 @@ def test_the_scout_draws_only_on_the_reserve(budget):
     li_budget.end_run()
 
 
-# ── SearXNG no longer asked for people ───────────────────────────────────────
-
-async def test_people_search_does_not_call_searxng_unless_the_setting_is_on(test_db, monkeypatch):
-    import backend.curator.people as people
-    asked = []
-
-    async def fake_search(q, n=10):
-        asked.append(q)
-        return []
-    monkeypatch.setattr(people, "search", fake_search)
-    await people.find_people("Ramp", "Backend Engineer", False, None, want=2)
-    await people.find_decision_makers("Ramp", ["backend"], False, None, want=1)
-    assert asked == []
-    test_db.add(Setting(key="people_searxng", value="true"))
-    test_db.commit()
-    await people.find_people("Ramp", "Backend Engineer", False, None, want=2)
-    assert asked
-
-
 # ── find_contacts end to end ─────────────────────────────────────────────────
 
 async def test_find_contacts_uses_the_company_search_for_us_jobs_and_keywords_abroad(budget, ids, test_db, monkeypatch):
@@ -485,7 +478,7 @@ async def test_find_contacts_uses_the_company_search_for_us_jobs_and_keywords_ab
     monkeypatch.setattr(lpm, "LinkedInPeople", lambda: li)
     kw = []
 
-    async def fake_find(company, title, small, li_, want, country, region, city):
+    async def fake_find(company, title, li_, want, country, region, city):
         kw.append((company, country))
         return [{**person("Sam Sap", "Engineering Manager at SAP", None), "kind": "hiring_manager"}]
     monkeypatch.setattr(people, "find_people", fake_find)
@@ -495,7 +488,7 @@ async def test_find_contacts_uses_the_company_search_for_us_jobs_and_keywords_ab
     by = {c["name"]: c for c in saved}
     assert by["Ann Alum"]["audience"] == "alum" and by["Ann Alum"]["degree"] == 2           # the facet is the evidence
     assert by["Sam Sap"]["audience"] == "hiring_manager" and by["Sam Sap"]["degree"] is None
-    assert kw == [("SAP", "DE")] and [c["qtype"] for c in li.calls] == ["alumni", "role"]      # one alumnus is not enough for 2
+    assert kw == [("SAP", "DE")] and [c["qtype"] for c in li.calls] == ["alumni", "role", "posts_company"]      # one alumnus is not enough for 2
     assert test_db.query(Contact).count() == 2
 
 
@@ -537,7 +530,7 @@ def test_scout_queries_put_the_alumni_facet_first_and_need_no_degree_lookup(test
 async def test_a_blocked_role_query_leaves_the_company_eligible(budget, ids):
     li = FakeLI({"alumni": [person("Ann Alum", "Engineer")], "role": BLOCKED})
     out = await cf.people_for(li, JOB, {"action": "search", "rank": 1}, want=3, aff=AFF)
-    assert [p["name"] for p in out] == ["Ann Alum"] and [c["qtype"] for c in li.calls] == ["alumni", "role"]
+    assert [p["name"] for p in out] == ["Ann Alum"] and [c["qtype"] for c in li.calls] == ["alumni", "role", "posts_company"]
     assert cf.searched_since(["stripe"], local_today()) == {}                       # not marked: next run tries again
     assert cf.cached_people("stripe", local_today())                                # what was found is kept
     li_ok = FakeLI({"alumni": [person("Ann Alum", "Engineer")], "role": {"recruiter": []}})
@@ -556,7 +549,7 @@ async def test_budget_running_out_between_steps_leaves_the_company_eligible(budg
         li_budget.take("main")                              # another caller used the second load
         return r
     li.search = spend_then_search
-    await cf.people_for(li, JOB, {"action": "search", "rank": 1}, want=2, aff=AFF)
+    await cf.people_for(li, JOB, {"action": "search", "rank": 9}, want=2, aff=AFF)
     assert [c["qtype"] for c in li.calls] == ["alumni"]
     assert cf.searched_since(["stripe"], local_today()) == {}
 
@@ -564,7 +557,7 @@ async def test_budget_running_out_between_steps_leaves_the_company_eligible(budg
 async def test_a_walled_keyword_search_is_not_marked_either(budget, ids, monkeypatch):
     import backend.curator.people as people
 
-    async def fake_find(company, title, small, li, want, country, region, city):
+    async def fake_find(company, title, li, want, country, region, city):
         li.loads += 1
         li.bad_pages += 1                                   # "limited visibility"
         return []
@@ -651,3 +644,109 @@ def test_an_explicit_company_link_corrects_a_harvested_id_but_not_a_verified_one
     # a facet-link id (weaker evidence) only logs
     entity_ids.learn([{"href": "https://x/?currentCompany=%5B%22333%22%5D", "text": "Ramp"}], {"ramp"})
     assert entity_ids.lookup("company", "Ramp") == "222"
+
+
+# ── hiring posts by company ──────────────────────────────────────────────────
+
+def post(actor, headline, text="We're hiring a backend engineer. DM me.", slug=None):
+    slug = slug or actor.lower().replace(" ", "-")
+    return {"author_url": f"https://www.linkedin.com/in/{slug}?x=1", "actor": f"{actor}\n{headline}\n2d",
+            "text": text, "urn": "u", "source": "linkedin_main"}
+
+
+async def test_top_three_company_posts_follow_the_alumni_search_and_carry_the_post_as_evidence(budget, ids):
+    li = FakeLI({"alumni": [person("Ann Alum", "Engineer at Stripe")],
+                 "posts_company": [post("Hana Hire", "Engineering Manager at Stripe"),
+                                   post("Pete Poster", "Software Engineer at Stripe", "Excited to say we're hiring!"),
+                                   post("Nina Nope", "Designer at Stripe", "Great offsite this week")]})
+    out = await cf.facet_search(li, "Stripe", want=5, top3=True, aff=AFF)
+    assert [c["qtype"] for c in li.calls][:2] == ["alumni", "role"] or [c["qtype"] for c in li.calls][-1] == "posts_company"
+    assert li.calls[-1]["author_company"] == "2135371" and li.calls[-1]["name"] == "Stripe" and li.calls[-1]["keywords"] == "hiring"
+    by = {p["name"]: p for p in out}
+    assert set(by) == {"Ann Alum", "Hana Hire", "Pete Poster"}                      # a post that is not about hiring is no lead
+    assert by["Hana Hire"]["audience"] == "hiring_manager" and by["Pete Poster"]["audience"] == "post"
+    assert by["Hana Hire"]["from_post"] is True and "hiring a backend engineer" in by["Hana Hire"]["evidence"]
+    assert by["Hana Hire"]["url"] == "https://www.linkedin.com/in/hana-hire"
+    assert not by["Ann Alum"].get("from_post")
+
+
+async def test_posts_are_searched_only_for_top_three_known_ids_and_only_when_more_people_are_wanted(budget, ids):
+    script = {"alumni": [person("Ann Alum", "Engineer")], "posts_company": [post("Hana Hire", "EM at Stripe")]}
+    li = FakeLI(script)
+    await cf.facet_search(li, "Stripe", want=2, top3=False, aff=AFF)                 # not a top-3 company
+    assert "posts_company" not in [c["qtype"] for c in li.calls]
+    li = FakeLI({**script, "alumni": [person("Ann Alum", "Engineer"), person("Bo Alum", "Engineer")]})
+    await cf.facet_search(li, "Stripe", want=2, top3=True, aff=AFF)                  # the alumni search already found enough
+    assert [c["qtype"] for c in li.calls] == ["alumni"]
+    li = FakeLI(script)
+    assert await cf.facet_search(li, "Mystery Co", want=2, top3=True, aff=AFF) is None     # id unknown: nothing loaded
+    assert li.calls == []
+
+
+async def test_post_authors_are_cached_with_their_evidence(budget, ids):
+    li = FakeLI({"posts_company": [post("Hana Hire", "Engineering Manager at Stripe")]})
+    today = local_today()
+    first = await cf.people_for(li, JOB, {"action": "search", "rank": 1}, want=1, aff=AFF, today=today)
+    assert first[0]["from_post"] is True and first[0]["audience"] == "hiring_manager"
+    again = cf.cached_people("stripe", today)
+    assert again[0]["from_post"] is True and "hiring a backend engineer" in again[0]["evidence"] and again[0]["audience"] == "hiring_manager"
+
+
+async def test_a_dropped_author_company_facet_makes_posts_unusable_and_leaves_the_company_unfinished(budget, ids, monkeypatch):
+    li = lp.LinkedInPeople()
+    li.account = "main"
+    scripted = FakeLI({"alumni": [person("Ann Alum", "Engineer")]})
+
+    async def fake_open(url, main_only=False):
+        li.page = FakePage(url.replace("authorCompany", "x"), ["All filters"])
+        return True
+    monkeypatch.setattr(li, "_open", fake_open)
+
+    class Hybrid:
+        """Alumni answers come from the script; the post search is the real one with a page that dropped the facet."""
+        wanted_ids, notes = set(), []
+        loads, bad_pages = 0, 0
+
+        async def search(self, *a, **k):
+            return await scripted.search(*a, **k)
+
+        async def search_posts(self, *a, **k):
+            out = await li.search_posts(*a, **k)
+            self.bad_pages = li.bad_pages
+            return out
+    h = Hybrid()
+    out = await cf.facet_search(h, "Stripe", want=5, top3=True, aff=AFF)
+    assert li_budget.unusable("posts_company") and not out.complete
+    assert [p["name"] for p in out] == ["Ann Alum"]
+    li2 = FakeLI({"alumni": [person("Ann Alum", "Engineer")], "posts_company": [post("Hana Hire", "EM at Stripe")]})
+    await cf.facet_search(li2, "Stripe", want=5, top3=True, aff=AFF)
+    assert "posts_company" not in [c["qtype"] for c in li2.calls]                    # unusable for the rest of the day
+
+
+async def test_posts_search_stays_inside_the_daily_main_budget(budget, ids):
+    for _ in range(14):
+        li_budget.take("main")
+    li = FakeLI({"alumni": [person("Ann Alum", "Engineer")], "posts_company": [post("Hana Hire", "EM at Stripe")]})
+    out = await cf.facet_search(li, "Stripe", want=5, top3=True, aff=AFF)
+    assert [c["qtype"] for c in li.calls] == ["alumni"] and not out.complete            # the 15th load went to alumni; none left
+    assert li_budget.remaining("main") == 0
+
+
+async def test_the_role_step_comes_before_posts_so_a_tight_share_reaches_it(budget, ids):
+    li_budget.take("main")
+    for _ in range(12):
+        li_budget.take("main")                                   # 2 loads left: alumni and role
+    li = FakeLI({"alumni": [], "role": {"recruiter": [person("Rae Recruiter", "Technical Recruiter at Stripe")]},
+                 "posts_company": [post("Hana Hire", "EM at Stripe")]})
+    out = await cf.facet_search(li, "Stripe", want=5, top3=True, aff=AFF)
+    assert [c["qtype"] for c in li.calls] == ["alumni", "role"] and [p["name"] for p in out] == ["Rae Recruiter"]
+
+
+async def test_a_top_three_company_is_started_only_with_room_for_its_posts_load(budget, ids):
+    for _ in range(13):
+        li_budget.take("main")                                   # 2 loads left
+    li = FakeLI()
+    assert await cf.people_for(li, JOB, {"action": "search", "rank": 1}, want=2, aff=AFF) == [] and li.calls == []
+    li = FakeLI()
+    await cf.people_for(li, {**JOB, "company": "Ramp"}, {"action": "search", "rank": 9}, want=2, aff=AFF)
+    assert [c["qtype"] for c in li.calls] == ["alumni", "role"]     # not top 3: two loads are enough

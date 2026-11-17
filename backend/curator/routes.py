@@ -12,7 +12,7 @@ from backend.accounts.auth import require_owner
 from backend.curator import audience as audience_mod
 from backend.curator import followups, invites
 from backend.job_monitor import JobAlreadyRunningError, launch_background
-from backend.models.db import CompanyIntel, Contact, Job, Resume, get_db
+from backend.models.db import Contact, Job, Resume, get_db
 from backend.tz import APP_TZ_NAME, local_today
 
 logger = logging.getLogger("jobnavigator.curator.api")
@@ -63,7 +63,7 @@ def _job_out(j: Job, resume_ids: dict | None = None, resumes: dict | None = None
         "salary_min": j.salary_min, "salary_max": j.salary_max,
         "h1b_verdict": j.h1b_verdict, "h1b_lca_count": j.h1b_company_lca_count,
         "score": c.get("score"), "parts": c.get("parts"), "reason": c.get("reason"),
-        "apply_window": c.get("apply_window"), "intel": c.get("intel"),
+        "apply_window": c.get("apply_window"),
     }
 
 
@@ -108,9 +108,6 @@ def today(day: Optional[date] = None, db: Session = Depends(get_db)):
             .order_by(Job.curated_rank).all())
     contacts = db.query(Contact).filter(Contact.found_on == d).order_by(Contact.created_at).all()
     ctx = _ctx(db, contacts)
-    # a network contact has no job card next to it, so it carries the company's one-line research note
-    keys = {(c.company or "").strip().lower() for c in contacts if c.purpose == "network"}
-    notes = {r.name_key: r.notes for r in db.query(CompanyIntel).filter(CompanyIntel.name_key.in_(keys)).all()} if keys else {}
     # best_cv holds the résumé's name; the cover-letter deep link needs its id
     resume_ids = {"Persona": "persona"}
     resumes, general_id, tailored = {}, None, {}
@@ -126,8 +123,7 @@ def today(day: Optional[date] = None, db: Session = Depends(get_db)):
     days = [r[0].isoformat() for r in db.query(Job.curated_on).filter(Job.curated_on.isnot(None))
             .distinct().order_by(Job.curated_on.desc()).limit(30).all()]
     return {"date": d.isoformat(), "timezone": APP_TZ_NAME, "days": days,
-            "jobs": [_job_out(j, resume_ids, resumes, general_id, tailored) for j in jobs], "contacts": [{**_contact_out(c, **ctx), "company_note": notes.get((c.company or "").strip().lower()) or None}
-                         for c in contacts]}
+            "jobs": [_job_out(j, resume_ids, resumes, general_id, tailored) for j in jobs], "contacts": [_contact_out(c, **ctx) for c in contacts]}
 
 
 class ContactPatch(BaseModel):
@@ -315,16 +311,6 @@ async def persona_sync(force: bool = False):
     return await sync_projects(force=force)
 
 
-@router.get("/search/test", summary="Run one SearXNG query (checks the search service)")
-async def search_test(q: str = "software engineer jobs"):
-    from backend.search.searxng import SearchError, search
-    try:
-        results = await search(q, n=5)
-    except SearchError as e:
-        raise HTTPException(502, str(e))
-    return {"ok": True, "count": len(results), "results": results}
-
-
 class DraftIn(BaseModel):
     stage: str = "after_acceptance"       # after_acceptance | follow_up
 
@@ -360,7 +346,7 @@ async def draft_message(contact_id: str, body: DraftIn, db: Session = Depends(ge
     brief = drafting.Brief(sender=sender, name=c.name,
                            card=drafting.card_text({"headline": c.title, "location": c.location}),
                            evidence=(c.evidence or "")[:600], company=c.company or "", previous=previous,
-                           audience=c.audience, from_post=c.lead_kind == "hiring_post")
+                           audience=c.audience, from_post=bool(c.from_post) or c.lead_kind == "hiring_post")
     res = await drafting.draft_text(kind, brief, f"outreach_{kind}")
     c.message_stage = stage
     if res.note is None:

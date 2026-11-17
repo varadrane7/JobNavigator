@@ -4,7 +4,7 @@ from datetime import timedelta
 
 import pytest
 
-from backend.models.db import Company, CompanyIntel, Contact, Persona, Resume, Setting
+from backend.models.db import Company, Contact, Persona, Resume, Setting
 
 RESUME = {
     "summary": "Backend engineer, 3 years across trading infrastructure and applied LLM systems.",
@@ -18,12 +18,6 @@ RESUME = {
                   "bullets": ["LLM pull-request reviewer."]}],
     "education": [{"school": "NJIT", "degree": "MS, Computer Science"}],
 }
-
-
-def _li(name, headline, company):
-    slug = name.lower().replace(" ", "")
-    return {"url": f"https://www.linkedin.com/in/{slug}", "title": f"{name} - {headline} | LinkedIn",
-            "snippet": f"{headline} · Experience: {company} · Location: New York City Metropolitan Area"}
 
 
 def test_sender_brief_carries_every_project_and_link():
@@ -48,21 +42,37 @@ def test_me_reads_the_default_resume(test_db):
     assert name == "Varad Rane" and "LazyCurl" in brief and contact["city"] == "Manhattan"
 
 
-async def test_decision_makers_skip_recruiters_and_engineers(monkeypatch):
-    import backend.curator.people as people
-    queries = []
+class _CardLI:
+    """A LinkedIn session whose keyword search returns fixed cards."""
+    wanted_ids: set = set()
 
-    async def fake_search(q, n=10):
-        queries.append(q)
-        return [_li("Rita Recruiter", "Technical Recruiter at Ramp", "Ramp"),
-                _li("Ed Engineer", "Software Engineer at Ramp", "Ramp"),
-                _li("Maya Manager", "Engineering Manager, Platform at Ramp", "Ramp")]
-    monkeypatch.setattr(people, "search", fake_search)
-    monkeypatch.setattr(people, "searxng_for_people", lambda: True)
-    out = await people.find_decision_makers("Ramp", ["backend", "infra"], small_company=False, li=None, want=2)
+    def __init__(self, cards):
+        self.cards, self.queries = cards, []
+
+    async def search(self, kw, country=None, network=None, **k):
+        self.queries.append(kw)
+        return self.cards
+
+
+def _card(name, headline, current):
+    return {"url": f"https://www.linkedin.com/in/{name.lower().replace(' ', '')}", "name": name, "headline": headline,
+            "current_text": current, "location": "New York, NY", "country": "US", "source": "linkedin_main", "degree": 2}
+
+
+async def test_decision_makers_skip_recruiters_and_engineers():
+    import backend.curator.people as people
+    li = _CardLI([_card("Rita Recruiter", "Technical Recruiter at Ramp", "Technical Recruiter at Ramp"),
+                  _card("Ed Engineer", "Software Engineer at Ramp", "Software Engineer at Ramp"),
+                  _card("Maya Manager", "Engineering Manager, Platform at Ramp", "Engineering Manager at Ramp")])
+    out = await people.find_decision_makers("Ramp", ["backend", "infra"], li, want=2)
     assert [p["name"] for p in out] == ["Maya Manager"] and out[0]["kind"] == "hiring_manager"
-    assert "(backend OR platform)" in queries[0]
-    assert all("founder" not in q for q in queries)       # a large company: no founder query
+    assert li.queries == ["Ramp engineering manager infrastructure"]      # the first query already found a decision maker
+
+
+async def test_people_search_without_a_linkedin_session_finds_nobody_and_never_touches_the_web():
+    import backend.curator.people as people
+    assert await people.find_people("Ramp", "Backend Engineer", None, want=2) == []
+    assert await people.find_decision_makers("Ramp", ["backend"], None, want=1) == []
 
 
 async def test_draft_network_never_claims_an_application(monkeypatch):
@@ -90,13 +100,11 @@ def test_network_companies_order_and_cooldown(test_db):
     test_db.add_all([Company(name="Zeta", active=True, tier=2), Company(name="Alpha", active=True, tier=1),
                      Company(name="Asleep", active=False, tier=1), Company(name="Cooled", active=True, tier=1)])
     test_db.add(Contact(company="Cooled", name="X", linkedin_url="u1", found_on=local_today() - timedelta(days=10)))
-    test_db.add(CompanyIntel(name_key="bigfund", display_name="BigFund", funding_stage="series_d"))
-    test_db.add(CompanyIntel(name_key="tiny", display_name="Tiny", funding_stage="seed"))
     test_db.commit()
     ranked = [{"id": 1, "company": "TopCo"}, {"id": 2, "company": "Kforce"}, {"id": 3, "company": "NearMiss"},
               {"id": 4, "company": "alpha"}]
     out = network_companies(ranked, [ranked[0]], {"company_exclude": ["Kforce"]}, limit=10)
-    assert out == ["Alpha", "Zeta", "NearMiss", "BigFund"]
+    assert out == ["Alpha", "Zeta", "NearMiss"]
     assert network_companies(ranked, [ranked[0]], {"company_exclude": []}, limit=2) == ["Alpha", "Zeta"]
 
 

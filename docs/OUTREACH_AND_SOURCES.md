@@ -233,4 +233,4 @@ At your request, `senior`, `sr.` and `sr` were removed from the curator's title 
 - **LinkedIn caps invitations at roughly 100–200 a week, even with Premium.** 35 a day is about 245 a week, so plan on:
   - LinkedIn notes for about 15–20 a day: the hiring managers on jobs ranked "Apply now", plus the people to know;
   - **email** for the rest. Every contact has a guessed address from the company's email format. Verify it first (e.g. a free checker) before sending.
-- Raise **LinkedIn searches · cap** (`linkedin_people_daily_cap`, now 30) to about **40**. It is only used when SearXNG finds nobody useful, but the network step adds up to 10 more companies a day.
+- Raise **LinkedIn searches · cap** (`linkedin_people_daily_cap`, now 30) to about **40**. The network step adds up to 10 more companies a day.

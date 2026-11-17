@@ -33,7 +33,7 @@ def seeded(test_db, monkeypatch):
     import backend.curator.run as run
     async def no_sim(resumes, jds):
         return None
-    async def no_intel(companies, concurrency=3):
+    def no_intel(companies):
         return {}
     async def no_score(jobs):
         return None
@@ -231,7 +231,7 @@ def abroad(test_db, monkeypatch):
     import backend.curator.run as run
     async def no_sim(resumes, jds):
         return None
-    async def no_intel(companies, concurrency=3):
+    def no_intel(companies):
         return {}
     async def no_score(jobs):
         return None

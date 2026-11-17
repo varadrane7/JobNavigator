@@ -3,14 +3,19 @@ facets, remember who was found.
 
 One company at a time, never one job at a time (the curator's top jobs are de-duplicated by company key):
   1. Alumni      currentCompany + schoolFilter (the owner's schools, from the persona) + network F,S + US.  1 load.
+  3. Posts       (runs after the role step) top-3 companies only, and only while `want` people are not in hand: LinkedIn's post search filtered to
+                 authorCompany (past week, "hiring"). The author of a hiring post is a lead: audience "post" (or
+                 "hiring_manager" when the headline says so), the post text kept as evidence so the draft can cite it.
+                 1 load, main session. Like every faceted query, a dropped authorCompany makes the type "posts_company"
+                 unusable for the rest of the day and the company stays unfinished.
   2. Role        currentCompany + title "recruiter" (a quoted single title, the form that was verified);
                  for a top-3 company, a second query with title "software engineer" when the first found people
                  but not enough.  1-2 loads.
-  3. Ex-colleague pastCompany = the owner's past employers, only for a top-3 company and only when steps 1 and 2
+  4. Ex-colleague pastCompany = the owner's past employers, only for a top-3 company and only when steps 1 and 2
                  found nobody.  1 load.
 Each step stops the company as soon as `want` people are in hand. All of it runs on the main session (a facet is
 about the owner's own network) and inside the run's share of the daily LinkedIn budget (curator/li_budget.py):
-a company is started only while at least 2 loads are left, and no step is attempted without one.
+a company is started only while at least 2 loads are left (3 for a top-3 company, which also plans the posts load), and no step is attempted without one.
 
 Why `title` and not keywords for the role step: a quoted title is the only title form tested in a real browser
 (`titleFreeText` is ignored, and OR-lists in `keywords` next to a facet were not tried), it returns only people who
@@ -43,9 +48,11 @@ DEFAULT_COMPANY_CAP = 5
 CONNECTED_PLUS = ("connected", "messaged", "replied", "referral")
 TOP_N = 3                       # companies that get the extra queries
 MIN_LOADS_PER_COMPANY = 2       # a company is started only with the alumni and role loads in hand
+MIN_LOADS_TOP3 = 3              # a top-3 company also plans the hiring-posts load
 MAX_PER_STEP = 3                # people kept from one query (the best `want` of all are used)
-QTYPES = ("alumni", "role", "ex_colleague")     # kinds of faceted query (li_budget.unusable)
+QTYPES = ("alumni", "posts_company", "role", "ex_colleague")     # kinds of faceted query (li_budget.unusable)
 _ROLE_TITLES = ("recruiter", "software engineer")
+POST_EVIDENCE_MAX = 500         # characters of a hiring post kept as evidence
 _TITLE_KIND = {"recruiter": "recruiter", "software engineer": "engineer"}
 
 
@@ -113,7 +120,8 @@ def cached_people(key: str, today: date, known_urls=frozenset()) -> list:
             out.append({"name": sig.get("name") or "", "headline": sig.get("headline") or "", "url": r.li_url,
                         "location": sig.get("location"), "country": sig.get("country"), "degree": sig.get("degree"),
                         "source": sig.get("source"), "kind": r.kind, "audience": sig.get("audience"),
-                        "current": True, "from_cache": True})
+                        "current": True, "from_cache": True,
+                        "evidence": sig.get("evidence") or "", "from_post": bool(sig.get("from_post"))})
         return out
     finally:
         db.close()
@@ -135,6 +143,8 @@ def remember(key: str, people: list, today: date, searched: bool = True) -> None
                 "name": p.get("name"), "headline": p.get("headline"), "location": p.get("location"),
                 "country": p.get("country"), "degree": p.get("degree"), "source": p.get("source"),
                 "audience": p.get("audience"), "query": p.get("query"),
+                "evidence": (p.get("evidence") or "")[:POST_EVIDENCE_MAX] if p.get("from_post") else None,
+                "from_post": bool(p.get("from_post")),
                 "verified": bool(p.get("verified", True))}))
         if searched:
             marker = db.query(CompanyPeople).filter(CompanyPeople.company_key == key, CompanyPeople.kind == SEARCHED).first()
@@ -263,8 +273,11 @@ def plan(top: list, today: date, day_cap: int | None = None) -> dict:
 # ── searching one company ────────────────────────────────────────────────────
 
 def _card(h: dict, kind, audience, query) -> dict:
-    return {**{k: h.get(k) for k in ("name", "headline", "url", "location", "country", "degree", "source")},
+    card = {**{k: h.get(k) for k in ("name", "headline", "url", "location", "country", "degree", "source")},
             "kind": kind, "audience": audience, "query": query, "current": True}
+    if h.get("from_post"):
+        card.update(from_post=True, evidence=h.get("evidence") or "")
+    return card
 
 
 def _order(people: list) -> list:
@@ -282,7 +295,8 @@ class FacetResult(list):
 
 async def facet_search(li: LinkedInPeople, company: str, *, want: int, top3: bool, aff, known=frozenset(),
                        country: str = "US") -> "FacetResult | None":
-    """Alumni, then role, then (top 3, nothing found yet) ex-colleague people at `company`, best first, up to
+    """Alumni, then role, then (top 3) authors of the company's hiring posts, then (top 3, nothing found yet)
+    ex-colleague people at `company`, best first, up to
     `want`. None when the company's LinkedIn id is not known (the caller searches by keyword instead). Up to
     MAX_PER_STEP people per query are returned, more than `want`, so the cache holds the rest for later."""
     from backend.curator.people import classify
@@ -338,6 +352,16 @@ async def facet_search(li: LinkedInPeople, company: str, *, want: int, top3: boo
         before = len(found)
         take(hits, lambda h, t=title: classify(h.get("headline") or "") or _TITLE_KIND[t], None, f"role:{title}")
         role_hits += len(found) - before
+    if top3 and not enough() and room("posts_company"):
+        from backend.curator import audience as aud
+        from backend.curator.scout import parse_post
+        posts = await li.search_posts("hiring", author_company=cid, qtype="posts_company", name=company)
+        leads = [lead for lead in (parse_post(p) for p in posts) if lead]
+        hits = [{**lead, "from_post": True, "evidence": lead["evidence"][:POST_EVIDENCE_MAX]} for lead in leads]
+        take(hits, lambda h: classify(h.get("headline") or ""), None, "posts_company", limit=2)
+        for card in found.values():        # an author's audience: hiring_manager when the headline says so, else post
+            if card.get("from_post"):
+                card["audience"] = aud.detect(card.get("headline") or "", "", None, from_post=True)
     if not found and top3 and past and room("ex_colleague"):
         hits = await li.search("", country, ["F", "S"], current_company=cid, past_company=[i for _, i in past],
                                qtype="ex_colleague", names={"currentCompany": company, "pastCompany": past[0][0]})
@@ -348,7 +372,7 @@ async def facet_search(li: LinkedInPeople, company: str, *, want: int, top3: boo
 
 
 async def people_for(li: LinkedInPeople, job: dict, decision: dict, *, want: int, aff, known=frozenset(),
-                     small: bool = False, city: str | None = None, today: date | None = None) -> list:
+                     city: str | None = None, today: date | None = None) -> list:
     """Up to `want` people for the company of `job`, from the cache first, then (when the plan gave it a slot and
     the run's LinkedIn share has loads left) from a search. Never raises on an empty day: [] means nobody."""
     today = today or local_today()
@@ -359,14 +383,14 @@ async def people_for(li: LinkedInPeople, job: dict, decision: dict, *, want: int
     cached = cached_people(key, today, known)
     if cached or action != "search":
         return _order(cached)[:want]
-    if li_budget.remaining(li_budget.MAIN) < MIN_LOADS_PER_COMPANY:
-        return []                               # no loads for a company: it keeps its slot for the next run
     top3 = (decision or {}).get("rank", 99) <= TOP_N
+    if li_budget.remaining(li_budget.MAIN) < (MIN_LOADS_TOP3 if top3 else MIN_LOADS_PER_COMPANY):
+        return []                               # not room for its planned steps: it keeps its slot for the next run
     loads_before, bad_before = li.loads, li.bad_pages
     people = await facet_search(li, company, want=want, top3=top3, aff=aff, known=known)
     if people is None:                          # id unknown: keyword search, as before
         from backend.curator.people import find_people
-        keyword = await find_people(company, job.get("title") or "", small, li, want=want,
+        keyword = await find_people(company, job.get("title") or "", li, want=want,
                                     country=job.get("loc_country") or "US", region=job.get("loc_region"), city=city)
         people = [{**p, "query": "keyword"} for p in keyword if p.get("url") not in known]
         complete = li.bad_pages == bad_before

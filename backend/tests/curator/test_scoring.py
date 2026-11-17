@@ -60,10 +60,9 @@ def test_sponsor_score_orders_by_lca_and_zeroes_on_flag():
     assert s.sponsor_score(500, 60) < s.sponsor_score(500, 95)
 
 
-def test_comp_estimate_prefers_posted_then_lca_then_web():
-    assert s.comp_estimate(120000, 160000, 150000, 1, 2) == (140000, "posted")
-    assert s.comp_estimate(None, None, 150000, 1, 2) == (150000, "lca")
-    assert s.comp_estimate(None, None, None, 130000, 150000) == (140000, "web")
+def test_comp_estimate_prefers_posted_then_lca():
+    assert s.comp_estimate(120000, 160000, 150000) == (140000, "posted")
+    assert s.comp_estimate(None, None, 150000) == (150000, "lca")
     assert s.comp_estimate(None, None) == (None, "")
     assert s.comp_estimate(0, 45, 150000) == (150000, "lca")          # hourly / placeholder figures ignored
 
@@ -75,20 +74,16 @@ def test_comp_score_band():
     assert s.comp_score(None, 115000, 150000) == 0.4
 
 
-def test_well_funded_and_visa_comp():
-    assert s.well_funded("series_d", None, 0, 2026)
-    assert s.well_funded("series_b", 2025, 0, 2026)
-    assert not s.well_funded("series_b", 2021, 0, 2026)
-    assert s.well_funded("unknown", None, 120, 2026)
-    assert s.visa_comp_score(0.15, 0.2, True) == 0.8
-    assert s.visa_comp_score(1.0, 0.2, False) == 1.0
+def test_visa_comp_is_the_better_of_sponsorship_and_pay():
+    assert s.visa_comp_score(0.15, 0.2) == 0.2
+    assert s.visa_comp_score(1.0, 0.2) == 1.0
 
 
 def test_reply_score_uses_own_history_first_and_ats_hint():
-    assert s.reply_score(0.5, 4, 0.1) == 1.0
-    assert s.reply_score(0.5, 2, 0.3) == 0.3              # too few own apps: reputation wins
-    assert s.reply_score(None, 0, None, "https://boards.greenhouse.io/x/1") == pytest.approx(0.6)
-    assert s.reply_score(None, 0, None, "https://x.wd5.myworkdayjobs.com/a") == pytest.approx(0.4)
+    assert s.reply_score(0.5, 4) == 1.0
+    assert s.reply_score(0.5, 2) == 0.5                   # too few own apps: neutral
+    assert s.reply_score(None, 0, "https://boards.greenhouse.io/x/1") == pytest.approx(0.6)
+    assert s.reply_score(None, 0, "https://x.wd5.myworkdayjobs.com/a") == pytest.approx(0.4)
 
 
 def test_fit_score_unscored_never_beats_confirmed_fit():
@@ -97,10 +92,13 @@ def test_fit_score_unscored_never_beats_confirmed_fit():
 
 
 def test_composite_is_weighted_mean_and_deterministic():
-    parts = {"fit": 1, "fresh": 1, "visa_comp": 1, "reply": 1, "stability": 1, "tracked": 1}
+    parts = {"fit": 1, "fresh": 1, "visa_comp": 1, "reply": 1, "tracked": 1}
     assert s.composite(parts) == 1.0
-    assert s.composite({"fit": 1}) == pytest.approx(0.4 / 1.05, abs=1e-4)
-    assert s.composite({"fit": 1}, {"fit": 1, "fresh": 0, "visa_comp": 0, "reply": 0, "stability": 0, "tracked": 0}) == 1.0
+    assert s.composite({"fit": 1}) == pytest.approx(0.4 / 0.97, abs=1e-4)
+    assert s.composite({"fit": 1}, {"fit": 1, "fresh": 0, "visa_comp": 0, "reply": 0, "tracked": 0}) == 1.0
+    # a stored weights setting that still carries the retired "stability" key: ignored, the mean renormalises
+    assert s.composite(parts, {"stability": 0.5}) == 1.0
+    assert s.composite({**parts, "visa_comp": None}, {"stability": 0.5}) == 1.0
 
 
 def test_apply_window():
@@ -111,9 +109,9 @@ def test_apply_window():
 
 
 def test_reason_line():
-    r = s.reason(best_cv="SDE", llm_score=86.4, hours=5.2, lca_count=320, stage="series_c",
-                 last_raise_year=2025, base=140000, base_src="posted")
-    assert r == "fit 86 (SDE) · posted 5h ago · H-1B 320 LCAs · Series C '25 · ~$140k base (posted)"
+    r = s.reason(best_cv="SDE", llm_score=86.4, hours=5.2, lca_count=320,
+                 base=140000, base_src="posted")
+    assert r == "fit 86 (SDE) · posted 5h ago · H-1B 320 LCAs · ~$140k base (posted)"
 
 
 # ── posted_at parsing ───────────────────────────────────────────────────────
@@ -176,6 +174,6 @@ def test_source_penalty_takes_its_share_of_the_score_and_old_postings_leave_the_
     cfg = {"weights": None, "target_min": 100000, "target_max": 150000, "countries": ["US"], "ignore_h1b": True,
            "source_penalty": {"jobright": 0.25}}
     monkeypatch.setattr(run, "_resume_names", lambda: {})
-    plain, silent = run.rank([job("direct"), job("jobright")], {}, {}, {}, cfg, now)
+    plain, silent = run.rank([job("direct"), job("jobright")], {}, {}, cfg, now)
     assert (plain["source"], silent["source"]) == ("direct", "jobright")
     assert silent["score"] == round(plain["score"] * 0.75, 4) and silent["source_penalty"] == 0.25

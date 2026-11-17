@@ -12,7 +12,7 @@ import '../theme.css'
 // no posting for the user today. Rank is the order to apply in; everything is meant to be done today.
 // Applied / skipped jobs and contacted / skipped people sink into a "Done" section at the bottom.
 
-const PARTS = [['fit', 'Fit'], ['fresh', 'Fresh'], ['visa_comp', 'Visa / pay'], ['reply', 'Reply odds'], ['stability', 'Stability']]
+const PARTS = [['fit', 'Fit'], ['fresh', 'Fresh'], ['visa_comp', 'Visa / pay'], ['reply', 'Reply odds']]
 const KIND = { founder: 'Founder', hiring_manager: 'Hiring manager', recruiter: 'Recruiter', engineer: 'Engineer' }
 // the lead pipeline's first steps; the rest (connected, messaged, replied, referral) live on People
 const CONTACT_STATUS = [['new', 'New'], ['requested', 'Requested'], ['skip', 'Skip']]
@@ -36,7 +36,6 @@ const copy = async (text, push, what) => {
 function JobCard({ j, onStatus, onCoverLetter }) {
   const [open, setOpen] = useState(false)
   const done = j.status !== 'saved'
-  const it = j.intel || {}
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: done ? '6px 14px' : '10px 14px', opacity: done ? DIM : 1 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
@@ -50,7 +49,6 @@ function JobCard({ j, onStatus, onCoverLetter }) {
         {j.best_score != null && <Tag tone={scoreTone(j.best_score)} title={`Résumé fit (${j.best_cv || 'best'})`}>{Math.round(j.best_score)}</Tag>}
         {j.h1b_lca_count ? <Tag tone="accent" title="H-1B LCAs filed by this company">H-1B {j.h1b_lca_count}</Tag> : null}
         {(j.parts || {}).tracked ? <Tag tone="accent" title="On your Companies list">Your list</Tag> : null}
-        {it.funding_stage && it.funding_stage !== 'unknown' && <Tag tone="neutral">{it.funding_stage.replace('_', ' ')}</Tag>}
         {done
           ? <Tag tone={j.status === 'applied' ? 'good' : 'neutral'}>{j.status}</Tag>
           : <>
@@ -70,7 +68,6 @@ function JobCard({ j, onStatus, onCoverLetter }) {
               <Meter value={(j.parts || {})[k] || 0} />
             </div>
           ))}
-          {it.notes ? <Helper size="xs" style={{ gridColumn: '1 / -1' }}>{it.notes}</Helper> : null}
         </div>
       )}
     </Card>
@@ -86,7 +83,6 @@ function ContactCard({ c, job, onStatus, push }) {
           <Link href={c.linkedin_url} target="_blank" rel="noreferrer">{c.name}</Link>
           <Helper size="xs" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.title || ''} · {c.company}{c.location ? ` · ${c.location}` : ''}</Helper>
           {job && <Helper size="xs" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>re #{job.rank} {job.title}</Helper>}
-          {c.company_note && <Helper size="xs" title={c.company_note} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.company_note}</Helper>}
         </div>
         {c.kind && <Tag style={{ opacity: done ? DIM : 1 }} tone={c.kind === 'hiring_manager' || c.kind === 'founder' ? 'accent' : 'neutral'}>{KIND[c.kind] || c.kind}</Tag>}
         <Select value={CONTACT_STATUS.some(([k]) => k === c.status) ? c.status : 'requested'} options={CONTACT_STATUS} onPick={(v) => onStatus(c, v)} width="120px" ariaLabel="Contact status" />

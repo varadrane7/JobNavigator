@@ -1,6 +1,6 @@
 """The lead scout (curator/scout.py) and the persona project sync (curator/projects_sync.py):
 who a search result or a post turns into, what is searched for, follow-ups, and a whole run with
-LinkedIn, SearXNG and the model replaced."""
+LinkedIn and the model replaced."""
 from datetime import timedelta
 
 import pytest
@@ -14,15 +14,6 @@ NET = {"pitch": "Backend engineer who ships LLM systems", "github_user": "someon
                      "domains": ["devtools"], "url": "https://github.com/x/lazycurl"},
                     {"name": "dotfiles", "hidden": True, "domains": ["homelab"]}],
        "projects_synced_at": "2999-01-01T00:00:00+00:00"}
-
-
-def test_parse_profile_hit_reads_company_from_experience():
-    from backend.curator.scout import parse_profile_hit
-    hit = parse_profile_hit({"url": "https://www.linkedin.com/in/jane?trk=x",
-                             "title": "Jane Doe - Engineering Manager at Acme | LinkedIn",
-                             "snippet": "Engineering Manager · Experience: Acme Corp · Location: New York"})
-    assert hit["name"] == "Jane Doe" and hit["company"] == "Acme Corp" and hit["url"].endswith("/in/jane")
-    assert parse_profile_hit({"url": "https://example.com/x", "title": "x"}) is None
 
 
 def test_company_from_headline():
@@ -47,8 +38,8 @@ def test_plan_queries_uses_roles_domains_and_affinities():
     q = plan_queries(NET, {"city": "New York"})
     assert any("backend engineer" in x for x in q["posts"])
     assert any("developer tools" in x and "New York" in x for x in q["posts"])
-    assert not any("homelab" in x for x in q["posts"] + q["project_fit"])     # hidden projects stay out
-    assert q["affinity"] and '"NJIT"' in q["affinity"][0]
+    assert not any("homelab" in x for x in q["posts"])     # hidden projects stay out
+    assert any("NJIT" in kw for _kind, kw in q["li_people"])
 
 
 async def test_run_saves_scored_leads_once(test_db, monkeypatch):
@@ -58,7 +49,6 @@ async def test_run_saves_scored_leads_once(test_db, monkeypatch):
                         work_auth={"requires_sponsorship_future": True}))
     test_db.add(Resume(name="General", is_base=True, json_data={"summary": "Backend engineer"}))
     test_db.add(Setting(key="scout_daily_leads", value="50"))
-    test_db.add(Setting(key="people_searxng", value="true"))      # this test is about the web-search leads
     test_db.commit()
 
     class FakeLI:
@@ -74,12 +64,11 @@ async def test_run_saves_scored_leads_once(test_db, monkeypatch):
 
         async def search(self, kw, country=None, network=None):
             return [{"url": "https://www.linkedin.com/in/bob", "degree": 2, "name": "Bob Lee",
-                     "headline": "CTO at Tiny AI", "source": "linkedin_mock"}]
-
-    async def fake_search(q, n=10, **kw):
-        return [{"url": "https://www.linkedin.com/in/amy", "title": "Amy Wu - Founder at DevCo | LinkedIn",
-                 "snippet": "Founder · Experience: DevCo · Location: New York"},
-                {"url": "https://www.linkedin.com/in/zed", "title": "Zed - Student | LinkedIn", "snippet": ""}]
+                     "headline": "CTO at Tiny AI", "source": "linkedin_mock"},
+                    {"url": "https://www.linkedin.com/in/amy", "name": "Amy Wu",
+                     "headline": "Founder at DevCo", "source": "linkedin_mock"},
+                    {"url": "https://www.linkedin.com/in/zed", "name": "Zed", "headline": "Student",
+                     "source": "linkedin_mock"}]
 
     async def fake_ask_json(prompt, system, purpose, max_tokens=1500, job_id=None):
         score = 90 if "Bob Lee" in prompt else 70 if "Amy Wu" in prompt else 10
@@ -87,7 +76,6 @@ async def test_run_saves_scored_leads_once(test_db, monkeypatch):
                 "project": "LazyCurl"}
 
     monkeypatch.setattr(lpm, "LinkedInPeople", FakeLI)
-    monkeypatch.setattr(scout, "search", fake_search)
     monkeypatch.setattr("backend.curator.llm.ask_json", fake_ask_json)
     monkeypatch.setattr(li_budget, "available", lambda which: True)
 
@@ -150,16 +138,12 @@ async def test_run_drafts_no_notes_and_loads_no_sender_facts_when_drafts_are_off
         async def search(self, kw, country=None, network=None):
             return []
 
-    async def no_search(q, n=10, **kw):
-        return []
-
     async def fake_ask_json(prompt, system, purpose, max_tokens=1500, job_id=None):
         return {"score": 90, "kind": "founder", "why": "hiring", "project": "LazyCurl"}
 
     async def boom(*a, **k):
         raise AssertionError("no draft may be asked for when outreach drafts are off")
     monkeypatch.setattr(lpm, "LinkedInPeople", FakeLI)
-    monkeypatch.setattr(scout, "search", no_search)
     monkeypatch.setattr("backend.curator.llm.ask_json", fake_ask_json)
     monkeypatch.setattr("backend.curator.llm.ask", boom)
     monkeypatch.setattr("backend.curator.drafting.load_sender", boom)
