@@ -58,6 +58,7 @@ def test_int_keys_match_the_rows_settings_marks_int():
         "nag_apply_target",
         "nag_request_target",
         "invites_daily_cap",
+        "people_company_cap",
         "followup_max",
         "followup_close_after_days",
         "followup_daily_limit",

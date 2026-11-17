@@ -63,7 +63,9 @@ def get_persona(db: Session = Depends(get_db)):
 
 @router.patch("")
 def update_persona(updates: dict, db: Session = Depends(get_db)):
-    """Replace one or more node values atomically; callers must send the complete intended value of each node they update. Unknown top-level keys → 400."""
+    """Replace one or more node values atomically; callers must send the complete intended value of each node they update, except `resume_content`, which is merged by top-level key so sections the sender does not know about are kept. Unknown top-level keys → 400.
+
+    For `resume_content`: a key left out of the body keeps its stored value; send `[]`, `{}`, `""` or null for a key to clear it."""
     unknown = set(updates.keys()) - _NODES
     if unknown:
         raise HTTPException(status_code=400, detail=f"Unknown persona node(s): {sorted(unknown)}")
@@ -73,6 +75,10 @@ def update_persona(updates: dict, db: Session = Depends(get_db)):
     for k, v in updates.items():
         if k == "networking" and isinstance(v, dict) and _DRAFTS_FLAG in v:
             v = {nk: nv for nk, nv in v.items() if nk != _DRAFTS_FLAG}     # echoed back by a client: not stored
+        if k == "resume_content" and isinstance(v, dict) and isinstance(p.resume_content, dict):
+            # Keys the sender did not mention (certifications, or whatever a later import adds) survive:
+            # the Profile page only edits the sections it knows, so its save must not drop the rest.
+            v = {**p.resume_content, **v}
         setattr(p, k, v)
         # JSON columns compare by value, so an order-only change (e.g. reordering
         # resume_content.skills) produces no UPDATE unless the node is flagged explicitly.

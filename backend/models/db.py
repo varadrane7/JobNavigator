@@ -392,6 +392,37 @@ class LiUsage(Base):
     n = Column(Integer, nullable=False, default=0)
 
 
+class LiEntityId(Base):
+    """LinkedIn's numeric id for a company or a school, install-wide: `kind` is "company" or "school",
+    `name_key` is curator/names.company_key of its name. Facet searches (curator/linkedin_people.py) filter by
+    these ids. Seeded from verified values, learned from links on pages the curator already loads, never
+    overwritten once set (curator/entity_ids.py)."""
+    __tablename__ = "li_entity_ids"
+
+    kind = Column(String, primary_key=True)
+    name_key = Column(String, primary_key=True)
+    li_id = Column(String, nullable=False)
+    resolved_on = Column(Date, nullable=True)
+
+
+class CompanyPeople(AccountScoped, Base):
+    """What a company-first people search found about one company, kept 30 days so the company's other
+    jobs and the day's second run reuse it instead of searching again (curator/company_people.py).
+    `kind` is the person's kind (recruiter, engineer, ...) or "_searched", a marker row (empty li_url) that
+    says the company was searched on `found_on`, with or without finds. `signals` holds the card
+    (name, headline, location, degree) and why the person came up (alum, ex_colleague, the query)."""
+    __tablename__ = "company_people"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_key = Column(String, nullable=False, index=True)
+    li_url = Column(String, nullable=False, default="")
+    kind = Column(String, nullable=True)
+    signals = Column(JSON, nullable=True)
+    found_on = Column(Date, nullable=False, index=True)
+
+    __table_args__ = (UniqueConstraint("account_id", "company_key", "li_url", name="uq_company_people_account_company_url"),)
+
+
 class LinkedinLookup(Base):
     """One answer per LinkedIn job, install-wide (the same for every account): the employer's
     apply link LinkedIn shows a logged-in user, or that the job is Easy Apply or gone.

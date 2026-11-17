@@ -58,6 +58,7 @@ async def test_decision_makers_skip_recruiters_and_engineers(monkeypatch):
                 _li("Ed Engineer", "Software Engineer at Ramp", "Ramp"),
                 _li("Maya Manager", "Engineering Manager, Platform at Ramp", "Ramp")]
     monkeypatch.setattr(people, "search", fake_search)
+    monkeypatch.setattr(people, "searxng_for_people", lambda: True)
     out = await people.find_decision_makers("Ramp", ["backend", "infra"], small_company=False, li=None, want=2)
     assert [p["name"] for p in out] == ["Maya Manager"] and out[0]["kind"] == "hiring_manager"
     assert "(backend OR platform)" in queries[0]

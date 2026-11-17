@@ -222,6 +222,8 @@ def _seed(db, account_id, ids, text, token, persona_id):
                      target_job_id=ids["job"]),
             m.Contact(id=ids["contact"], company=text, name=text, title=text, linkedin_url=f"https://{token}.example/in/{text}",
                       email=f"{token}@example.com", note=text, email_draft=text, status="new"),
+            m.CompanyPeople(id=uuid.uuid4(), company_key=text.lower(), li_url=f"https://{token}.example/in/{text}",
+                            kind="recruiter", signals={"name": text}, found_on=now.date()),
             m.ScrapeLog(id=ids["scrape_log"], search_id=ids["search"], company_id=ids["company"],
                         source="jobspy", jobs_found=3, new_jobs=1, error=text, is_warning=True,
                         source_breakdown={text: 3}),

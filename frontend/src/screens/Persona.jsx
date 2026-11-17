@@ -8,7 +8,7 @@ import { ago } from '../time'
 import '../theme.css'
 import {
   EMPTY, SECTION_ORDER, sectionCounts, makeMutators,
-  SectionShell, SectionEditor, BulletText, DashedAdd, RemoveX, kb,
+  SectionShell, SectionEditor, CertificationsEditor, BulletText, DashedAdd, RemoveX, kb,
 } from './ResumeSections'
 
 // The Persona is the singleton applicant record, in two independent halves:
@@ -461,6 +461,11 @@ export default function Persona() {
                   pageHint={false} emptyNote="Cover letters and scoring use whatever you add here." />
               </SectionShell>
             ))}
+            <SectionShell name="Certifications" count={resume.certifications?.length || 0} open={sections.has('Certifications')} onToggle={() => toggleSection('Certifications')}>
+              <CertificationsEditor data={resume} setField={setField} mutate={mutate}
+                onRemoved={(msg, undo) => pushToast({ kind: 'undo', msg, action: 'Undo', onAction: undo })}
+                emptyNote="Kept with your profile; add the ones you hold." />
+            </SectionShell>
           </div>
         </div>
 

@@ -534,15 +534,27 @@ def _is_small(it: dict) -> bool:
 _OUTREACH_ERRORS: list = []
 
 
+# Connected contacts put back in front of the owner this run, instead of searching their company again
+_SURFACED: list = []
+
+
 async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[dict]:
+    """People for the day's top jobs, one company at a time. A US job's company goes through the company-first
+    search (curator/company_first.py: cache, then LinkedIn facets, then keywords when the company's LinkedIn id is
+    unknown); any other country keeps the per-job keyword search. SearXNG is not asked unless `people_searxng`."""
     from backend.curator.linkedin_people import LinkedInPeople
     from backend.curator import audience as aud
-    from backend.curator import drafting
+    from backend.curator import company_first as cf
+    from backend.curator import drafting, entity_ids
     from backend.curator.people import draft, find_people, guess_email
     drafts = await asyncio.to_thread(_drafts_enabled)     # once per run, not once per person
     sender = await asyncio.to_thread(drafting.load_sender) if drafts else None     # the sender-facts block, once
     aff = await asyncio.to_thread(aud.load_affiliations)
     today = local_today()
+    await asyncio.to_thread(entity_ids.seed, aff)         # verified LinkedIn ids for the schools and past employer
+    plan = await asyncio.to_thread(cf.plan, top, today)
+    connected_ids = [d["contact_id"] for d in plan.values() if d["action"] == "connected"]
+    known = await asyncio.to_thread(cf.known_urls)
     found, seen_companies = [], set()
     async with LinkedInPeople() as li:
         for j in top:
@@ -555,25 +567,34 @@ async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[d
             it = intel.get(k) or {}
             small = _is_small(it)
             city = (j.get("loc_city") or "").title() or None
+            want = 1 if want_total - len(found) <= len(top) else 2
+            country = j.get("loc_country") or "US"
             try:   # one company failing never costs the people already found
-                people = await find_people(j["company"], j["title"], small, li, want=1 if want_total - len(found) <= len(top) else 2,
-                                           country=j.get("loc_country") or "US", region=j.get("loc_region"), city=city)
+                if country == "US":
+                    people = await cf.people_for(li, j, plan.get(cf.key_of(j["company"])) or {}, want=want, aff=aff,
+                                                 known=known, small=small, city=city, today=today)
+                else:
+                    people = await find_people(j["company"], j["title"], small, li, want=want,
+                                               country=country, region=j.get("loc_region"), city=city)
             except Exception as e:
                 logger.exception(f"curator outreach: {j['company']} failed: {e}")
                 _OUTREACH_ERRORS.append(f"{j['company']}: {e}")
                 continue
             for p in people:
                 email, conf = guess_email(p["name"], it)
-                who = aud.detect(p.get("headline") or "", drafting.card_text(p), aff)
+                who = p.get("audience") or aud.detect(p.get("headline") or "", drafting.card_text(p), aff)
                 d = await draft({**p, "audience": who}, j["company"], j, sender, drafts, aff) if drafts else {}
                 found.append({"audience": who, "message_stage": "note" if d.get("note") else None, "job_id": j["id"], "company": j["company"], "name": p["name"],
                               "title": p.get("headline"), "kind": p.get("kind"), "linkedin_url": p["url"],
-                              "location": p.get("location"),
+                              "location": p.get("location"), "degree": p.get("degree") if country == "US" else None,
                               "email": email, "email_confidence": conf, "source": p.get("source"),
                               "note": d.get("note"), "email_draft": d.get("email_draft"), "found_on": today,
                               "note_manual": bool(d.get("note_manual")), "note_issue": d.get("note_issue"),
                               "purpose": "job", "lead_kind": "job"})
     _OUTREACH_ERRORS.extend(n for n in li.notes if n not in _OUTREACH_ERRORS)
+    if connected_ids:      # the only write of the planning's findings, after the run's searching, 3 at most
+        await asyncio.to_thread(cf.surface_contacts, connected_ids)
+        _SURFACED.extend(str(i) for i in connected_ids[:cf.SURFACE_MAX])
     db = SessionLocal()
     try:
         saved = []
@@ -776,6 +797,7 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
     network_n = await asyncio.to_thread(
         _with_db, lambda db: per_run_quota(cfg["network"], cfg["runs_per_day"], _found_today(db, today_, "network")))
     _OUTREACH_ERRORS.clear()
+    _SURFACED.clear()
     from backend.curator import people as _people
     _people.NO_PROFILES.clear()
     drafts_off = outreach and not await asyncio.to_thread(_people.drafts_enabled)
@@ -811,6 +833,8 @@ async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: 
                "llm_pool": len(shortlist), "saved": len(top), "ignored": ignored, "contacts": len(contacts),
                "network": len(network), "released": released["released"], "retired": released["retired"],
                "resurfaced": len(again)}
+    if _SURFACED:
+        summary["surfaced_connected"] = len(set(_SURFACED))
     if drafts_off:
         summary["outreach_drafts"] = "off: no notes or emails drafted"
     if _people.NO_PROFILES:

@@ -5,11 +5,14 @@ Runs once a day per account (scheduler `network_scout`, after the curator) and o
 
 1. Hiring posts: LinkedIn posts from the past week that say someone is hiring for the user's
    roles or domains (mock session). The author is the lead.
-2. Project fit: founders, CTOs and engineering managers whose public profile matches a domain
-   the user's projects show (SearXNG over linkedin.com/in; no LinkedIn request).
-3. Affinity: people from the user's schools and past employers who now lead or hire (SearXNG).
-4. Network distance: the best few leads are looked up once on the main session to learn whether
-   they are a 2nd or 3rd connection (capped by linkedin_main_daily_cap).
+2. Alumni: one faceted people search on the main session for the user's schools (schoolFilter ids, network
+   1st/2nd, US) when their LinkedIn ids are known; else a keyword search per school.
+3. Project fit: founders, CTOs and engineering managers whose profile matches a domain the user's projects
+   show (LinkedIn keyword search; SearXNG only when the account's `people_searxng` setting is on).
+The scout shares the LinkedIn allocator (curator/li_budget.py): with two or more curator runs a day it draws only on
+the reserve the runs leave over, never on their shares. People it finds are filed per company
+(curator/company_first.py) so the curator's company-first search can reuse them.
+4. Network distance: read off the result cards (• 2nd / • 3rd+); no separate lookup is made.
 
 Every candidate is scored against the persona's networking profile by the curator model, which
 writes why the person matters, two or three talking points, the project to show them and a
@@ -32,7 +35,6 @@ from backend.tz import local_today
 logger = logging.getLogger("jobnavigator.curator.scout")
 
 MAX_SCORED = 40          # candidates the model scores per run
-DEGREE_CHECKS = 5        # main-session lookups per run (also capped by the session's own budget)
 MIN_SCORE = 50
 
 _DEFAULT_ROLES = ["backend engineer", "software engineer"]
@@ -255,8 +257,34 @@ def _daily_target() -> int:
         db.close()
 
 
+def li_queries(li_people: list, aff) -> list:
+    """[(kind, keywords, facet kwargs)] for the scout's LinkedIn people searches: the alumni query first, as one
+    faceted search over the user's schools (their ids from li_entity_ids; 1st and 2nd degree, US) when any is
+    known, else the keyword queries of plan_queries; then the project-fit keyword queries."""
+    from backend.curator import entity_ids
+    schools = entity_ids.ids_for(entity_ids.SCHOOL, getattr(aff, "schools", []))
+    out, keyword_alumni = [], [x for x in li_people if x[0] == "alumni"]
+    if schools:
+        out.append(("alumni", "engineering manager", {"schools": [i for _, i in schools], "network": ["F", "S"],
+                                                      "qtype": "alumni_scout", "names": {"schoolFilter": schools[0][0]}}))
+    else:
+        out.extend((k, kw, {}) for k, kw in keyword_alumni)
+    out.extend((k, kw, {}) for k, kw in li_people if k != "alumni")
+    return out
+
+
 async def run_network_scout(sync_projects: bool = True) -> dict:
     """One scout run for the current account; returns counts for the run summary."""
+    from backend.curator import li_budget
+    from backend.curator.run import _settings
+    li_budget.begin_scout(await asyncio.to_thread(lambda: _settings()["runs_per_day"]))
+    try:
+        return await _run_network_scout(sync_projects)
+    finally:
+        li_budget.end_run()
+
+
+async def _run_network_scout(sync_projects: bool) -> dict:
     from backend.curator import llm
     from backend.curator.linkedin_people import LinkedInPeople
     from backend.curator import li_budget
@@ -307,22 +335,36 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
                 break
             summary["posts"] += len(posts)
             cands.extend({**lead, "lead_kind": "hiring_post"} for lead in (parse_post(p) for p in posts) if lead)
-        searx = await _searx_leads(q["project_fit"], "project_fit") + await _searx_leads(q["affinity"], "alumni")
-        cands.extend(searx)
+        from backend.curator.people import searxng_for_people
+        searx = []
+        if searxng_for_people():
+            searx = await _searx_leads(q["project_fit"], "project_fit") + await _searx_leads(q["affinity"], "alumni")
+            cands.extend(searx)
         if len(searx) < want:
-            # SearXNG's engines often ignore site: and return no profiles; ask LinkedIn instead
-            for kind, kw in q["li_people"]:
+            # LinkedIn's own people search, inside the scout's share of the allocator (the reserve); the alumni
+            # query goes first, as one faceted search over the user's schools when their ids are known
+            hits_all = []
+            for kind, kw, facets in await asyncio.to_thread(li_queries, q["li_people"], aff):
+                if not (li_budget.available(li_budget.MOCK) or li_budget.available(li_budget.MAIN)):
+                    summary["errors"].append("LinkedIn budget for the scout is spent")
+                    break
                 try:
-                    hits = await li.search(kw, country="US")
+                    hits = await li.search(kw, country="US", **facets)
                 except Exception as e:
                     summary["errors"].append(f"people: {e}")
                     break
                 for h in hits:
-                    cands.append({"name": h["name"], "headline": h.get("headline") or "", "url": h["url"],
-                                  "company": h.get("current_text") or company_from_headline(h.get("headline") or ""),
-                                  "location": h.get("location"), "country": h.get("country"),
-                                  "degree": h.get("degree"), "evidence": h.get("headline") or "",
-                                  "lead_kind": kind, "source": h.get("source")})
+                    c = {"name": h["name"], "headline": h.get("headline") or "", "url": h["url"],
+                         "company": h.get("current_text") or company_from_headline(h.get("headline") or ""),
+                         "location": h.get("location"), "country": h.get("country"),
+                         "degree": h.get("degree"), "evidence": h.get("headline") or "",
+                         "lead_kind": kind, "source": h.get("source"),
+                         "company_verified": bool(h.get("current_text"))}
+                    cands.append(c)
+                    hits_all.append(c)
+            if hits_all:
+                from backend.curator import company_first
+                await asyncio.to_thread(company_first.remember_scouted, hits_all)
 
         db = SessionLocal()
         try:
@@ -330,9 +372,15 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
         finally:
             db.close()
         seen, uniq = set(known), []
+        by_url: dict = {}
         for c in cands:
+            if c.get("url") and c["url"] in by_url:
+                if by_url[c["url"]].get("degree") is None and c.get("degree"):
+                    by_url[c["url"]]["degree"] = c["degree"]       # the card of a search result says 2nd / 3rd+
+                continue
             if c.get("url") and c["url"] not in seen and (c.get("country") in (None, "US") or c["lead_kind"] == "hiring_post"):
                 seen.add(c["url"])
+                by_url[c["url"]] = c
                 uniq.append(c)
         summary["candidates"] = len(uniq)
         uniq = [with_audience(c, aff) for c in uniq]
@@ -342,19 +390,6 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
         summary["scored"] = sum(1 for s in scored if isinstance(s, dict))
         ranked = sorted((s for s in scored if isinstance(s, dict)), key=lambda s: -s["score"])
         summary["best"] = [f"{s['name']} ({s['lead_kind']}) {s['score']}" for s in ranked[:5]]
-
-        # network distance for the best few, on the main session
-        for c in best[:DEGREE_CHECKS]:
-            if not li_budget.available(li_budget.MAIN):
-                break
-            try:
-                hits = await li.search(f"{c['name']} {c.get('company') or ''}".strip(), network=["F", "S", "O"])
-            except Exception as e:
-                summary["errors"].append(f"degree: {e}")
-                break
-            match = next((h for h in hits if h["url"].rstrip("/") == c["url"].rstrip("/")), None)
-            if match:
-                c["degree"] = match.get("degree")
 
     if drafts:      # the note is drafted for the audience, checked, retried once, then saved or flagged
         from backend.curator import drafting

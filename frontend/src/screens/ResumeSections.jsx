@@ -447,6 +447,25 @@ export function ProjectsEditor({ emptyNote, data, setField, mutate, onRemoved })
     </div>
   )
 }
+// Persona only (not in SECTION_ORDER, which the résumé editor shares): the certifications the profile holds.
+export function CertificationsEditor({ emptyNote, data, setField, mutate, onRemoved }) {
+  const items = data.certifications || []
+  const undoRemove = useUndoRemove(mutate, onRemoved)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 10 }}>
+      {items.length === 0 ? <EmptyState note={emptyNote} what="certifications" /> : items.map((c, i) => (
+        <Card key={i} style={{ padding: 11, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <MicroField label="Title" value={c.title} onChange={(v) => setField(`certifications.${i}.title`, v)} />
+          <MicroField label="Description" value={c.description} onChange={(v) => setField(`certifications.${i}.description`, v)} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}><RemoveLink onClick={() => undoRemove('Removed certification',
+            (d) => d.certifications.splice(i, 1),
+            (d) => { d.certifications = d.certifications || []; d.certifications.splice(i, 0, c) })} /></div>
+        </Card>
+      ))}
+      <DashedAdd big onClick={() => mutate((d) => { d.certifications = d.certifications || []; d.certifications.push({ title: '', description: '' }) })}>+ Add certification</DashedAdd>
+    </div>
+  )
+}
 export function PublicationsEditor({ emptyNote, data, setField, mutate, onRemoved }) {
   const pubs = data.publications || []
   const undoRemove = useUndoRemove(mutate, onRemoved)

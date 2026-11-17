@@ -57,7 +57,8 @@ async def test_run_saves_scored_leads_once(test_db, monkeypatch):
     test_db.add(Persona(id=1, contact={"first_name": "V", "city": "New York"}, networking=NET,
                         work_auth={"requires_sponsorship_future": True}))
     test_db.add(Resume(name="General", is_base=True, json_data={"summary": "Backend engineer"}))
-    test_db.add(Setting(key="scout_daily_leads", value="2"))
+    test_db.add(Setting(key="scout_daily_leads", value="50"))
+    test_db.add(Setting(key="people_searxng", value="true"))      # this test is about the web-search leads
     test_db.commit()
 
     class FakeLI:

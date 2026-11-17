@@ -4,9 +4,10 @@ Only people who still work at the company (their profile's current employer) and
 sit in the job's country are kept; hiring managers for the role's area and
 technical / early-career recruiters rank first.
 
-Public search first (SearXNG `site:linkedin.com/in`), LinkedIn's own people search
-only when that finds nobody useful, then a best-guess work email from the company's
-known email format, and a short LinkedIn note + cold email drafted by the LLM (curator/drafting.py).
+LinkedIn's own people search (curator/linkedin_people.py; the US lane goes through curator/company_first.py first),
+then a best-guess work email from the company's known email format, and a short LinkedIn note + cold email drafted
+by the LLM (curator/drafting.py). SearXNG `site:linkedin.com/in` is used only when the account's setting
+`people_searxng` is on (default off: the engines return no LinkedIn profiles); SearXNG still serves company intel.
 """
 import asyncio
 import logging
@@ -256,6 +257,8 @@ async def _search_people(company: str, queries: list[str], li_keywords: list[str
         return sorted(out, key=lambda c: -c["_r"])
 
     profiles = 0
+    if not searxng_for_people():
+        queries = []                                    # people_searxng is off: LinkedIn only
     for q in queries:
         try:
             for r in await search(q, n=10):
@@ -275,6 +278,8 @@ async def _search_people(company: str, queries: list[str], li_keywords: list[str
         NO_PROFILES.append(company)
     best = ranked()
     if (not best or best[0]["_p"] < 2) and li is not None:
+        from backend.curator import names as _names
+        li.wanted_ids.add(_names.company_key(company))   # the page this loads may carry the company's LinkedIn id
         for kw in li_keywords:
             for hit in await li.search(kw, country=country):
                 if hit.get("current_text"):
@@ -292,6 +297,21 @@ async def _search_people(company: str, queries: list[str], li_keywords: list[str
         logger.info(f"people at {company}: dropped {rejected['left']} no longer there, "
                     f"{rejected['country']} outside {country}")
     return [{k: v for k, v in c.items() if not k.startswith("_")} for c in best[:want]]
+
+
+def searxng_for_people() -> bool:
+    """Whether people search may query SearXNG (per-account setting `people_searxng`, default off)."""
+    from backend.accounts.settings import get_setting
+    from backend.models.db import SessionLocal
+    db = SessionLocal()
+    try:
+        raw = get_setting(db, "people_searxng")
+    except Exception as e:
+        logger.warning(f"people_searxng unreadable, leaving SearXNG off for people: {e}")
+        raw = None
+    finally:
+        db.close()
+    return str(raw if raw is not None else "false").strip().lower() in ("true", "1", "yes", "on")
 
 
 def drafts_enabled() -> bool:

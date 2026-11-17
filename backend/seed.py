@@ -131,6 +131,8 @@ DEFAULT_SETTINGS = {
     "followup_daily_limit": ("8", "Most follow-ups the Due list shows in one day, so leads that were open before the schedule existed come up over several days (default 8)"),
     "followup_days": ("4,9", "Days after the connection request or message when each follow-up is due, comma-separated and rising (default 4,9; invalid counts as default)"),
     "invites_daily_cap": ("8", "Connection requests a day (People screen and nag). Above 12 counts as 12; 0 or invalid counts as 8"),
+    "people_searxng": ("false", "Let people search query SearXNG (site:linkedin.com/in) before LinkedIn. Off by default: the engines return no LinkedIn profiles and it spends 4 queries per company. SearXNG is still used for company intel"),
+    "people_company_cap": ("5", "Companies a day the US job lane searches for people (each costs 2-3 LinkedIn loads of the run's share; a company searched in the last 30 days is not searched again). At most 10"),
     "nag_calendar": ("{}", "JSON {\"YYYY-MM-DD\": \"task\"}: the day's planned post or task, added to the nag"),
     "network_scout_cron": ("15 6 * * *", "Daily lead-scout cron (people to network with, independent of jobs). Empty = disabled"),
     "scout_daily_leads": ("15", "How many new people the lead scout saves each day"),

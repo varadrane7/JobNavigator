@@ -21,7 +21,7 @@ numbers are weights: the main session (15) gives exactly 8 / 5 / 2, the mock ses
    planned ones gets NO share of its own: it is refused, so the reserve is never eaten.
  * A manual "Run now" does not claim an ordinal, so it cannot shift the scheduled runs' shares and
    never takes one: it may use only what the plan leaves over (the reserve and rounding), counted in
-   its own "manual" bucket, and still within the daily total.
+   the "reserve" bucket it shares with the lead scout, and still within the daily total.
  * A crashed run keeps the ordinal it claimed and what it loaded stays counted; its unspent part is
    not handed to a later run (conservative). A restart of the day's runs counts as the next run.
  * Callers outside a run (lead scout, link lookup) draw on the daily total only; the total is never
@@ -44,6 +44,7 @@ DEFAULT_COOLDOWN_HOURS = 6
 DEFAULT_RUN_SPLIT = "8,5"
 DEFAULT_RUN_RESERVE = 2
 
+_OFF: set = set()    # (day, kind) of faceted query types LinkedIn ignored, this process
 _COOL: dict = {}     # jar -> aware datetime the cooldown ends
 _RUN: contextvars.ContextVar = contextvars.ContextVar("li_budget_run", default=None)   # (ordinal, shares) of this run
 
@@ -175,6 +176,7 @@ def run_shares(which: str, runs_per_day: int) -> list:
 
 NOT_PLANNED = 10 ** 6       # ordinal of a run that could not be claimed: it gets no share
 MANUAL = -1                 # ordinal of a manual "Run now": it claims nothing and draws on the leftover only
+SCOUT = -2                  # the lead scout: it draws on the reserve only, in a bucket of its own
 
 
 def claim_run(runs_per_day: int, manual: bool = False) -> int:
@@ -206,6 +208,12 @@ def begin_run(runs_per_day: int, manual: bool = False) -> int:
     return ordinal
 
 
+def begin_scout(runs_per_day: int) -> None:
+    """The lead scout starts: with a split (2 or more curator runs a day) it may use only the reserve the runs
+    leave over, so it cannot eat the loads the runs plan on. One run a day: no split, daily total only."""
+    enter_run(SCOUT, runs_per_day)
+
+
 def end_run() -> None:
     _RUN.set(None)
 
@@ -219,11 +227,53 @@ def _run_limit(which: str):
     shares = run_shares(which, rpd)
     if not shares:
         return None, None
+    if ordinal == SCOUT:
+        return "reserve", max(0, cap(which) - sum(shares))      # the reserve, not the curator runs' loads
     if ordinal == MANUAL:
-        return "manual", max(0, cap(which) - sum(shares))      # only what no scheduled run owns
+        return "reserve", max(0, cap(which) - sum(shares))      # only what no scheduled run owns: one bucket shared
+                                                                # with the scout, so together they never take more
     if 1 <= ordinal <= len(shares):
         return f"run{ordinal}", shares[ordinal - 1]
     return f"run{ordinal}", 0                                   # beyond the plan: no share of its own
+
+
+def remaining(which: str) -> int:
+    """Loads this caller (the current run, the scout, or nobody in particular) may still take on `which` today:
+    the smaller of the daily total's and its own share's leftover; 0 while cooling or when usage is unreadable."""
+    if cooling_until(which) is not None:
+        return 0
+    total = _count(which)
+    if total is None:
+        return 0
+    left = max(0, cap(which) - total)
+    bucket, limit = _run_limit(which)
+    if bucket is None:
+        return left
+    mine = _count(which, bucket)
+    return 0 if mine is None else min(left, max(0, limit - mine))
+
+
+# A kind of faceted query LinkedIn ignored today (curator/linkedin_people.py): recorded in li_usage under the
+# bucket "off:<kind>" so a restart does not forget it, and the day's rollover clears it.
+def _off_bucket(kind: str) -> str:
+    return f"off:{kind}"
+
+
+def mark_unusable(kind: str) -> None:
+    try:
+        _claim(_jar(MAIN), local_today(), _off_bucket(kind))
+    except Exception as e:
+        logger.error(f"could not record that {kind!r} queries are unusable today ({e})")
+    _OFF.add((local_today(), kind))
+
+
+def unusable(kind: str) -> bool:
+    if (local_today(), kind) in _OFF:
+        return True
+    try:
+        return _db_read(_jar(MAIN), local_today(), _off_bucket(kind)) > 0
+    except Exception:
+        return True          # unreadable: do not spend on a query type that may be dropped
 
 
 def cooling_until(which: str):
@@ -283,6 +333,7 @@ def status() -> dict:
 def reset_all() -> None:
     """Tests: forget every count and cooldown."""
     _COOL.clear()
+    _OFF.clear()
     _RUN.set(None)
     try:
         from backend.models.db import LiUsage, SessionLocal
@@ -299,4 +350,5 @@ def reset_all() -> None:
 def forget_process_state() -> None:
     """Tests: what an app restart loses (memory only); the day's count in the database stays."""
     _COOL.clear()
+    _OFF.clear()
     _RUN.set(None)
