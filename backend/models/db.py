@@ -331,6 +331,8 @@ class Contact(AccountScoped, Base):
     source = Column(String, nullable=True)               # searxng | linkedin_mock | linkedin_personal
     location = Column(String, nullable=True)             # as the profile shows it ("New York City Metropolitan Area")
     note = Column(Text, nullable=True)                   # draft LinkedIn note (<300 chars)
+    note_manual = Column(Boolean, default=False)         # True: no usable note could be drafted, write one by hand
+    note_issue = Column(Text, nullable=True)             # why (curator/note_check.py); cleared when a note is set
     email_draft = Column(Text, nullable=True)            # draft cold email
     # new | requested (connection sent) | connected | messaged | replied | referral | snoozed | skip
     # ("contacted", from before the lead pipeline, reads as requested)
@@ -348,9 +350,48 @@ class Contact(AccountScoped, Base):
     last_action_at = Column(DateTime(timezone=True), nullable=True)
     resurfaced = Column(Integer, default=0)              # times the curator put this person back on Today uncontacted
     found_on = Column(Date, nullable=True, index=True)   # APP_TZ date
+    invited_on = Column(Date, nullable=True, index=True)  # APP_TZ date the connection request was first sent (curator/invites.py)
+    # Who this person is to the sender, from evidence only (curator/audience.py): alum | ex_colleague |
+    # engineer | recruiter | hiring_manager | post. NULL when nothing says. Drives the message shape and the order.
+    audience = Column(String, nullable=True)
+    # The stage of the text in message_draft: note | after_acceptance | follow_up_1 | follow_up_2; and
+    # closed_no_reply once the follow-ups ran out (curator/followups.py)
+    message_stage = Column(String, nullable=True)
+    message_draft = Column(Text, nullable=True)          # a drafted after-acceptance message or follow-up (<= ~600 chars)
+    follow_ups_sent = Column(Integer, default=0)         # follow-ups sent since the last first contact (curator/followups.py)
+    contacted_on = Column(Date, nullable=True)           # APP_TZ date of the request or message the follow-ups count from
+    follow_up_sent_on = Column(Date, nullable=True)      # APP_TZ date the last follow-up was recorded (closing wait, double clicks)
+    last_sent_text = Column(Text, nullable=True)         # the text last actually sent to this lead: what a follow-up refers to
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
     __table_args__ = (UniqueConstraint("account_id", "company", "linkedin_url", name="uq_contacts_account_company_url"),)
+
+
+class CompanyEverify(Base):
+    """Whether a company says it uses E-Verify: yes | no | unknown. Shown on jobs and leads, never used to
+    score, filter or order (curator/everify.py). Install-wide, like the other per-company caches. `source`
+    is "job description" for a detected yes, or the owner's own note for one set by hand."""
+    __tablename__ = "company_everify"
+
+    name_key = Column(String, primary_key=True)
+    status = Column(String, nullable=False, default="unknown")
+    source = Column(String, nullable=True)
+    checked_on = Column(Date, nullable=True)
+
+
+class LiUsage(Base):
+    """LinkedIn page loads made on one signed-in session on one local day (curator/li_budget.py).
+    `jar` is the session's cookie jar path (so accounts sharing a jar share the count), `bucket` is
+    "all" for every load, "run<N>" for the loads of the day's Nth curator run, and "_runs" counts
+    the runs begun that day. Persisted so an app restart does not forget what the day has used."""
+    __tablename__ = "li_usage"
+
+    jar = Column(String, primary_key=True)
+    day = Column(Date, primary_key=True)
+    bucket = Column(String, primary_key=True)
+    n = Column(Integer, nullable=False, default=0)
+
+
 class LinkedinLookup(Base):
     """One answer per LinkedIn job, install-wide (the same for every account): the employer's
     apply link LinkedIn shows a logged-in user, or that the job is Easy Apply or gone.

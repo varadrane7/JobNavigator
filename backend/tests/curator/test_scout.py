@@ -51,18 +51,6 @@ def test_plan_queries_uses_roles_domains_and_affinities():
     assert q["affinity"] and '"NJIT"' in q["affinity"][0]
 
 
-def test_follow_ups_become_due(test_db):
-    from backend.curator.scout import mark_follow_ups
-    today = local_today()
-    old = Contact(name="A", company="X", linkedin_url="u1", status="requested", found_on=today - timedelta(days=9))
-    fresh = Contact(name="B", company="X", linkedin_url="u2", status="requested", found_on=today - timedelta(days=2))
-    connected = Contact(name="C", company="X", linkedin_url="u3", status="connected", found_on=today - timedelta(days=4))
-    test_db.add_all([old, fresh, connected])
-    test_db.commit()
-    assert mark_follow_ups(test_db, today) == 2
-    assert old.next_action_at == today and connected.next_action_at == today and fresh.next_action_at is None
-
-
 async def test_run_saves_scored_leads_once(test_db, monkeypatch):
     from backend.curator import scout, li_budget
     import backend.curator.linkedin_people as lpm
@@ -95,7 +83,7 @@ async def test_run_saves_scored_leads_once(test_db, monkeypatch):
     async def fake_ask_json(prompt, system, purpose, max_tokens=1500, job_id=None):
         score = 90 if "Bob Lee" in prompt else 70 if "Amy Wu" in prompt else 10
         return {"score": score, "kind": "founder", "why": "hiring", "talking_points": ["a", "b"],
-                "project": "LazyCurl", "note": "Hi"}
+                "project": "LazyCurl"}
 
     monkeypatch.setattr(lpm, "LinkedInPeople", FakeLI)
     monkeypatch.setattr(scout, "search", fake_search)
@@ -137,3 +125,45 @@ def test_parse_post_reads_the_2026_card_text():
     lead = parse_post(post)
     assert lead["name"] == "Diana Romero" and lead["company"] == "Acme AI"
     assert lead["headline"].startswith("Talent Acquisition Lead")
+
+
+async def test_run_drafts_no_notes_and_loads_no_sender_facts_when_drafts_are_off(test_db, monkeypatch):
+    from backend.curator import li_budget, scout
+    import backend.curator.linkedin_people as lpm
+    test_db.add(Persona(id=1, contact={"first_name": "V"}, networking=NET))
+    test_db.add(Resume(name="General", is_base=True, json_data={"summary": "Backend engineer"}))
+    test_db.add(Setting(key="outreach_drafts_enabled", value="false"))
+    test_db.commit()
+
+    class FakeLI:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        async def search_posts(self, q):
+            return [{"author_url": "https://www.linkedin.com/in/bob", "actor": "Bob Lee\nCTO at Tiny AI",
+                     "text": "We're hiring backend engineers", "source": "linkedin_mock"}]
+
+        async def search(self, kw, country=None, network=None):
+            return []
+
+    async def no_search(q, n=10, **kw):
+        return []
+
+    async def fake_ask_json(prompt, system, purpose, max_tokens=1500, job_id=None):
+        return {"score": 90, "kind": "founder", "why": "hiring", "project": "LazyCurl"}
+
+    async def boom(*a, **k):
+        raise AssertionError("no draft may be asked for when outreach drafts are off")
+    monkeypatch.setattr(lpm, "LinkedInPeople", FakeLI)
+    monkeypatch.setattr(scout, "search", no_search)
+    monkeypatch.setattr("backend.curator.llm.ask_json", fake_ask_json)
+    monkeypatch.setattr("backend.curator.llm.ask", boom)
+    monkeypatch.setattr("backend.curator.drafting.load_sender", boom)
+    monkeypatch.setattr(li_budget, "available", lambda which: True)
+    s = await scout.run_network_scout(sync_projects=False)
+    assert s["saved"] == 1 and s["drafts"] == "off"
+    row = test_db.query(Contact).one()
+    assert row.note is None and row.audience == "hiring_manager" and not row.note_manual

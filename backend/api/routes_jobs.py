@@ -1379,6 +1379,13 @@ def _skipped_roles(db, jobs) -> dict:
             for j in jobs if getattr(j, "same_role_as", None) in found}
 
 
+def _everify_flag(j: Job) -> str:
+    from sqlalchemy.orm import object_session
+    from backend.curator import everify
+    sess = object_session(j)
+    return everify.flag(sess, j.company, j.description) if sess is not None else "unknown"
+
+
 def _job_to_dict(j: Job, tailored_resume_id=None, in_flight: list[str] | None = None,
                  in_flight_detail: list[dict] | None = None, names: dict | None = None,
                  also_on: list | None = None, same_role_skipped: dict | None = None,
@@ -1432,6 +1439,7 @@ def _job_to_dict(j: Job, tailored_resume_id=None, in_flight: list[str] | None = 
         "h1b_jd_flag": j.h1b_jd_flag,
         "h1b_jd_snippet": j.h1b_jd_snippet,
         "h1b_verdict": j.h1b_verdict,
+        "everify": _everify_flag(j),      # yes | no | unknown, shown only (curator/everify.py)
         "cv_scores": scores,
         "best_cv": best_cv,
         "scoring_report": _normalize_report(report, best_cv),

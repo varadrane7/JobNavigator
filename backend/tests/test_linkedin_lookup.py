@@ -577,6 +577,32 @@ async def test_a_live_session_whose_me_call_refuses_still_runs(test_db, monkeypa
     assert job.link_kind == "direct"
 
 
+@pytest.mark.asyncio
+async def test_each_lookup_page_load_counts_against_the_mock_budget(test_db, monkeypatch, mock_jar):
+    from backend.curator import li_budget
+    mock_jar(test_db)
+    _li(test_db)
+    li_budget.reset_all()
+    asked = _fake_browser(monkeypatch, "https://www.linkedin.com/feed/", 401)
+    out = await ll.run_lookup(per_run=20, pause=0, resolve=_no_resolve)
+    assert asked == ["4461186967"] and out["stopped"] is None
+    from backend.accounts.background import acting_as
+    with acting_as(None):
+        assert li_budget.used(li_budget.MOCK) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_spent_mock_budget_stops_the_lookup_before_any_load(test_db, monkeypatch, mock_jar):
+    from backend.curator import li_budget
+    mock_jar(test_db)
+    _li(test_db)
+    li_budget.reset_all()
+    monkeypatch.setattr(li_budget, "_setting_int", lambda key, default: 0 if key == "linkedin_mock_daily_cap" else default)
+    asked = _fake_browser(monkeypatch, "https://www.linkedin.com/feed/", 401)
+    out = await ll.run_lookup(per_run=20, pause=0, resolve=_no_resolve)
+    assert asked == [] and "budget" in out["stopped"]
+
+
 # ── final review fixes ──────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

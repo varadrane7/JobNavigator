@@ -49,14 +49,17 @@ def stats(today=None) -> dict:
     try:
         picks = db.query(Job).filter(Job.curated_on == today, Job.status == "saved").count()
         apps = db.query(Application).filter(Application.applied_at >= start).count()
-        reqs = db.query(Contact).filter(Contact.last_action_at >= start,
-                                        Contact.status.in_(("requested", "connected", "messaged", "replied", "referral"))).count()
-        due = db.query(Contact).filter(Contact.next_action_at.isnot(None), Contact.next_action_at <= today,
-                                       Contact.status.notin_(("skip", "referral"))).count()
+        from backend.curator import invites
+        plan = invites.plan(db, today)
+        reqs = plan["sent_today"]        # same basis as the People chip: leads whose invited_on is today
+        from backend.curator import followups
+        carried = set(plan["carried"])
+        due = len([c for c in followups.due_leads(db, today) if c.id not in carried])
         week = day_start(today - timedelta(days=6))
         days = {a.applied_at.date() for a in db.query(Application.applied_at).filter(Application.applied_at >= week)}
         days |= {c.last_action_at.date() for c in db.query(Contact.last_action_at).filter(Contact.last_action_at >= week)}
-        return {"picks": picks, "apps": apps, "reqs": reqs, "due": due, "streak": len(days)}
+        return {"picks": picks, "apps": apps, "reqs": reqs, "due": due, "streak": len(days),
+                "invited": plan["sent_today"], "invite_cap": plan["cap"]}
     finally:
         db.close()
 
@@ -82,9 +85,14 @@ def _settings() -> dict:
 
 
 def compose(s: dict, cfg: dict, hour: int, today, rng=random) -> str:
-    v = {**s, "apply_t": cfg["apply_t"], "req_t": cfg["req_t"], "date": today.strftime("%b %d"),
-         "left_apps": max(0, cfg["apply_t"] - s["apps"]), "left_reqs": max(0, cfg["req_t"] - s["reqs"])}
-    done = s["apps"] >= cfg["apply_t"] and s["reqs"] >= cfg["req_t"]
+    # The invite cap (curator/invites.py) bounds the request target, and once it is reached the nag
+    # stops asking for more requests: the rest of the leads carry to tomorrow.
+    invite_cap = s.get("invite_cap")
+    req_t = min(cfg["req_t"], invite_cap) if invite_cap else cfg["req_t"]
+    capped = bool(invite_cap) and s.get("invited", 0) >= invite_cap
+    v = {**s, "apply_t": cfg["apply_t"], "req_t": req_t, "date": today.strftime("%b %d"),
+         "left_apps": max(0, cfg["apply_t"] - s["apps"]), "left_reqs": 0 if capped else max(0, req_t - s["reqs"])}
+    done = s["apps"] >= cfg["apply_t"] and (s["reqs"] >= req_t or capped)
     if hour < 11:
         pool = MORNING
     elif hour >= 21:
@@ -99,6 +107,10 @@ def compose(s: dict, cfg: dict, hour: int, today, rng=random) -> str:
     task = cfg["calendar"].get(today.isoformat())
     if task and hour < 21:
         lines.append(f"Also today: {task}")
+    if capped:
+        lines.append(f"Invite cap reached: {s['invited']}/{invite_cap}. No more requests today; the rest wait for tomorrow.")
+    elif invite_cap and hour < 21:
+        lines.append(f"Invites today: {s.get('invited', 0)}/{invite_cap}, {invite_cap - s.get('invited', 0)} left to send.")
     if cfg["url"] and not done and hour < 21:
         lines.append(f"{cfg['url']}/today · {cfg['url']}/people")
     return "\n".join(lines)

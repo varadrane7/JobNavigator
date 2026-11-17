@@ -32,12 +32,12 @@ def test_stats_count_today_only(test_db):
     test_db.add(j)
     test_db.flush()
     test_db.add(Application(job_id=j.id, status="applied", applied_at=day_start(today) + timedelta(hours=10)))
-    test_db.add(Contact(name="P", company="A", linkedin_url="l", status="requested",
+    test_db.add(Contact(name="P", company="A", linkedin_url="l", status="requested", invited_on=today,
                         last_action_at=day_start(today) + timedelta(hours=11)))
     test_db.add(Contact(name="Q", company="A", linkedin_url="m", status="new", next_action_at=today))
     test_db.commit()
     s = stats(today)
-    assert s == {"picks": 1, "apps": 1, "reqs": 1, "due": 1, "streak": 1}
+    assert s == {"picks": 1, "apps": 1, "reqs": 1, "due": 1, "streak": 1, "invited": 1, "invite_cap": 8}
 
 
 def test_each_telegram_kind_has_its_own_switch(test_db):

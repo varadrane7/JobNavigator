@@ -4,10 +4,34 @@ Every LinkedIn caller (curator people search, lead scout, employer-link lookup) 
 a daily count per session and a cooldown after a 429, checkpoint or login wall, so a throttled
 session is left alone and the next caller goes to the other one or waits. Keyed by the session's
 cookie jar, so the owner, a member on 'inherit' and an install-level pass share one budget, and a
-member with their own sessions has their own. Process-local: a restart forgets it.
+member with their own sessions has their own.
+
+The day's count lives in the database (table li_usage) and is the only copy. `take()` reserves a
+load with one atomic statement per counter (`INSERT ... ON CONFLICT DO UPDATE ... WHERE n < cap`),
+so threads and processes cannot both pass a check-then-increment race, and the daily total and the
+run's own counter are reserved in one transaction: a refusal on either leaves neither incremented.
+It fails CLOSED: when the count cannot be read or the load cannot be recorded, the load is refused
+and the error is logged, because a load that could not be recorded could be granted again after a
+restart. The cooldown after a 429 stays process-local (a restart means a fresh look at the session).
+
+Per-run share: with curate_runs_per_day >= 2 the curator's scheduled runs split each session's daily
+cap by `linkedin_run_split` (default "8,5") with `linkedin_run_reserve` (default 2) held back. The
+numbers are weights: the main session (15) gives exactly 8 / 5 / 2, the mock session (60) 32 / 20 / 8.
+ * Run N (claimed atomically, 1 = first of the day) may take only its own share. A run beyond the
+   planned ones gets NO share of its own: it is refused, so the reserve is never eaten.
+ * A manual "Run now" does not claim an ordinal, so it cannot shift the scheduled runs' shares and
+   never takes one: it may use only what the plan leaves over (the reserve and rounding), counted in
+   its own "manual" bucket, and still within the daily total.
+ * A crashed run keeps the ordinal it claimed and what it loaded stays counted; its unspent part is
+   not handed to a later run (conservative). A restart of the day's runs counts as the next run.
+ * Callers outside a run (lead scout, link lookup) draw on the daily total only; the total is never
+   exceeded under any setting combination. With one run a day there is no split.
 """
+import contextvars
 import logging
 from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import text
 
 from backend.tz import local_today
 
@@ -17,8 +41,11 @@ MOCK, MAIN = "mock", "main"
 DEFAULT_CAP = {MOCK: 60, MAIN: 15}
 DEFAULT_COOLDOWN_HOURS = 6
 
-_USED: dict = {}     # (jar, date) -> requests made
+DEFAULT_RUN_SPLIT = "8,5"
+DEFAULT_RUN_RESERVE = 2
+
 _COOL: dict = {}     # jar -> aware datetime the cooldown ends
+_RUN: contextvars.ContextVar = contextvars.ContextVar("li_budget_run", default=None)   # (ordinal, shares) of this run
 
 
 def _jar(which: str) -> str:
@@ -43,8 +70,160 @@ def cap(which: str) -> int:
     return _setting_int(f"linkedin_{which}_daily_cap", DEFAULT_CAP[which])
 
 
+_RESERVE_SQL = text(
+    "INSERT INTO li_usage (jar, day, bucket, n) VALUES (:jar, :day, :bucket, 1) "
+    "ON CONFLICT (jar, day, bucket) DO UPDATE SET n = li_usage.n + 1 WHERE li_usage.n < :cap")
+_CLAIM_SQL = text(
+    "INSERT INTO li_usage (jar, day, bucket, n) VALUES (:jar, :day, :bucket, 1) "
+    "ON CONFLICT (jar, day, bucket) DO UPDATE SET n = li_usage.n + 1")
+
+
+def _db_read(jar: str, day, bucket: str):
+    from backend.models.db import LiUsage, SessionLocal
+    db = SessionLocal()
+    try:
+        row = db.get(LiUsage, (jar, day, bucket))
+        return row.n if row else 0
+    finally:
+        db.close()
+
+
+def _reserve(jar: str, day, limits: list) -> bool:
+    """Atomically take one load on every (bucket, cap) of `limits`, in one transaction. False (and
+    nothing counted) when any is at its cap. Raises when the database cannot record it."""
+    from backend.models.db import SessionLocal
+    db = SessionLocal()
+    try:
+        for bucket, lim in limits:
+            if lim <= 0:
+                db.rollback()
+                return False
+            done = db.execute(_RESERVE_SQL, {"jar": jar, "day": day, "bucket": bucket, "cap": lim})
+            if (done.rowcount or 0) < 1:
+                db.rollback()
+                return False
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _claim(jar: str, day, bucket: str) -> int:
+    """Atomically add one to a counter and return its new value (one transaction)."""
+    from backend.models.db import SessionLocal
+    db = SessionLocal()
+    try:
+        db.execute(_CLAIM_SQL, {"jar": jar, "day": day, "bucket": bucket})
+        n = db.execute(text("SELECT n FROM li_usage WHERE jar = :jar AND day = :day AND bucket = :bucket"),
+                       {"jar": jar, "day": day, "bucket": bucket}).scalar()
+        db.commit()
+        return int(n)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _count(which: str, bucket: str = "all"):
+    """Loads counted today on this session's bucket; None when the database cannot be read (callers
+    then treat the budget as spent)."""
+    try:
+        return _db_read(_jar(which), local_today(), bucket)
+    except Exception as e:
+        logger.error(f"LinkedIn usage cannot be read from the database ({e}); refusing LinkedIn loads (fail closed)")
+        return None
+
+
 def used(which: str) -> int:
-    return _USED.get((_jar(which), local_today()), 0)
+    n = _count(which)
+    return cap(which) if n is None else n          # unreadable: shown (and treated) as spent
+
+
+def _setting_str(key: str, default: str) -> str:
+    from backend.analyzer.llm_client import _get_setting
+    from backend.models.db import SessionLocal
+    db = SessionLocal()
+    try:
+        return str(_get_setting(db, key, default) or default)
+    finally:
+        db.close()
+
+
+def run_shares(which: str, runs_per_day: int) -> list:
+    """Page loads each of the day's curator runs may use on this session; [] = no split (one run a day).
+
+    The split and the reserve are weights over the session's cap; the shares never add up to
+    more than cap minus the share held back."""
+    if runs_per_day < 2:
+        return []
+    try:
+        split = [max(0, int(x)) for x in _setting_str("linkedin_run_split", DEFAULT_RUN_SPLIT).split(",") if x.strip()]
+    except ValueError:
+        split = [int(x) for x in DEFAULT_RUN_SPLIT.split(",")]
+    reserve = _setting_int("linkedin_run_reserve", DEFAULT_RUN_RESERVE)
+    split = (split or [int(x) for x in DEFAULT_RUN_SPLIT.split(",")])[:runs_per_day]
+    total = sum(split) + reserve
+    if not total:
+        return []
+    c = cap(which)
+    return [c * w // total for w in split]       # floor: the rounding can only shrink a share
+
+
+NOT_PLANNED = 10 ** 6       # ordinal of a run that could not be claimed: it gets no share
+MANUAL = -1                 # ordinal of a manual "Run now": it claims nothing and draws on the leftover only
+
+
+def claim_run(runs_per_day: int, manual: bool = False) -> int:
+    """A curator run starts. Returns its ordinal: 1, 2, ... for scheduled runs, claimed atomically in
+    the database (two starts never get the same number, and a restart keeps the count); MANUAL for a
+    manual run, which claims nothing; 0 with one run a day, when there is no split. If the claim
+    cannot be recorded the run gets NOT_PLANNED (no share, fail closed).
+    Blocking; call it from a thread. The caller then calls enter_run in its own task, because a
+    context variable set inside a worker thread does not reach the task that started it."""
+    if runs_per_day < 2:
+        return 0
+    if manual:
+        return MANUAL
+    try:
+        return _claim(_jar(MAIN), local_today(), "_runs")
+    except Exception as e:
+        logger.error(f"curator run could not be recorded ({e}); it gets no LinkedIn share (fail closed)")
+        return NOT_PLANNED
+
+
+def enter_run(ordinal: int, runs_per_day: int) -> None:
+    """Give the current task (and what it awaits) the limits of run `ordinal`; 0 = no split."""
+    _RUN.set((ordinal, runs_per_day) if ordinal else None)
+
+
+def begin_run(runs_per_day: int, manual: bool = False) -> int:
+    ordinal = claim_run(runs_per_day, manual)
+    enter_run(ordinal, runs_per_day)
+    return ordinal
+
+
+def end_run() -> None:
+    _RUN.set(None)
+
+
+def _run_limit(which: str):
+    """(bucket, loads this run may take in all today on `which`) or (None, None) outside a split run."""
+    cur = _RUN.get()
+    if not cur:
+        return None, None
+    ordinal, rpd = cur
+    shares = run_shares(which, rpd)
+    if not shares:
+        return None, None
+    if ordinal == MANUAL:
+        return "manual", max(0, cap(which) - sum(shares))      # only what no scheduled run owns
+    if 1 <= ordinal <= len(shares):
+        return f"run{ordinal}", shares[ordinal - 1]
+    return f"run{ordinal}", 0                                   # beyond the plan: no share of its own
 
 
 def cooling_until(which: str):
@@ -56,16 +235,33 @@ def cooling_until(which: str):
 
 
 def available(which: str) -> bool:
-    return cooling_until(which) is None and used(which) < cap(which)
+    """Whether a load could be taken now (not reserved: use take() for that)."""
+    if cooling_until(which) is not None:
+        return False
+    total = _count(which)
+    if total is None or total >= cap(which):
+        return False
+    bucket, limit = _run_limit(which)
+    if bucket is None:
+        return True
+    mine = _count(which, bucket)
+    return mine is not None and mine < limit
 
 
 def take(which: str) -> bool:
-    """Count one request on this session; False (nothing counted) when it is cooling or spent."""
-    if not available(which):
+    """Count one load on this session; False (nothing counted) when it is cooling, spent, over this
+    run's share, or when the database cannot record it."""
+    if cooling_until(which) is not None or _count(which) is None:       # unreadable usage: fail closed
         return False
-    key = (_jar(which), local_today())
-    _USED[key] = _USED.get(key, 0) + 1
-    return True
+    limits = [("all", cap(which))]
+    bucket, share = _run_limit(which)
+    if bucket is not None:
+        limits.append((bucket, share))
+    try:
+        return _reserve(_jar(which), local_today(), limits)
+    except Exception as e:
+        logger.error(f"LinkedIn load not recorded in the database ({e}); refusing it (fail closed)")
+        return False
 
 
 def cool(which: str, why: str = "rate-limited") -> None:
@@ -86,5 +282,21 @@ def status() -> dict:
 
 def reset_all() -> None:
     """Tests: forget every count and cooldown."""
-    _USED.clear()
     _COOL.clear()
+    _RUN.set(None)
+    try:
+        from backend.models.db import LiUsage, SessionLocal
+        db = SessionLocal()
+        try:
+            db.query(LiUsage).delete()
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+
+def forget_process_state() -> None:
+    """Tests: what an app restart loses (memory only); the day's count in the database stays."""
+    _COOL.clear()
+    _RUN.set(None)

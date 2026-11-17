@@ -42,7 +42,7 @@ class FakeContext:
 
 
 @pytest.fixture
-def sessions(tmp_path, monkeypatch):
+def sessions(tmp_path, monkeypatch, test_db):
     """Two saved jars (mock, main); LinkedIn answers per the page's `throttled` set."""
     from backend import refresh_linkedin_session as rls
     from backend.scraper.sources import linkedin_personal as lp

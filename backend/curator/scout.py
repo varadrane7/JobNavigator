@@ -14,8 +14,11 @@ Runs once a day per account (scheduler `network_scout`, after the curator) and o
 Every candidate is scored against the persona's networking profile by the curator model, which
 writes why the person matters, two or three talking points, the project to show them and a
 connection note; the best `scout_daily_leads` are saved as contacts (purpose 'network').
-Follow-ups: a request without an answer for 7 days, or a connection not yet messaged after 3,
-becomes due again.
+Follow-ups (curator/followups.py): a request or message with no answer becomes due again at day 4 and
+day 9 (settings followup_days, followup_max), then the lead is closed as no reply.
+
+The scorer does not write notes. The best leads are saved first, then each one's connection note is drafted
+for its audience (curator/audience.py, curator/drafting.py) and validated against exactly what the model saw.
 """
 import asyncio
 import logging
@@ -28,7 +31,6 @@ from backend.tz import local_today
 
 logger = logging.getLogger("jobnavigator.curator.scout")
 
-FOLLOW_UP_AFTER = {"requested": 7, "connected": 3, "messaged": 7}
 MAX_SCORED = 40          # candidates the model scores per run
 DEGREE_CHECKS = 5        # main-session lookups per run (also capped by the session's own budget)
 MIN_SCORE = 50
@@ -36,9 +38,11 @@ MIN_SCORE = 50
 _DEFAULT_ROLES = ["backend engineer", "software engineer"]
 _LEAD_TITLES = '("founder" OR "co-founder" OR "CTO" OR "engineering manager" OR "head of engineering" OR "technical recruiter")'
 
-_SYSTEM = ("You help a job seeker decide who is worth contacting on LinkedIn and how. Be blunt: most "
+_SYSTEM = ("You help a job seeker decide who is worth contacting on LinkedIn. Be blunt: most "
            "people are not worth it. Never invent facts about the sender or the person beyond what you "
            "are given. No flattery, no buzzwords, no em dashes.")
+# P02. Scoring only: the connection note is written afterwards for the leads that are saved, by the shared
+# drafting prompt (curator/drafting.py), so a note is never written for a candidate that is dropped.
 _PROMPT = """Sender profile:
 {brief}
 
@@ -61,14 +65,11 @@ Return JSON:
   "kind": "hiring_manager|founder|recruiter|engineer|other",
   "why": "<one sentence, concrete>",
   "talking_points": ["<2-3 specific openers tied to their work or post and the sender's projects>"],
-  "project": "<name of the one sender project to show them, or empty>",
-  "note": "<LinkedIn connection note, under 280 characters, specific, ends with a light ask>"}}"""
+  "project": "<name of the one sender project to show them, or empty>"}}"""
 
-# With outreach drafts off for the profile the model is not asked for talking points or a note.
+# With outreach drafts off for the profile the model is not asked for talking points.
 _PROMPT_NO_DRAFTS = _PROMPT.replace(
-    """  "talking_points": ["<2-3 specific openers tied to their work or post and the sender's projects>"],\n""", "").replace(
-    """  "project": "<name of the one sender project to show them, or empty>",\n  "note": "<LinkedIn connection note, under 280 characters, specific, ends with a light ask>"}}""",
-    """  "project": "<name of the one sender project to show them, or empty>"}}""")
+    """  "talking_points": ["<2-3 specific openers tied to their work or post and the sender's projects>"],\n""", "")
 
 
 # ── candidate discovery ──────────────────────────────────────────────────────
@@ -161,12 +162,39 @@ async def _searx_leads(queries: list[str], kind: str, n: int = 10) -> list[dict]
 
 # ── scoring and saving ───────────────────────────────────────────────────────
 
-async def score_lead(c: dict, brief: str, drafts: bool = True) -> dict | None:
-    from backend.curator.llm import ask_json
-    out = await ask_json((_PROMPT if drafts else _PROMPT_NO_DRAFTS).format(
+def _prompt_for(c: dict, brief: str, drafts: bool = True) -> str:
+    return (_PROMPT if drafts else _PROMPT_NO_DRAFTS).format(
         brief=brief, kind=c.get("lead_kind"), name=c.get("name"), headline=c.get("headline") or "",
         company=c.get("company") or "unknown", location=c.get("location") or "unknown",
-        evidence=(c.get("evidence") or "")[:600]), _SYSTEM, "scout_lead_score", max_tokens=700)
+        evidence=(c.get("evidence") or "")[:600])
+
+
+def with_audience(c: dict, aff) -> dict:
+    """`c` with its audience, read from what the person's own card says (their headline and, for a profile
+    found by search, the snippet). A hiring post's text is never read for schools or employers."""
+    from backend.curator import audience as aud
+    post = c.get("lead_kind") == "hiring_post"
+    text = "" if post else (c.get("evidence") or "")
+    return {**c, "audience": aud.detect(c.get("headline") or "", text, aff, from_post=post)}
+
+
+async def settle_scout_note(c: dict, sender, aff=None) -> dict:
+    """Draft the connection note for the saved lead `c` for its audience, validate it (curator/note_check.py),
+    retry once with the problems named, and when it still fails save no note and flag the lead for a hand-written
+    one. Returns c with `note`, `note_manual`, `note_issue` and `audience` set. Never cuts a note."""
+    from backend.curator import drafting
+    c = c if c.get("audience") is not None or aff is None else with_audience(c, aff)
+    brief = drafting.Brief(sender=sender, name=c.get("name") or "", card=drafting.card_text(c),
+                           evidence=(c.get("evidence") or "")[:600] if c.get("evidence") != c.get("headline") else "",
+                           company=c.get("company") or "", audience=c.get("audience"),
+                           from_post=c.get("lead_kind") == "hiring_post")
+    res = await drafting.draft_text("note", brief, "scout_note", max_tokens=500)
+    return {**c, "note": res.note, "note_manual": res.manual, "note_issue": res.issue}
+
+
+async def score_lead(c: dict, brief: str, drafts: bool = True) -> dict | None:
+    from backend.curator.llm import ask_json
+    out = await ask_json(_prompt_for(c, brief, drafts), _SYSTEM, "scout_lead_score", max_tokens=700)
     if not out:
         return None
     try:
@@ -174,30 +202,16 @@ async def score_lead(c: dict, brief: str, drafts: bool = True) -> dict | None:
     except (TypeError, ValueError):
         score = 0
     if not drafts:
-        out = {**out, "talking_points": None, "note": None}
+        out = {**out, "talking_points": None}
     tp = out.get("talking_points")
     return {**c, "score": max(0, min(100, score)), "kind": out.get("kind") or None,
             "why": (out.get("why") or "")[:500],
             "talking_points": [str(x)[:300] for x in tp][:3] if isinstance(tp, list) else [],
-            "project_ref": (out.get("project") or "")[:120] or None, "note": (out.get("note") or "")[:300]}
+            "project_ref": (out.get("project") or "")[:120] or None}
 
 
 def _known_urls(db) -> set:
     return {u for (u,) in db.query(Contact.linkedin_url).filter(Contact.linkedin_url.isnot(None)).all()}
-
-
-def mark_follow_ups(db, today=None) -> int:
-    """Leads whose last step has waited long enough become due today; returns how many."""
-    today = today or local_today()
-    n = 0
-    for status, days in FOLLOW_UP_AFTER.items():
-        for c in db.query(Contact).filter(Contact.status == status).all():
-            last = c.last_action_at.date() if c.last_action_at else c.found_on
-            if last and (today - last).days >= days and (c.next_action_at is None or c.next_action_at > today):
-                c.next_action_at = today
-                n += 1
-    db.commit()
-    return n
 
 
 def _profile() -> tuple[str, dict, dict]:
@@ -250,7 +264,8 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
     summary = {"candidates": 0, "scored": 0, "saved": 0, "follow_ups": 0, "posts": 0, "errors": [], "best": []}
     db = SessionLocal()
     try:
-        summary["follow_ups"] = mark_follow_ups(db)
+        from backend.curator import followups
+        summary["follow_ups"] = followups.mark_due(db)
     finally:
         db.close()
     if want <= 0:
@@ -280,6 +295,8 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
         logger.info("scout: outreach drafts are off for this profile; leads are scored without notes or talking points")
         summary["drafts"] = "off"
     q = plan_queries(net, contact)
+    from backend.curator import audience as aud
+    aff = await asyncio.to_thread(aud.load_affiliations)
     cands: list[dict] = []
     async with LinkedInPeople() as li:
         for query in q["posts"]:
@@ -318,6 +335,7 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
                 seen.add(c["url"])
                 uniq.append(c)
         summary["candidates"] = len(uniq)
+        uniq = [with_audience(c, aff) for c in uniq]
         scored = await asyncio.gather(*(score_lead(c, brief, drafts) for c in uniq[:MAX_SCORED]), return_exceptions=True)
         best = sorted((s for s in scored if isinstance(s, dict) and s["score"] >= _min_score()),
                       key=lambda s: -s["score"])[:want]
@@ -338,11 +356,17 @@ async def run_network_scout(sync_projects: bool = True) -> dict:
             if match:
                 c["degree"] = match.get("degree")
 
+    if drafts:      # the note is drafted for the audience, checked, retried once, then saved or flagged
+        from backend.curator import drafting
+        sender = await asyncio.to_thread(drafting.load_sender)
+        best = list(await asyncio.gather(*(settle_scout_note(c, sender, aff) for c in best)))
+
     today = local_today()
     db = SessionLocal()
     try:
         for c in best:
-            row = Contact(job_id=None, company=c.get("company") or "", name=c["name"], title=c.get("headline"),
+            row = Contact(audience=c.get("audience"), message_stage="note" if c.get("note") else None,
+                           note_manual=bool(c.get("note_manual")), note_issue=c.get("note_issue"), job_id=None, company=c.get("company") or "", name=c["name"], title=c.get("headline"),
                            kind=c.get("kind"), linkedin_url=c["url"], location=c.get("location"),
                            source=c.get("source"), note=c.get("note"), status="new", purpose="network",
                            lead_kind=c["lead_kind"], degree=c.get("degree"), score=c["score"], why=c.get("why"),

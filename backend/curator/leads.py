@@ -10,6 +10,7 @@ from typing import Optional
 
 from sqlalchemy import func
 
+from backend.curator import audience, followups, invites
 from backend.models.db import Contact, Job, utcnow
 from backend.tz import local_today
 
@@ -92,6 +93,9 @@ def log_lead(db, data: dict, default_source: str = "api") -> tuple[Contact, bool
     if status is not None and status not in STATUSES:
         raise LeadError("status must be one of " + ", ".join(STATUSES))
     kind, role = _text(data, "kind"), _text(data, "role")
+    who = _text(data, "audience")
+    if who is not None and who not in audience.AUDIENCES:
+        raise LeadError("audience must be one of " + ", ".join(audience.AUDIENCES))
     if kind is not None and kind not in LEAD_KINDS:
         raise LeadError("kind must be one of " + ", ".join(LEAD_KINDS))
     if role is not None and role not in ROLES:
@@ -126,6 +130,7 @@ def log_lead(db, data: dict, default_source: str = "api") -> tuple[Contact, bool
             "location": _text(data, "location"), "kind": role, "why": _text(data, "why"),
             "evidence": _text(data, "evidence"), "project_ref": _text(data, "show_project"),
             "job_id": job.id if job is not None else None, "score": score,
+            "audience": who,
             "lead_kind": kind or (("job" if job is not None else "network") if created else None)}
     for column, value in fill.items():
         if value is not None and getattr(lead, column) in (None, ""):
@@ -134,11 +139,15 @@ def log_lead(db, data: dict, default_source: str = "api") -> tuple[Contact, bool
     for column, value in (("note", note), ("email_draft", _text(data, "email_draft")), ("talking_points", points)):
         if value is not None:
             setattr(lead, column, value)
+    if note:        # a note sent or written by hand answers the manual-note flag
+        lead.note_manual, lead.note_issue = False, None
 
     if status is not None and status != lead.status:
         current = lead.status if lead.status in _RANK else "new"
         if _RANK[status] > _RANK[current] or (created and status in ("snoozed", "skip")):
             lead.status = status
+            invites.mark_invited(lead, status, contacted_on)
+            followups.on_status_change(lead, status, contacted_on, followups.schedule(db))
             lead.last_action_at = (datetime.combine(contacted_on, time(12), tzinfo=timezone.utc)
                                    if contacted_on else utcnow())
             lead.next_action_at = None     # the scout's follow-up pass sets the next one

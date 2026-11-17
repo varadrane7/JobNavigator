@@ -148,6 +148,9 @@ def resurface_contacts(db, today, hours: int, want: int, top_companies: list[str
     return out
 
 
+from backend.curator import everify  # noqa: E402
+
+
 def _job_dict(j: Job) -> dict:
     return {
         "id": j.id, "company": j.company or "", "title": j.title or "", "url": job_link(j) or "",
@@ -211,6 +214,12 @@ def load_pool(window_hours: int, countries: list[str] | None = None,
                 d = _job_dict(j)
                 d["tracked"] = is_tracked
                 pool.append(d)
+                try:                                                # shown only; never read by scoring
+                    with db.begin_nested():                         # a failure rolls back to here, the run goes on
+                        everify.note_job(db, j.company, j.description)
+                except Exception as e:                              # any database error, not only IntegrityError
+                    logger.warning(f"curator: E-Verify flag skipped for {j.company!r}: {e}")
+        db.commit()
         return pool, all_ids
     finally:
         db.close()
@@ -527,9 +536,12 @@ _OUTREACH_ERRORS: list = []
 
 async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[dict]:
     from backend.curator.linkedin_people import LinkedInPeople
+    from backend.curator import audience as aud
+    from backend.curator import drafting
     from backend.curator.people import draft, find_people, guess_email
-    me, profile, _ = _me()
     drafts = await asyncio.to_thread(_drafts_enabled)     # once per run, not once per person
+    sender = await asyncio.to_thread(drafting.load_sender) if drafts else None     # the sender-facts block, once
+    aff = await asyncio.to_thread(aud.load_affiliations)
     today = local_today()
     found, seen_companies = [], set()
     async with LinkedInPeople() as li:
@@ -552,12 +564,14 @@ async def find_contacts(top: list[dict], intel: dict, want_total: int) -> list[d
                 continue
             for p in people:
                 email, conf = guess_email(p["name"], it)
-                d = await draft(p, j["company"], j, me, profile, drafts)
-                found.append({"job_id": j["id"], "company": j["company"], "name": p["name"],
+                who = aud.detect(p.get("headline") or "", drafting.card_text(p), aff)
+                d = await draft({**p, "audience": who}, j["company"], j, sender, drafts, aff) if drafts else {}
+                found.append({"audience": who, "message_stage": "note" if d.get("note") else None, "job_id": j["id"], "company": j["company"], "name": p["name"],
                               "title": p.get("headline"), "kind": p.get("kind"), "linkedin_url": p["url"],
                               "location": p.get("location"),
                               "email": email, "email_confidence": conf, "source": p.get("source"),
                               "note": d.get("note"), "email_draft": d.get("email_draft"), "found_on": today,
+                              "note_manual": bool(d.get("note_manual")), "note_issue": d.get("note_issue"),
                               "purpose": "job", "lead_kind": "job"})
     _OUTREACH_ERRORS.extend(n for n in li.notes if n not in _OUTREACH_ERRORS)
     db = SessionLocal()
@@ -615,11 +629,15 @@ async def find_network_contacts(companies: list[str], want_total: int, abroad: s
     `abroad` (ISO-2): a relocation lane looks for people in that country, not near the user."""
     from backend.analyzer.location import parse as parse_location
     from backend.curator.linkedin_people import LinkedInPeople
+    from backend.curator import audience as aud
+    from backend.curator import drafting
     from backend.curator.people import draft_network, find_decision_makers, guess_email, profile_areas
     if want_total <= 0 or not companies:
         return []
-    me, profile, contact = _me()
+    _me_name, profile, contact = _me()
     drafts = await asyncio.to_thread(_drafts_enabled)     # once per run, not once per person
+    sender = await asyncio.to_thread(drafting.load_sender) if drafts else None     # the sender-facts block, once
+    aff = await asyncio.to_thread(aud.load_affiliations)
     areas = profile_areas(profile) or ["backend"]
     city = (contact.get("city") or "").strip() or None
     region = parse_location(", ".join(x for x in (contact.get("city"), contact.get("state")) if x)).get("region") if city else None
@@ -643,11 +661,13 @@ async def find_network_contacts(companies: list[str], want_total: int, abroad: s
                 continue
             for p in people:
                 email, conf = guess_email(p["name"], it)
-                d = await draft_network(p, company, it, me, profile, drafts)
-                found.append({"job_id": None, "company": company, "name": p["name"], "title": p.get("headline"),
+                who = aud.detect(p.get("headline") or "", drafting.card_text(p), aff)
+                d = await draft_network({**p, "audience": who}, company, sender, drafts, aff) if drafts else {}
+                found.append({"audience": who, "message_stage": "note" if d.get("note") else None, "job_id": None, "company": company, "name": p["name"], "title": p.get("headline"),
                               "kind": p.get("kind"), "linkedin_url": p["url"], "location": p.get("location"),
                               "email": email, "email_confidence": conf, "source": p.get("source"),
                               "note": d.get("note"), "email_draft": d.get("email_draft"), "found_on": today,
+                              "note_manual": bool(d.get("note_manual")), "note_issue": d.get("note_issue"),
                               "purpose": "network", "lead_kind": "network"})
     _OUTREACH_ERRORS.extend(n for n in li.notes if n not in _OUTREACH_ERRORS)
     db = SessionLocal()
@@ -692,11 +712,16 @@ def _count(values) -> dict:
     return out
 
 
-async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: bool = False) -> dict:
+async def run_daily_curation(outreach: bool = True, send: bool = True, dry_run: bool = False,
+                             manual: bool = False) -> dict:
     """dry_run: rank and return the Top list without saving/ignoring jobs, finding people or messaging."""
     from backend.curator.llm import reset_run
     reset_run()
     cfg = _settings()
+    if not dry_run:
+        from backend.curator import li_budget
+        li_budget.enter_run(await asyncio.to_thread(li_budget.claim_run, cfg["runs_per_day"], manual),
+                            cfg["runs_per_day"])
     now = datetime.now(timezone.utc)
     released = {"released": 0, "retired": 0}
     if not dry_run:

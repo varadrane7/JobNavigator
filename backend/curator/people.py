@@ -6,8 +6,9 @@ technical / early-career recruiters rank first.
 
 Public search first (SearXNG `site:linkedin.com/in`), LinkedIn's own people search
 only when that finds nobody useful, then a best-guess work email from the company's
-known email format, and a short LinkedIn note + cold email drafted by the LLM.
+known email format, and a short LinkedIn note + cold email drafted by the LLM (curator/drafting.py).
 """
+import asyncio
 import logging
 import re
 
@@ -17,7 +18,6 @@ from backend.analyzer.location import fold
 from backend.analyzer.location import parse as parse_location
 from backend.curator.intel import make_email
 from backend.curator.linkedin_people import LinkedInPeople
-from backend.curator.llm import ask_json
 from backend.curator.scoring import co_words as _co_words
 from backend.search.searxng import SearchError, search
 
@@ -294,47 +294,6 @@ async def _search_people(company: str, queries: list[str], li_keywords: list[str
     return [{k: v for k, v in c.items() if not k.startswith("_")} for c in best[:want]]
 
 
-_DRAFT_SYSTEM = ("You write short, specific, human outreach for a job seeker. No flattery, no buzzwords, "
-                 "no em dashes. Never invent facts about the sender beyond the profile given, and never invent "
-                 "facts about the company beyond what you are told.")
-
-_DRAFT_PROMPT = """Sender: {me}
-Sender profile:
-{profile}
-
-Target: {name}, {headline} at {company}
-Role the sender is applying to: {job_title} ({job_url})
-
-Write JSON:
-- "note": LinkedIn connection note, max 290 characters, mentions the role and one concrete overlap: the project or past result from the profile closest to this team
-- "email_subject": max 8 words
-- "email_body": 80-120 words, plain text: says the sender applied (or is applying today); one line of proof naming the ONE project or past result from the profile that fits this role best, with the project's link if it has one; a soft ask for a quick chat or a referral; sign-off with the sender's first name"""
-
-_NETWORK_PROMPT = """Sender: {me}
-Sender profile:
-{profile}
-
-Target: {name}, {headline} at {company}
-About {company}: {about}
-
-The sender is not applying to a posted role. The target leads engineering people who could
-put the sender forward for a role on their team now or when one opens.
-
-Write JSON:
-- "note": LinkedIn connection note, max 290 characters: who the sender is in a few words, the project from the profile closest to the target's team, and a request to connect. Do not say the sender applied
-- "email_subject": max 8 words
-- "email_body": 80-120 words, plain text: one line on why {company} (only from the About line or the target's headline; skip it if neither says anything specific); one line of proof naming the ONE project from the profile closest to the target's team, with its link; the ask: a 15-minute chat about the team, and if a backend or AI role opens there, to be considered or referred; sign-off with the sender's first name"""
-
-
-def _split_draft(out: dict | None) -> dict:
-    if not out:
-        return {}
-    note = str(out.get("note") or "")[:300]
-    subj = str(out.get("email_subject") or "").strip()
-    body = str(out.get("email_body") or "").strip()
-    return {"note": note, "email_draft": (f"Subject: {subj}\n\n{body}" if subj else body) or None}
-
-
 def drafts_enabled() -> bool:
     """Whether this profile has LLM-drafted outreach (connection notes, cold emails, talking points) turned on.
     Per-account setting `outreach_drafts_enabled`, default on. Off skips the drafting only: people are still
@@ -352,29 +311,45 @@ def drafts_enabled() -> bool:
     return str(raw if raw is not None else "true").strip().lower() not in ("false", "0", "no", "off")
 
 
-async def draft(contact: dict, company: str, job: dict, me: str, profile: str, enabled: bool | None = None) -> dict:
-    if not (drafts_enabled() if enabled is None else enabled):
-        return {"note": None, "email_draft": None}
-    out = await ask_json(
-        _DRAFT_PROMPT.format(me=me, profile=profile, name=contact["name"], headline=contact.get("headline", ""),
-                             company=company, job_title=job.get("title", ""), job_url=job.get("url", "")),
-        _DRAFT_SYSTEM, purpose="curator_outreach_draft", max_tokens=900, job_id=job.get("id"))
-    return _split_draft(out)
+def _brief(contact: dict, company: str, job_title: str, sender, applied: bool, aff=None):
+    """What a draft for `contact` may draw on (curator/drafting.py): the sender facts, their card text, the
+    evidence snippet, the job title and the company. The audience is the contact's own, else read from the card."""
+    from backend.curator import audience as aud
+    from backend.curator import drafting
+    card = drafting.card_text(contact)
+    who = contact.get("audience") or aud.detect(contact.get("headline") or "", card, aff,
+                                                from_post=bool(contact.get("from_post")))
+    return drafting.Brief(sender=sender, name=contact["name"], card=card, evidence=contact.get("evidence") or "",
+                          company=company, job_title=job_title, audience=who, applied=applied,
+                          from_post=bool(contact.get("from_post")))
 
 
-async def draft_network(contact: dict, company: str, intel: dict | None, me: str, profile: str,
-                        enabled: bool | None = None) -> dict:
+async def _drafted(brief, purpose: str, job_id=None) -> dict:
+    """The connection note and the cold email for `brief`, each validated (curator/note_check.py), retried once
+    and flagged for a hand-written one when it still fails. {"note", "email_draft", "note_manual", "note_issue"}."""
+    from backend.curator import drafting
+    note = await drafting.draft_text("note", brief, purpose, job_id=job_id, max_tokens=500)
+    email = await drafting.draft_text("email", brief, purpose + "_email", job_id=job_id, max_tokens=900)
+    if email.note is None:
+        logger.info(f"email draft for {brief.name} not saved: {email.issue}")
+    return {"note": note.note, "email_draft": email.note, "note_manual": note.manual, "note_issue": note.issue}
+
+
+async def draft(contact: dict, company: str, job: dict, sender, enabled: bool | None = None, aff=None) -> dict:
+    """Note and email for a person found about `job`. `sender` is the run's drafting.Sender."""
     if not (drafts_enabled() if enabled is None else enabled):
         return {"note": None, "email_draft": None}
-    intel = intel or {}
-    about = " ".join(str(x) for x in (intel.get("notes"),
-                                       f"Funding: {intel['funding_stage'].replace('_', ' ')}" if intel.get("funding_stage") not in (None, "", "unknown") else "",
-                                       f"About {intel['headcount']} people" if intel.get("headcount") else "") if x) or "nothing known"
-    out = await ask_json(
-        _NETWORK_PROMPT.format(me=me, profile=profile, name=contact["name"], headline=contact.get("headline", ""),
-                               company=company, about=about),
-        _DRAFT_SYSTEM, purpose="curator_network_draft", max_tokens=900)
-    return _split_draft(out)
+    from backend.curator import note_check
+    applied = await asyncio.to_thread(note_check.job_applied, job.get("id"))
+    return await _drafted(_brief(contact, company, job.get("title", ""), sender, applied, aff), "curator_outreach_draft",
+                          job.get("id"))
+
+
+async def draft_network(contact: dict, company: str, sender, enabled: bool | None = None, aff=None) -> dict:
+    """Note and email for a decision maker at a company with no posting for the sender; no job, never "applied"."""
+    if not (drafts_enabled() if enabled is None else enabled):
+        return {"note": None, "email_draft": None}
+    return await _drafted(_brief(contact, company, "", sender, False, aff), "curator_network_draft")
 
 
 def guess_email(name: str, intel: dict | None) -> tuple[str | None, float | None]:

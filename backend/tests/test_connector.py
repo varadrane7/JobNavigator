@@ -121,7 +121,7 @@ def test_a_read_token_sees_no_write_tools_and_cannot_call_them(browser, test_db,
     ids = _seed(test_db, owner.id)
     read, write = _bearer(test_db, owner), _bearer(test_db, owner, "write")
     names = lambda h: {t["name"] for t in _rpc(browser, h, "tools/list").json()["result"]["tools"]}
-    assert names(write) - names(read) == {"update_lead", "add_lead", "update_application", "log_note"}
+    assert names(write) - names(read) == {"update_lead", "add_lead", "update_application", "log_note", "set_everify"}
     for tool in _rpc(browser, write, "tools/list").json()["result"]["tools"]:
         assert tool["inputSchema"]["type"] == "object" and tool["description"]
         assert tool["annotations"]["readOnlyHint"] == (tool["name"] in names(read))

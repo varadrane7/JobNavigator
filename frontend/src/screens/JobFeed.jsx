@@ -1365,6 +1365,7 @@ export default function V2JobFeed() {
                           ))}
                           {/* the verdict is the segment that gives way: it shrinks (flex-shrink 2, ahead of the salary) to an
                               ellipsis and then to nothing, so the age at the end always stays whole */}
+                          {j.everify && <><span style={{ flex: '0 0 auto', letterSpacing: '.04em', color: j.everify === 'yes' ? 'var(--good)' : j.everify === 'no' ? 'var(--warn)' : 'var(--muted)', opacity: j.everify === 'unknown' ? 0.7 : 1 }} title="Whether the company says it uses E-Verify. Shown only; it changes no score or order.">E-Verify {j.everify === 'unknown' ? '?' : j.everify}</span><span style={{ flex: '0 0 auto', color: 'var(--line)' }}>·</span></>}
                           {visa && j.h1b_verdict !== 'unknown' && <><span style={{ flex: '0 2 auto', minWidth: 0, letterSpacing: '.04em', color: visa.c, overflow: 'hidden', textOverflow: 'ellipsis' }} title={visa.label}>{visa.label}</span><span style={{ flex: '0 0 auto', color: 'var(--line)' }}>·</span></>}
                           <span style={{ flex: '0 0 auto', color: 'var(--muted)' }} title={timeAgo(j.discovered_at)}>{timeAgo(j.discovered_at).replace(/ ago$/, '')}</span>
                         </div>

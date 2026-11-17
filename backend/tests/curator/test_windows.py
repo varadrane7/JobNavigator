@@ -153,3 +153,17 @@ async def test_two_curator_runs_for_one_account_cannot_overlap(test_db):
                 jm.launch_background("curate", lambda: None, trigger="manual")
     finally:
         jm._running.clear()
+
+
+def test_an_everify_database_error_does_not_abort_the_pool(test_db, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+    from backend.curator import everify
+    from backend.curator.run import load_pool
+
+    def boom(db, company, description, on=None):
+        db.execute(__import__("sqlalchemy").text("select * from no_such_table"))   # a real failed statement
+    monkeypatch.setattr(everify, "note_job", boom)
+    test_db.add_all([_job(1), _job(2)])
+    test_db.commit()
+    pool, ids = load_pool(24)
+    assert len(pool) == 2 and len(ids) == 2

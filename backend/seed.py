@@ -3,12 +3,35 @@ import logging
 import json
 import re
 import secrets
+from backend.tz import APP_TZ_NAME
 from backend.models.db import SessionLocal, Setting, Company, Search, Resume
 from backend.accounts.settings import install_row, put_setting
 from sqlalchemy import text
 from backend.analyzer.llm_client import LOCAL_LLM_URLS, REASONING_EFFORTS
 
 logger = logging.getLogger("jobnavigator.seed")
+
+
+def invited_on_backfill_sql(dialect: str = "postgresql") -> str:
+    """Sets contacts.invited_on from last_action_at, only for leads still at `requested` with no
+    invited_on (a later status overwrites last_action_at, so those dates are not reliable). Idempotent:
+    a row it filled no longer matches. The sqlite form exists so the tests can run the same filter."""
+    day = (f"(last_action_at AT TIME ZONE '{APP_TZ_NAME}')::date" if dialect == "postgresql"
+           else "date(last_action_at)")
+    return (f"UPDATE contacts SET invited_on = {day} "
+            "WHERE invited_on IS NULL AND status = 'requested' AND last_action_at IS NOT NULL")
+
+
+def contacted_on_backfill_sql(dialect: str = "postgresql") -> str:
+    """Sets contacts.contacted_on (the day follow-ups count from) for leads already at requested or messaged,
+    once and idempotently: a requested lead from its invited_on, else last_action_at; a messaged lead from
+    last_action_at (the move to messaged), else invited_on. last_action_at is read as an app-time-zone date."""
+    day = (f"(last_action_at AT TIME ZONE '{APP_TZ_NAME}')::date" if dialect == "postgresql"
+           else "date(last_action_at)")
+    return ("UPDATE contacts SET contacted_on = CASE WHEN status = 'requested' "
+            f"THEN COALESCE(invited_on, {day}) ELSE COALESCE({day}, invited_on) END "
+            "WHERE contacted_on IS NULL AND status IN ('requested', 'messaged') "
+            "AND (invited_on IS NOT NULL OR last_action_at IS NOT NULL)")
 
 
 DEFAULT_SETTINGS = {
@@ -102,6 +125,12 @@ DEFAULT_SETTINGS = {
     "nag_cron": ("0 9,13,18,21 * * *", "When the Telegram nag counts today's applications and requests (app time zone). Empty = off"),
     "nag_apply_target": ("10", "Applications a day the nag holds you to"),
     "nag_request_target": ("5", "Connection requests a day the nag holds you to"),
+    "followup_max": ("2", "Follow-ups sent to a lead that has not answered, then it is closed as no reply (0 = none; invalid counts as 2, at most 5)"),
+    "followup_close_after_days": ("5", "Days to wait after the last follow-up before a lead with no reply is closed (default 5; invalid counts as 5)"),
+    "due_ageing_days": ("7", "A lead that has been due longer than this many days comes ahead of newer ones in the Due list and in send-today (default 7; invalid counts as 7)"),
+    "followup_daily_limit": ("8", "Most follow-ups the Due list shows in one day, so leads that were open before the schedule existed come up over several days (default 8)"),
+    "followup_days": ("4,9", "Days after the connection request or message when each follow-up is due, comma-separated and rising (default 4,9; invalid counts as default)"),
+    "invites_daily_cap": ("8", "Connection requests a day (People screen and nag). Above 12 counts as 12; 0 or invalid counts as 8"),
     "nag_calendar": ("{}", "JSON {\"YYYY-MM-DD\": \"task\"}: the day's planned post or task, added to the nag"),
     "network_scout_cron": ("15 6 * * *", "Daily lead-scout cron (people to network with, independent of jobs). Empty = disabled"),
     "scout_daily_leads": ("15", "How many new people the lead scout saves each day"),
@@ -109,6 +138,8 @@ DEFAULT_SETTINGS = {
     "llm_local_api_key": ("", "Token of the local model server (LM Studio: Developer › Server settings › Require API key). Empty = none"),
     "linkedin_mock_daily_cap": ("60", "LinkedIn searches per day on the mock session (people, posts); the main session takes over when it is spent or throttled"),
     "linkedin_main_daily_cap": ("15", "LinkedIn searches per day on the main (personal) session: network checks and mock fallback"),
+    "linkedin_run_split": ("8,5", "With 2 or more curator runs a day: how a LinkedIn session's daily cap is shared across the runs, as weights (default 8,5 of 15 loads). Ignored with one run a day"),
+    "linkedin_run_reserve": ("2", "Weight held back from the curator's runs for the lead scout and other callers (default 2 of 15 loads). Ignored with one run a day"),
     "linkedin_cooldown_hours": ("6", "Hours a LinkedIn session is left alone after a 429, checkpoint or sign-in wall"),
     "linkedin_lookup_max_per_scrape": ("40", "Most LinkedIn jobs the employer-link lookup asks the mock session about after one scrape"),
     "dedup_copy_link": ("ignored", "A copy of a posting under another link in the same city: ignored or new"),
@@ -961,6 +992,25 @@ END $$;""",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS next_action_at DATE",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_action_at TIMESTAMPTZ",
         "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS resurfaced INTEGER DEFAULT 0",
+        # the daily invite cap (curator/invites.py): when the connection request was first sent
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS invited_on DATE",
+        # a note that failed validation twice is not saved; the lead is flagged for a hand-written one
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS note_manual BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS note_issue TEXT",
+        "CREATE INDEX IF NOT EXISTS ix_contacts_invited_on ON contacts(invited_on)",
+        # who the person is to the sender (curator/audience.py), the stage of the drafted message, and the
+        # follow-up sequence (curator/followups.py)
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS audience VARCHAR",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS message_stage VARCHAR",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS message_draft TEXT",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS follow_ups_sent INTEGER DEFAULT 0",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS contacted_on DATE",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS follow_up_sent_on DATE",
+        "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_sent_text TEXT",
+        contacted_on_backfill_sql("postgresql"),
+        # A lead still at `requested` has not moved since the request, so its last_action_at is the day it
+        # was sent. Later statuses overwrite last_action_at, so those leads keep invited_on empty.
+        invited_on_backfill_sql("postgresql"),
         "CREATE INDEX IF NOT EXISTS ix_contacts_next_action_at ON contacts(next_action_at)",
         "UPDATE contacts SET lead_kind = purpose WHERE lead_kind IS NULL",
         "UPDATE contacts SET status = 'requested' WHERE status = 'contacted'",

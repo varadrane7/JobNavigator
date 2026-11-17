@@ -116,7 +116,16 @@ def _job_row(job: Job) -> dict:
     return {"id": str(job.id), "no": job.short_id, "company": job.company, "title": job.title,
             "location": job.location, "pay": _pay(job),
             "fit": round(job.best_cv_score) if job.best_cv_score is not None else None,
-            "status": job.status, "h1b": job.h1b_verdict, "posted": _day(job.posted_at or job.discovered_at)}
+            "status": job.status, "h1b": job.h1b_verdict, "posted": _day(job.posted_at or job.discovered_at),
+            "everify": _everify_of(job)}
+
+
+def _everify_of(job: Job) -> str:
+    """yes | no | unknown, shown only (curator/everify.py)."""
+    from sqlalchemy.orm import object_session
+    from backend.curator import everify
+    sess = object_session(job)
+    return everify.flag(sess, job.company, job.description) if sess is not None else "unknown"
 
 
 # ── Read tools ───────────────────────────────────────────────────────────────
@@ -357,7 +366,13 @@ def today(db, args):
         row["why"] = (j.curation or {}).get("reason") if isinstance(j.curation, dict) else None
         rows.append(row)
     people = db.query(Contact).filter(Contact.found_on == day).count()
-    return {"day": day.isoformat(), "jobs": rows, "people_found": people}
+    from backend.curator import followups
+    sched = followups.schedule(db)         # read-only: the state is computed from the dates, nothing is written
+    due = [c for c in db.query(Contact).filter(Contact.status.in_(followups.ACTIVE)).all()
+           if (followups.info(c, sched=sched) or {}).get("due")]
+    return {"day": day.isoformat(), "jobs": rows, "people_found": people, "invites": _invites(db),
+            "follow_ups_due": [{"id": str(c.id), "name": c.name, "company": c.company,
+                                "follow_up": followups.info(c, sched=sched)["label"]} for c in due]}
 
 
 def list_resumes(db, args):
@@ -438,13 +453,42 @@ def _short(text, chars: int = 140):
 
 
 def _lead_row(c: Contact) -> dict:
+    from sqlalchemy.orm import object_session
+    from backend.curator import everify, followups
+    sess = object_session(c)
+    fu = followups.info(c, sched=followups.schedule(sess) if sess is not None else None)
     return {"id": str(c.id), "name": c.name, "title": _short(c.title, 80), "company": c.company,
+            "audience": c.audience, "stage": c.message_stage,
+            **({"follow_up": fu["label"]} if fu else {}),
+            "everify": everify.flag(sess, c.company) if sess is not None else "unknown",
             "kind": c.lead_kind or c.purpose or "job", "status": c.status, "score": c.score, "degree": c.degree,
-            "why": _short(c.why), "due": _day(c.next_action_at)}
+            "why": _short(c.why), "due": _day(c.next_action_at), "invited_on": _day(c.invited_on),
+            **({"needs_manual_note": True} if c.note_manual else {})}
+
+
+from backend.curator import audience as audience_mod  # noqa: E402
+from backend.curator import invites  # noqa: E402
+
+
+def _invites(db) -> dict:
+    """Today's connection requests against the daily cap, as the tools report them."""
+    from backend.curator import invites
+    plan = invites.plan(db)
+    out = {k: plan[k] for k in ("sent_today", "cap", "remaining", "over_cap_by")}
+    out["carried_to_tomorrow"] = len(plan["carried"])
+    out["note"] = ("over the cap by %d: recorded anyway, but stop for today" % plan["over_cap_by"]
+                   if plan["over_cap_by"] else
+                   "%d more invite%s to send today" % (plan["remaining"], "" if plan["remaining"] == 1 else "s"))
+    return out
 
 
 def list_leads(db, args):
+    from backend.curator import followups
+    plan = invites.plan(db)
+    send, carried = set(plan["send"]), set(plan["carried"])
     q = db.query(Contact)
+    if args.get("audience"):
+        q = q.filter(Contact.audience.in_([s.strip() for s in str(args["audience"]).split(",")]))
     if args.get("status"):
         q = q.filter(Contact.status.in_([s.strip() for s in str(args["status"]).split(",")]))
     if args.get("kind"):
@@ -455,13 +499,19 @@ def list_leads(db, args):
     if args.get("min_score") is not None:
         q = q.filter(Contact.score >= int(args["min_score"]))
     if args.get("due"):
-        q = q.filter(Contact.next_action_at.isnot(None), Contact.next_action_at <= local_today(),
-                     Contact.status.notin_(("skip", "referral")))
-        order = (Contact.next_action_at, Contact.score.desc().nullslast())
-    else:
-        order = (Contact.score.desc().nullslast(), Contact.created_at.desc())
+        # read-only: follow-up state comes from the dates, nothing is written; follow-ups are never cut by the
+        # invite cap (it only carries new leads); carried leads wait for tomorrow
+        ids = {c.id for c in q.all()}
+        due = [c for c in followups.due_leads(db) if c.id in ids and c.id not in carried]
+        return {"total": len(due), "invites": _invites(db),
+                "leads": [{**_lead_row(c), **({"send_today": True} if c.id in send else {})}
+                          for c in due[:_limit(args, 10)]]}
+    order = (audience_mod.order_expr(Contact.audience).asc(), Contact.score.desc().nullslast(), Contact.created_at.desc(),
+             Contact.id.asc())
     total = q.count()
-    return {"total": total, "leads": [_lead_row(c) for c in q.order_by(*order).limit(_limit(args, 10)).all()]}
+    rows = q.order_by(*order).limit(_limit(args, 10)).all()
+    return {"total": total, "invites": _invites(db),
+            "leads": [{**_lead_row(c), **({"send_today": True} if c.id in send else {})} for c in rows]}
 
 
 def _lead(db, ref) -> Contact:
@@ -477,6 +527,8 @@ def _lead_full(db, c: Contact) -> dict:
     out.update({"title": c.title, "why": c.why, "linkedin": c.linkedin_url, "email": c.email, "location": c.location, "role": c.kind, "source": c.source,
                 "talking_points": c.talking_points, "show_project": c.project_ref, "evidence": c.evidence,
                 "linkedin_note": c.note, "email_draft": c.email_draft,
+                "needs_manual_note": bool(c.note_manual), "note_issue": c.note_issue,
+                "message_draft": c.message_draft, "follow_ups_sent": c.follow_ups_sent or 0,
                 "last_step": _day(c.last_action_at), "found": _day(c.found_on),
                 "job": {"id": str(job.id), "title": job.title, "company": job.company,
                         "url": job.apply_url or job.url} if job else None})
@@ -490,6 +542,7 @@ def get_lead(db, args):
 # ── Write tools ──────────────────────────────────────────────────────────────
 
 def update_lead(db, args):
+    from backend.curator import followups, invites
     from backend.curator.routes import CONTACT_STATUSES, _SNOOZE_DAYS
     c = _lead(db, args.get("lead_id"))
     status = args.get("status")
@@ -500,20 +553,42 @@ def update_lead(db, args):
         if status != c.status:
             c.status = status
             c.last_action_at = utcnow()
+            invites.mark_invited(c, status)
+            followups.on_status_change(c, status, sched=followups.schedule(db))
             if "next_action_at" not in args:
                 c.next_action_at = local_today() + timedelta(days=_SNOOZE_DAYS) if status == "snoozed" else None
+    if args.get("follow_up_sent"):      # a follow-up went out: counts toward followup_max, not toward the invite cap
+        try:
+            followups.record_sent(c, followups.schedule(db))
+        except ValueError as exc:
+            raise ToolError(str(exc))
     if "next_action_at" in args:
         c.next_action_at = _date(args["next_action_at"], "next_action_at")
     for arg, column in (("linkedin_note", "note"), ("email_draft", "email_draft"), ("email", "email")):
         if arg in args:
             setattr(c, column, args[arg] or None)
+    if args.get("linkedin_note"):       # a note written by hand answers the flag
+        c.note_manual, c.note_issue = False, None
     if "talking_points" in args:
         points = args["talking_points"]
         if not isinstance(points, list) or not all(isinstance(p, str) for p in points):
             raise ToolError("talking_points must be a list of strings")
         c.talking_points = points
     db.commit()
-    return _lead_full(db, c)
+    return {**_lead_full(db, c), "invites": _invites(db)}
+
+
+def set_everify(db, args):
+    from backend.accounts.settings import is_owner_caller
+    from backend.curator import everify
+    if not is_owner_caller(db):         # the table is install-wide: only the install owner writes it
+        raise ToolError("Only the install owner can set E-Verify status")
+    try:
+        out = everify.set_status(db, args.get("company"), args.get("status"), args.get("source"))
+    except ValueError as exc:
+        raise ToolError(str(exc))
+    db.commit()
+    return out
 
 
 def add_lead(db, args):
@@ -526,7 +601,7 @@ def add_lead(db, args):
     except leads.LeadError as exc:
         raise ToolError(str(exc))
     db.commit()
-    return {**({} if created else {"already_a_lead": True}), **_lead_full(db, lead)}
+    return {**({} if created else {"already_a_lead": True}), **_lead_full(db, lead), "invites": _invites(db)}
 
 
 def update_application(db, args):
@@ -616,14 +691,15 @@ TOOLS: tuple[Tool, ...] = (
          "alumni, founder), company or name text, or minimum score.",
          _schema({"due": {"type": "boolean"}, "status": {"type": "string"}, "kind": {"type": "string"},
                   "query": {"type": "string"}, "min_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                  "audience": {"type": "string", "description": "alum, ex_colleague, engineer, recruiter, hiring_manager, post (comma-separated)"},
                   "limit": _LIMIT}), list_leads, title="List leads"),
     Tool("get_lead", "One lead in full: why this person, talking points, the evidence that surfaced them, the "
          "project to show, drafted LinkedIn note and email, and the job they relate to.",
          _schema({"lead_id": {"type": "string"}}, ["lead_id"]), get_lead, title="Lead details"),
     Tool("update_lead", "Record what happened with a lead: move its status after a step was really taken "
          f"({_LEAD_STATUS}), save a drafted LinkedIn note (under 300 characters) or email, set talking points, or "
-         "set the date of the next step.",
-         _schema({"lead_id": {"type": "string"}, "status": {"type": "string"},
+         "set the date of the next step. follow_up_sent=true records that a follow-up really went out.",
+         _schema({"lead_id": {"type": "string"}, "status": {"type": "string"}, "follow_up_sent": {"type": "boolean"},
                   "linkedin_note": {"type": "string", "maxLength": 300}, "email_draft": {"type": "string"},
                   "email": {"type": "string"}, "talking_points": {"type": "array", "items": {"type": "string"}},
                   "next_action_at": {"type": "string", "description": "YYYY-MM-DD, or empty to clear"}},
@@ -648,8 +724,15 @@ TOOLS: tuple[Tool, ...] = (
                   "show_project": {"type": "string", "description": "The project to show this person"},
                   "score": {"type": "integer", "minimum": 0, "maximum": 100},
                   "job_id": {"type": "string"},
-                  "agent": {"type": "string", "description": "Who is reporting this, e.g. muse"}},
+                  "agent": {"type": "string", "description": "Who is reporting this, e.g. muse"},
+                  "audience": {"type": "string", "enum": ["alum", "ex_colleague", "engineer", "recruiter",
+                                                          "hiring_manager", "post"]}},
                  ["name"]), add_lead, write=True, title="Add or log a lead"),
+    Tool("set_everify", "Record whether a company uses E-Verify (yes, no or unknown) with a note saying where that "
+         "comes from. Shown next to jobs and leads only; it never changes a score, a filter or an order.",
+         _schema({"company": {"type": "string"}, "status": {"type": "string", "enum": ["yes", "no", "unknown"]},
+                  "source": {"type": "string", "description": "Where this comes from"}},
+                 ["company", "status", "source"]), set_everify, write=True, title="Set E-Verify status"),
     Tool("log_note", "Add a dated note to the search journal: a change made, a decision, a finding, an experiment "
          "and its result. One fact per note, with the numbers. topic is a short label (resume, curator, outreach, "
          "ats); agent is your name.",

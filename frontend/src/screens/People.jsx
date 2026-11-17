@@ -24,6 +24,13 @@ const NEXT = { new: ['requested', 'Sent request'], requested: ['connected', 'Acc
 const TABS = [['due', 'Due today'], ['new', 'New leads (not contacted)'], ['pipeline', 'In progress'], ['all', 'Everyone']]
 const PIPELINE = new Set(['requested', 'connected', 'messaged', 'replied', 'referral'])
 const DEGREE = { 1: '1st', 2: '2nd', 3: '3rd+' }
+// Who the person is to you, from evidence only (backend/curator/audience.py), in the order the lists use.
+export const AUDIENCE = { alum: ['Alum', 'good'], ex_colleague: ['Ex-colleague', 'good'], engineer: ['Engineer', 'accent'],
+  recruiter: ['Recruiter', 'accent'], post: ['Hiring post', 'neutral'], hiring_manager: ['Hiring manager', 'neutral'] }
+const AUDIENCE_RANK = { alum: 0, ex_colleague: 1, engineer: 2, recruiter: 3, post: 4, hiring_manager: 5 }
+const audienceRank = (c) => AUDIENCE_RANK[c.audience] ?? 6
+// E-Verify is shown, never used: yes / no / unknown, unknown drawn neutral and quiet.
+export const EVERIFY = { yes: ['E-Verify: yes', 'good'], no: ['E-Verify: no', 'warn'], unknown: ['E-Verify: unknown', 'neutral'] }
 
 const copy = async (text, push, what) => {
   try { await navigator.clipboard.writeText(text); push({ kind: 'success', msg: `${what} copied` }) }
@@ -44,12 +51,24 @@ function SessionChip({ which, s, onRefresh }) {
   )
 }
 
+// Connection requests sent today against the daily cap (backend/curator/invites.py). Sending is by hand in
+// LinkedIn, so going over is recorded and shown, never blocked.
+export function InviteChip({ inv }) {
+  if (!inv) return null
+  const over = inv.over_cap_by > 0
+  const tone = over ? 'bad' : inv.remaining === 0 ? 'warn' : 'good'
+  const text = over ? `${inv.sent_today}/${inv.cap} invites today · over cap by ${inv.over_cap_by}` : `${inv.sent_today}/${inv.cap} invites today`
+  const carried = inv.carried > 0 ? ` ${inv.carried} more new lead${inv.carried === 1 ? ' is' : 's are'} carried to tomorrow.` : ''
+  return <Tag tone={tone} title={`Connection requests you sent today (daily cap ${inv.cap}, set in Settings). Only ${inv.cap} new leads show as Due each day; the rest wait for tomorrow.${carried}`}>{text}</Tag>
+}
+
 const daysSince = (iso) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)) : null)
 // One line on why this person is on the Due list: the step that is waiting.
 function dueReason(c) {
   const d = daysSince(c.last_action_at || c.found_on)
   const ago = d == null ? '' : ` ${d} day${d === 1 ? '' : 's'} ago`
   if (c.status === 'new') return 'New lead: send a connection request.'
+  if (c.follow_up?.due && !c.follow_up.closed) return `Sent${ago}, no answer: ${c.follow_up.label}. Send it, then press "Follow-up sent". A reply or acceptance ends the sequence.`
   if (c.status === 'requested') return `Request sent${ago}, no answer. Accepted on LinkedIn? Press Accepted. Otherwise drop it.`
   if (c.status === 'connected') return `Accepted${ago}: send one message with one ask.`
   if (c.status === 'messaged') return `Messaged${ago}, no reply: nudge once, or drop it.`
@@ -57,7 +76,7 @@ function dueReason(c) {
   return null
 }
 
-function LeadCard({ c, onStatus, push, showDue }) {
+function LeadCard({ c, onStatus, onFollowUp, onDraft, canDraft, push, showDue }) {
   const [open, setOpen] = useState(false)
   const [label, tone] = KIND[c.lead_kind] || [c.lead_kind || 'Lead', 'neutral']
   const next = NEXT[c.status]
@@ -73,9 +92,16 @@ function LeadCard({ c, onStatus, push, showDue }) {
         </div>
         {c.score != null && <Tag tone={scoreTone(c.score)} title="How worth your time (curator model)">{c.score}</Tag>}
         <Tag tone={tone}>{label}</Tag>
+        {AUDIENCE[c.audience] ? <Tag tone={AUDIENCE[c.audience][1]} title="Who this person is to you, from their card">{AUDIENCE[c.audience][0]}</Tag> : null}
         {ROLE[c.kind] ? <Tag tone="neutral">{ROLE[c.kind]}</Tag> : null}
+        {c.follow_up && !c.follow_up.closed ? <Tag tone={c.follow_up.due ? 'warn' : 'neutral'} title="Follow-ups go out at set days after your first contact, then the lead is closed">{c.follow_up.label}</Tag> : null}
+        {c.everify ? <Tag tone={EVERIFY[c.everify]?.[1] || 'neutral'} title="Whether the company says it uses E-Verify. Shown only; it changes no score or order.">{(EVERIFY[c.everify] || EVERIFY.unknown)[0]}</Tag> : null}
+        {c.send_today ? <Tag tone="good" title="Within today's invite cap">Send today</Tag> : null}
+        {c.note_manual ? <Tag tone="warn" title={c.note_issue || 'No usable note could be drafted'}>Write note by hand</Tag> : null}
         {c.degree ? <Tag tone={c.degree === 2 ? 'good' : 'neutral'} title="Distance in your own network">{DEGREE[c.degree]}</Tag> : null}
         {next && <Button size="xs" variant="primary" onClick={() => onStatus(c, next[0])}>{next[1]}</Button>}
+        {c.follow_up?.due && !c.follow_up.closed && <Button size="xs" variant="primary" onClick={() => onFollowUp(c)} title="Records that you sent follow-up text; it does not count as an invite">Follow-up sent</Button>}
+        {canDraft && (c.status === 'connected' || (c.follow_up?.due && !c.follow_up.closed)) && <Button size="xs" variant="ghost" onClick={() => onDraft(c, c.status === 'connected' ? 'after_acceptance' : 'follow_up')} title="Draft the text for you to send">Draft message</Button>}
         {(c.status === 'requested' || c.status === 'messaged') && <Button size="xs" variant="ghost" onClick={() => onStatus(c, 'skip')} title="They never answered: take them off your list">No reply, drop</Button>}
         <Select value={c.status === 'contacted' ? 'requested' : c.status} options={STATUS} onPick={(v) => onStatus(c, v)} width="120px" ariaLabel="Lead status" />
       </div>
@@ -83,6 +109,7 @@ function LeadCard({ c, onStatus, push, showDue }) {
       {c.why && <Helper size="xs">{c.why}</Helper>}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         {c.note && <Button size="xs" variant="ghost" onClick={() => copy(c.note, push, 'Connection note')}>Copy note</Button>}
+        {c.message_draft && <Button size="xs" variant="ghost" onClick={() => copy(c.message_draft, push, 'Message')}>Copy message</Button>}
         {c.email_draft && <Button size="xs" variant="ghost" onClick={() => copy(c.email_draft, push, 'Email draft')}>Copy email draft</Button>}
         {c.project_ref && <Helper size="xs">Show: <Mono size="xs">{c.project_ref}</Mono></Helper>}
         {(c.talking_points?.length || c.evidence) ? <Button size="xs" variant="ghost" onClick={() => setOpen((v) => !v)} ariaLabel="Talking points">{open ? 'Less ▴' : 'Talking points ▾'}</Button> : null}
@@ -109,6 +136,7 @@ export default function People() {
   const [rows, setRows] = useState(null)
   const [err, setErr] = useState(null)
   const [usage, setUsage] = useState(null)
+  const [invites, setInvites] = useState(null)
   const [running, setRunning] = useState(false)
 
   const load = useCallback(() => {
@@ -121,6 +149,7 @@ export default function People() {
       .then(({ data }) => { setRows(data || []); setErr(null) })
       .catch((e) => setErr(e?.response?.data?.detail || 'Could not load people'))
     api.get('/linkedin/usage').then(({ data }) => setUsage(data)).catch(() => setUsage(null))
+    api.get('/contacts/invites').then(({ data }) => setInvites(data)).catch(() => setInvites(null))
   }, [tab, kind])
   useEffect(() => { load() }, [load])
 
@@ -161,14 +190,34 @@ export default function People() {
   const setStatus = async (c, status) => {
     try {
       const { data } = await api.patch(`/contacts/${c.id}`, { status })
+      if (data.invites) {
+        // refresh the chip's numbers from the answer; "carried" only changes on a reload
+        setInvites((cur) => ({ ...(cur || {}), ...data.invites }))
+        if (data.invites.over_cap_by > 0) push({ kind: 'error', msg: `Recorded, but you are over the daily invite cap by ${data.invites.over_cap_by}` })
+      }
       setRows((rs) => (tab === 'due' && !data.next_action_at ? rs.filter((x) => x.id !== c.id) : rs.map((x) => (x.id === c.id ? data : x))))
     } catch { push({ kind: 'error', msg: 'Could not update' }) }
+  }
+
+  const patchRow = (data) => setRows((rs) => rs.map((x) => (x.id === data.id ? data : x)))
+  const followUpSent = async (c) => {
+    try {
+      const { data } = await api.patch(`/contacts/${c.id}`, { follow_up_sent: true })
+      setRows((rs) => (tab === 'due' ? rs.filter((x) => x.id !== c.id) : rs.map((x) => (x.id === c.id ? data : x))))
+    } catch (e) { push({ kind: 'error', msg: e?.response?.data?.detail || 'Could not record the follow-up' }) }
+  }
+  const draftMessage = async (c, stage) => {
+    try {
+      const { data } = await api.post(`/contacts/${c.id}/draft`, { stage })
+      patchRow(data)
+      push({ kind: 'success', msg: 'Draft ready: Copy message' })
+    } catch (e) { push({ kind: 'error', msg: e?.response?.data?.detail || 'Could not draft' }) }
   }
 
   const sorted = useMemo(() => {
     const list = [...(rows || [])]
     if (tab === 'due') return list
-    return list.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || String(b.found_on || '').localeCompare(String(a.found_on || '')))
+    return list.sort((a, b) => audienceRank(a) - audienceRank(b) || (b.score ?? -1) - (a.score ?? -1) || String(b.found_on || '').localeCompare(String(a.found_on || '')))
   }, [rows, tab])
   const counts = useMemo(() => {
     const out = {}
@@ -184,6 +233,7 @@ export default function People() {
           <Helper>People who can hire, refer or vouch for you. Work "Due today" top to bottom every day.</Helper>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <InviteChip inv={invites} />
           <SessionChip which="mock" s={usage?.mock} onRefresh={() => navigate('/settings#linkedin')} />
           <SessionChip which="main" s={usage?.main} onRefresh={() => navigate('/settings#linkedin')} />
           <Button variant="ai" busy={running} onClick={scoutNow} disabled={running}>{running ? 'Scouting…' : 'Scout now'}</Button>
@@ -201,7 +251,7 @@ export default function People() {
           <Helper>{tab === 'due' ? 'Nothing due. Scout now, or wait for the morning run.' : 'Nobody here yet.'}</Helper>
         )}
         {tab === 'due' && rows?.length > 0 && <Heading strong={600} size={16}>Do these today · {rows.length}</Heading>}
-        {sorted.map((c) => <LeadCard key={c.id} c={c} onStatus={setStatus} push={push} showDue={tab === 'due'} />)}
+        {sorted.map((c) => <LeadCard key={c.id} c={c} onStatus={setStatus} onFollowUp={followUpSent} onDraft={draftMessage} canDraft={invites?.drafts_enabled !== false} push={push} showDue={tab === 'due'} />)}
       </div>
       <ToastStack toasts={toasts} onClose={dismiss} />
     </div>

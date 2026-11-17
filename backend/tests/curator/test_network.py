@@ -66,19 +66,21 @@ async def test_decision_makers_skip_recruiters_and_engineers(monkeypatch):
 
 async def test_draft_network_never_claims_an_application(monkeypatch):
     import backend.curator.people as people
-    seen = {}
+    from backend.curator.drafting import Sender
+    seen = []
 
     async def fake_ask(prompt, system, purpose, max_tokens=1500, job_id=None):
-        seen.update(prompt=prompt, purpose=purpose)
-        return {"note": "n" * 400, "email_subject": "Backend at Ramp", "email_body": "Hi Maya"}
-    monkeypatch.setattr(people, "ask_json", fake_ask)
+        seen.append((purpose, prompt))
+        return "n" * 400 if purpose == "curator_network_draft" else "Subject: Backend at Ramp\n\nHi Maya"
+    monkeypatch.setattr("backend.curator.llm.ask", fake_ask)
     d = await people.draft_network({"name": "Maya Manager", "headline": "Engineering Manager"}, "Ramp",
-                                   {"notes": "Corporate cards; Series E.", "funding_stage": "series_e", "headcount": 900},
-                                   "Varad Rane", "Projects:\n- LazyCurl")
-    assert len(d["note"]) == 300 and d["email_draft"] == "Subject: Backend at Ramp\n\nHi Maya"
-    assert "Corporate cards; Series E. Funding: series e About 900 people" in seen["prompt"]
-    assert "LazyCurl" in seen["prompt"] and "Do not say the sender applied" in seen["prompt"]
-    assert seen["purpose"] == "curator_network_draft"
+                                   Sender(name="Varad Rane", facts="Name: Varad Rane\nProjects:\n- LazyCurl"))
+    # a 400-character note is never cut: one retry, then no note and a flag for a hand-written one
+    assert d["note"] is None and d["note_manual"] is True and "400 characters" in d["note_issue"]
+    assert d["email_draft"] == "Subject: Backend at Ramp\n\nHi Maya"
+    prompt = seen[0][1]
+    assert "LazyCurl" in prompt and "applied" not in prompt.replace("He has applied", "")
+    assert seen[0][0] == "curator_network_draft"
 
 
 def test_network_companies_order_and_cooldown(test_db):

@@ -381,6 +381,15 @@ async def _linkedin_pass(per_run: int, fetch, pause: float, resolve, check=None)
                 for n, lid in enumerate(todo):
                     if n and pause:
                         await asyncio.sleep(pause)
+                    if fetch is None:
+                        # every page load on the shared mock session counts against its daily budget
+                        from backend.accounts.background import acting_as
+                        from backend.curator import li_budget
+                        with acting_as(None):
+                            allowed = li_budget.take(li_budget.MOCK)
+                        if not allowed:
+                            out["stopped"] = "the mock session's LinkedIn budget for today is spent"
+                            break
                     d = await fetch_one(lid)
                     out["looked_up"] += 1
                     if fetch is None and d and d.get("status") in (429, 999):
