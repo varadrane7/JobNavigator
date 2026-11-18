@@ -162,7 +162,6 @@ async def _fetch_description_ats(url: str, job: dict = None) -> str | None:
 
     # Lazy imports to avoid circular imports.
     from backend.scraper.ats.oracle_hcm import _oracle_hcm_host
-    from backend.scraper.ats.workday import _parse_workday_url, _LOCALE_PATH_RE, detail_locations, pace, DETAIL_HEADERS
 
     parsed = urlparse(url)
 
@@ -213,40 +212,8 @@ async def _fetch_description_ats(url: str, job: dict = None) -> str | None:
                             return "\n\n".join(parts)[:30_000]
         return None
 
-    # ── Workday: myworkdayjobs.com/{site}/job/{slug}/{id} ──
-    if _host_matches(url, "myworkdayjobs.com"):
-        origin, company_slug, site, _ = _parse_workday_url(url)
-        # Extract externalPath from URL: everything after /{site}
-        path_parts = [p for p in parsed.path.strip("/").split("/") if p]
-        ext_path = ""
-        found_site = False
-        for part in path_parts:
-            if _LOCALE_PATH_RE.match(part):
-                continue
-            if not found_site:
-                found_site = True  # first non-locale part is the site
-                continue
-            ext_path += "/" + part
-        if company_slug and site and ext_path:
-            api_url = f"{origin}/wday/cxs/{company_slug}/{site}{ext_path}"
-            await pace()
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-                resp = await client.get(api_url, headers=DETAIL_HEADERS)
-                if resp.status_code == 200:
-                    data = json.loads(resp.text)
-                    info = data.get("jobPostingInfo", {})
-                    # The listing entry only counts a posting's other sites
-                    # ("5 Locations"); this document names them, at no extra cost.
-                    if job is not None:
-                        places = detail_locations(data)
-                        if places:
-                            job["locations"] = places
-                    desc_html = info.get("jobDescription", "")
-                    if desc_html:
-                        soup = BeautifulSoup(desc_html, "html.parser")
-                        text = soup.get_text(separator="\n", strip=True)
-                        if len(text) >= 50:
-                            return text[:30_000]
+    # ── Workday: not read (Workday refuses this tool's scraper) ──
+    if _host_matches(url, "myworkdayjobs.com", "myworkdaysite.com"):
         return None
 
     # ── Eightfold: {company}.eightfold.ai/careers/job/{id} or custom domains using Eightfold ──

@@ -103,7 +103,7 @@ def test_detect_scrape_type_workday():
     from backend.api.routes_companies import detect_scrape_type
     assert detect_scrape_type(
         "https://nvidia.wd5.myworkdayjobs.com/CareerSite"
-    ) == "Workday API"
+    ) == "Workday (not supported)"
 
 
 def test_detect_scrape_type_greenhouse():

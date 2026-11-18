@@ -167,7 +167,7 @@ async def test_a_company_scrape_closes_a_posting_gone_from_its_board(test_db, mo
 def test_full_board_kinds():
     assert mp.is_full_scrape(["https://jobs.lever.co/acme"], [_posting(1)], [])
     assert mp.is_full_scrape(["https://jobs.ashbyhq.com/hex?departmentId=1"], [_posting(1)], [])
-    assert mp.is_full_scrape(["https://acme.wd5.myworkdayjobs.com/External"], [_posting(1)], [])
+    assert not mp.is_full_scrape(["https://acme.wd5.myworkdayjobs.com/External"], [_posting(1)], [])   # not scraped
     assert not mp.is_full_scrape(["https://jobs.lever.co/acme", "https://www.google.com/about/careers/applications/jobs/results"],
                                  [_posting(1)], [])
     assert not mp.is_full_scrape(["https://jobs.uber.com/en/search?department=Product"], [_posting(1)], [])

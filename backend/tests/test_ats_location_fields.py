@@ -77,67 +77,6 @@ def test_greenhouse_locations_of_tolerates_an_empty_posting():
     assert _locations_of({"location": None, "offices": None}) == []
 
 
-# ── Workday ──────────────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_workday_keeps_the_board_text_and_reads_remote_type():
-    payload = load("workday_listing.json")
-    with patch("httpx.AsyncClient", return_value=_client(payload)):
-        from backend.scraper.ats.workday import scrape
-        jobs = await scrape("https://visa.wd5.myworkdayjobs.com/en-US/Visa")
-
-    # `locationsText` verbatim - the parser's canonical form belongs in the
-    # loc_* columns, not in the field the feed shows.
-    assert jobs[0]["location"] == "US - San Francisco, CA"
-    assert jobs[0]["arrangement"] is None
-    assert jobs[1]["location"] == "US - Foster City, CA"
-    assert jobs[1]["arrangement"] == "Hybrid"
-    # a count names no place, so the primary site comes from the URL segment
-    assert jobs[2]["location"] == "Foster City, CA, United States"
-
-
-@pytest.mark.parametrize("value,expected", [
-    ("Flex", "hybrid"), ("flex", "hybrid"),
-    ("Remote", "Remote"), ("Onsite", "Onsite"), ("Hybrid", "Hybrid"),
-    ("", None), (None, None),
-])
-def test_workday_flex_is_hybrid(value, expected):
-    from backend.scraper.ats.workday import _arrangement_of
-    assert _arrangement_of({"remoteType": value}) == expected
-
-
-def test_workday_detail_names_every_site():
-    from backend.scraper.ats.workday import detail_locations
-    assert detail_locations(load("workday_detail.json")) == [
-        "US - Foster City, CA", "US - San Francisco, CA",
-    ]
-
-
-def test_workday_detail_locations_tolerates_a_bare_document():
-    from backend.scraper.ats.workday import detail_locations
-    assert detail_locations({}) == []
-    assert detail_locations({"jobPostingInfo": {"location": "", "additionalLocations": None}}) == []
-
-
-@pytest.mark.asyncio
-async def test_workday_description_fetch_fills_in_the_other_sites():
-    """The detail document is fetched for the description anyway; the places it
-    names must arrive on the job dict without a second request."""
-    detail = load("workday_detail.json")
-    client = _client(detail)
-    job = {"title": "Director of Product - Agentic Commerce",
-           "url": "https://visa.wd5.myworkdayjobs.com/en-US/Visa/job/US---Foster-City-CA/"
-                  "Director-of-Product---Agentic-Commerce_REF085033W",
-           "location": "2 Locations"}
-    with patch("httpx.AsyncClient", return_value=client):
-        from backend.scraper.ats._descriptions import _fetch_description_ats
-        desc = await _fetch_description_ats(job["url"], job=job)
-
-    assert desc and "Visa is a world leader" in desc
-    assert job["locations"] == ["US - Foster City, CA", "US - San Francisco, CA"]
-    assert client.get.await_count == 1
-
-
 # ── Phenom ───────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

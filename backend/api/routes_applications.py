@@ -635,7 +635,7 @@ def _company_from_url(url: str):
     from backend.scraper.ats.lever import is_lever
     from backend.scraper.ats.rippling import is_rippling, _parse_rippling_url
     from backend.scraper.ats.smartrecruiters import is_smartrecruiters, _extract_company_slug
-    from backend.scraper.ats.workday import is_workday
+    from backend.scraper._shared.urls import is_workday_board as is_workday
 
     if not url:
         return None

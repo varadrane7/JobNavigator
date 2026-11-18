@@ -16,6 +16,14 @@ def raise_if_board_gone(status_code: int, ats: str, slug: str) -> None:
         raise BoardNotFoundError(f"{ats} board '{slug}' not found (HTTP {status_code})")
 
 
+class UnsupportedBoardError(RuntimeError):
+    """A board this tool does not scrape (Workday): the company needs another source."""
+
+
+WORKDAY_UNSUPPORTED = ("Workday boards are not scraped (Workday refuses this scraper): "
+                       "find another source for this company's jobs")
+
+
 class BoardUnavailableError(RuntimeError):
     """The ATS itself is down or refusing for now (a maintenance page, a 5xx, a 429):
     nothing was read and the next run tries again. Raised so the run is recorded as an

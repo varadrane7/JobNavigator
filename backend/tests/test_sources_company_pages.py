@@ -4,24 +4,19 @@ from unittest.mock import AsyncMock, MagicMock
 
 
 @pytest.mark.asyncio
-async def test_dispatch_routes_workday_url(monkeypatch):
-    """Workday URL calls ats.workday.scrape, not any other ATS."""
-    called = {"which": None}
+async def test_dispatch_refuses_workday_url(monkeypatch):
+    """Workday boards are not scraped: the URL fails with a clear error, never reaching the
+    generic browser scraper (which would hit Workday too)."""
+    async def fake_generic(*a, **kw):
+        raise AssertionError("generic scraper must not run for a Workday URL")
 
-    async def fake_workday(url, **kw):
-        called["which"] = "workday"
-        return []
+    monkeypatch.setattr("backend.scraper.ats.generic.scrape", fake_generic)
 
-    async def fake_greenhouse(url, **kw):
-        called["which"] = "greenhouse"
-        return []
-
-    monkeypatch.setattr("backend.scraper.ats.workday.scrape", fake_workday)
-    monkeypatch.setattr("backend.scraper.ats.greenhouse.scrape", fake_greenhouse)
-
-    from backend.scraper.sources.company_pages import _dispatch_ats
-    await _dispatch_ats("https://nvidia.wd5.myworkdayjobs.com/Site")
-    assert called["which"] == "workday"
+    from backend.scraper._shared.errors import UnsupportedBoardError
+    from backend.scraper.sources.company_pages import _dispatch_ats, _needs_browser
+    with pytest.raises(UnsupportedBoardError, match="Workday"):
+        await _dispatch_ats("https://nvidia.wd5.myworkdayjobs.com/Site")
+    assert _needs_browser(["https://nvidia.wd5.myworkdayjobs.com/Site"]) is False
 
 
 @pytest.mark.asyncio

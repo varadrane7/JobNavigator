@@ -25,7 +25,7 @@ async def _fire_h1b_async(company_id: str):
 
 def detect_scrape_type(url: str) -> str:
     """Detect the ATS/scraper type from a URL via string matching. No network calls."""
-    from backend.scraper.ats.workday import is_workday as _is_workday
+    from backend.scraper._shared.urls import is_workday_board as _is_workday
     from backend.scraper.ats.oracle_hcm import is_oracle_hcm as _is_oracle_hcm
     from backend.scraper.ats.lever import is_lever as _is_lever
     from backend.scraper.ats.phenom import is_phenom as _is_phenom_post
@@ -38,7 +38,7 @@ def detect_scrape_type(url: str) -> str:
     from backend.scraper.ats.meta import is_meta as _is_meta_careers
     from backend.scraper.ats.google import is_google as _is_google_careers
     if _is_workday(url):
-        return "Workday API"
+        return "Workday (not supported)"
     if _is_oracle_hcm(url):
         return "Oracle HCM API"
     if _is_lever(url):
@@ -528,10 +528,8 @@ async def test_scrape_company(company_id: str, db: Session = Depends(get_db)):
         is_lever as _is_lever,
         scrape as _scrape_lever,
     )
-    from backend.scraper.ats.workday import (
-        is_workday as _is_workday,
-        scrape as _scrape_workday,
-    )
+    from backend.scraper._shared.urls import is_workday_board as _is_workday
+    from backend.scraper._shared.errors import WORKDAY_UNSUPPORTED
     from backend.scraper.ats.ashby import (
         is_ashby as _is_ashby,
         scrape as _scrape_ashby,
@@ -619,10 +617,9 @@ async def test_scrape_company(company_id: str, db: Session = Depends(get_db)):
                     urls_scraped.append(f"{target_url[:80]}... ({len(jobs)} found via Lever API)")
                     continue
                 if _is_workday(target_url):
-                    jobs, rejected = await _scrape_workday(target_url, debug=True)
-                    all_jobs.extend(jobs)
-                    all_rejected.extend(rejected)
-                    urls_scraped.append(f"{target_url[:80]}... ({len(jobs)} found via Workday API)")
+                    all_rejected.append({"title": "(none)", "url": target_url, "selector": "workday",
+                                         "reason": WORKDAY_UNSUPPORTED})
+                    urls_scraped.append(f"{target_url[:80]}... (not scraped: Workday is not supported)")
                     continue
                 if _is_ashby(target_url):
                     jobs, rejected = await _scrape_ashby(target_url, debug=True)

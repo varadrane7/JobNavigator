@@ -21,6 +21,12 @@ def _clean_application_url(url: str) -> str:
     return urlunparse(parsed._replace(query=new_query))
 
 
+def is_workday_board(url: str) -> bool:
+    """A Workday-hosted careers site (myworkdayjobs.com, myworkdaysite.com). Workday refuses
+    this tool's scraper, so these boards are not scraped: find another source for the company."""
+    return host_matches(url, "myworkdayjobs.com", "myworkdaysite.com")
+
+
 def host_matches(url: str, *domains: str) -> bool:
     """True if URL's hostname equals or is a subdomain of any given domain; strict comparison avoids a lookalike domain (e.g. "evil-metacareers.com") matching."""
     if not url:

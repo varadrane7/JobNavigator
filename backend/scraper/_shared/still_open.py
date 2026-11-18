@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
 from backend.scraper._shared.postings import posting_key
-from backend.scraper._shared.urls import host_matches
+from backend.scraper._shared.urls import host_matches, is_workday_board
 
 OPEN, CLOSED, UNKNOWN = "open", "closed", "unknown"
 FRESH_FOR = timedelta(hours=24)
@@ -74,24 +74,6 @@ def _lever_api(url):
     return f"https://{api}/v0/postings/{seg[0]}/{seg[1]}" if len(seg) >= 2 else None
 
 
-def _workday_api(url):
-    # only a Workday link: a company site that shows Workday numbers (Bank of America, Visa) is
-    # keyed workday:<tenant>:<n> but is checked by its own page
-    # (wdN.myworkdaysite.com/recruiting/<tenant>/<site>/... is checked by its page: the job API
-    # address would be built from the wrong parts)
-    if not host_matches(url, "myworkdayjobs.com"):
-        return None
-    from backend.scraper.ats.workday import _LOCALE_PATH_RE, _parse_workday_url
-    try:
-        origin, tenant, site, _ = _parse_workday_url(url)
-    except Exception:
-        return None
-    parts = [p for p in urlparse(url).path.strip("/").split("/") if p and not _LOCALE_PATH_RE.match(p)]
-    if not (origin and tenant and site) or len(parts) < 2:
-        return None
-    return f"{origin}/wday/cxs/{tenant}/{site}/" + "/".join(parts[1:])
-
-
 async def _by_api(api, name, fetch):
     got = await fetch(api)
     if got is None:
@@ -99,17 +81,7 @@ async def _by_api(api, name, fetch):
     status, _final, text = got
     if status in (404, 410):
         return CLOSED, f"{name}: the posting is gone"
-    # Workday answers a removed posting with its own JSON error: 403 {"errorCode": "S22",
-    # "message": "permission denied"} (an open one answers 200)
-    if name == "Workday" and status in (403, 404) and '"errorCode"' in (text or ""):
-        return CLOSED, "Workday: the posting is gone"
     if status == 200:
-        if name == "Workday":
-            try:
-                if not json.loads(text or "{}").get("jobPostingInfo"):
-                    return CLOSED, "Workday: the posting is gone"
-            except ValueError:
-                return None
         return OPEN, ""
     return None
 
@@ -121,15 +93,17 @@ async def check_link(url, fetch=None):
         return UNKNOWN, "no link"
     key = posting_key(url) or ""
     kind = key.split(":", 1)[0] if key else ""
-    api = {"greenhouse": _greenhouse_api, "lever": _lever_api, "workday": _workday_api}.get(kind)
+    if kind == "workday" and is_workday_board(url):
+        # Workday refuses this tool, and its page is an app shell that always loads: not checked.
+        # (A company's own site keyed by Workday numbers is still checked by its page below.)
+        return UNKNOWN, "Workday links are not checked"
+    api = {"greenhouse": _greenhouse_api, "lever": _lever_api}.get(kind)
     if api:
         endpoint = api(url)
         if endpoint:
-            answer = await _by_api(endpoint, kind.capitalize() if kind != "workday" else "Workday", fetch)
+            answer = await _by_api(endpoint, kind.capitalize(), fetch)
             if answer:
                 return answer
-            if kind == "workday":   # its page is an app shell that always loads: it proves nothing
-                return UNKNOWN, "Workday did not answer"
     if kind == "linkedin":
         page = f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{key.split(':', 1)[1]}"
         got = await fetch(page)

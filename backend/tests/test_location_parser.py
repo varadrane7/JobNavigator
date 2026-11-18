@@ -218,29 +218,6 @@ def test_group_pieces(pieces, expected):
     assert group_pieces(pieces) == expected
 
 
-@pytest.mark.parametrize("path,stored,place", [
-    # "New-York-New-York" would otherwise read as one city, "New York New York".
-    ("/job/New-York-New-York/E_JR1", "New York, NY, United States",
-     ("US", "NY", "new york")),
-    ("/job/United-Kingdom-London/E_JR2", "London, United Kingdom",
-     ("GB", None, "london")),
-    ("/job/Costa-Rica/E_JR3", "Costa Rica", ("CR", None, None)),
-    ("/job/British-Columbia-Vancouver/E_JR7", "Vancouver, BC, Canada",
-     ("CA", "BC", "vancouver")),
-])
-def test_workday_path_fallback_rejoins_names(path, stored, place):
-    """A count carries no place, so the primary site comes from the URL.
-
-    That segment is the one case where `location` is not the board's own words:
-    the URL holds the place in pieces and nowhere else does the board write it.
-    """
-    from backend.analyzer.location import _places_of
-    from backend.scraper.ats.workday import _board_location_of
-    text = _board_location_of({"locationsText": "2 Locations", "externalPath": path})
-    assert text == stored
-    assert _places_of([text]) == [place]
-
-
 @pytest.mark.parametrize("text,expected", [
     ("Saudi Arabia, Riyadh", "Riyadh, Saudi Arabia"),
     ("Morocco, Casablanca", "Casablanca, Morocco"),
@@ -261,33 +238,6 @@ def test_a_run_together_value_is_returned_as_written(text):
     would be a guess, so the board's own text is kept."""
     assert canonical(text) == text
     assert parse(text)["country"] is None
-
-
-# ── the Workday handler uses all of it ───────────────────────────────────────
-
-@pytest.mark.parametrize("posting,stored,place", [
-    # The board's own text is stored, whatever order the tenant writes it in.
-    ({"locationsText": "US, CA, Santa Clara", "externalPath": "/job/x/y"},
-     "US, CA, Santa Clara", ("US", "CA", "santa clara")),
-    ({"locationsText": "California - San Francisco", "externalPath": "/job/x/y"},
-     "California - San Francisco", ("US", "CA", "san francisco")),
-    ({"locationsText": "USA.VA.Reston", "externalPath": "/job/x/y"},
-     "USA.VA.Reston", ("US", "VA", "reston")),
-    # a count is not a place, so the URL supplies the primary site
-    ({"locationsText": "2 Locations", "externalPath": "/job/Germany-Munich/E_JR3"},
-     "Munich, Germany", ("DE", None, "munich")),
-    ({"locationsText": None, "externalPath": None}, None, None),
-])
-def test_workday_keeps_the_board_text(posting, stored, place):
-    """Workday must not rewrite `location`; the canonical form lives in the
-    parsed columns alone, as it does for every other handler. The end-to-end
-    shape of this is in `test_ats_location_fields.py`, over a recorded response.
-    """
-    from backend.analyzer.location import _places_of
-    from backend.scraper.ats.workday import _board_location_of
-    text = _board_location_of(posting)
-    assert text == stored
-    assert _places_of([t for t in [text] if t]) == ([place] if place else [])
 
 
 # ── review findings on PR #10 ────────────────────────────────────────────────

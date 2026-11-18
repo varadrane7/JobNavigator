@@ -14,10 +14,12 @@ from backend.scraper._shared.filters import _apply_company_filters, home_market_
 from backend.scraper._shared.dedup import make_external_id, make_content_hash, mark_ignored, _normalize_url
 from backend.scraper._shared.posting_links import counts_as_new
 from backend.scraper.ats import (
-    workday, greenhouse, lever, ashby, oracle_hcm,
+    greenhouse, lever, ashby, oracle_hcm,
     phenom, talentbrew, rippling, smartrecruiters, meta, google, amazon, uber, generic, staffing_boards,
 )
 from backend.scraper.ats._descriptions import _fetch_descriptions_parallel
+from backend.scraper._shared.errors import UnsupportedBoardError, WORKDAY_UNSUPPORTED
+from backend.scraper._shared.urls import is_workday_board
 
 logger = logging.getLogger("jobnavigator.scraper.sources.company_pages")
 
@@ -26,6 +28,8 @@ logger = logging.getLogger("jobnavigator.scraper.sources.company_pages")
 
 async def _dispatch_ats(url: str, debug: bool = False, shared_browser=None, max_pages: int | None = None):
     """Detect ATS by URL and call the matching scraper, falling back to generic; order must match the if/elif chain in scrape_single_career_page, and `max_pages` only affects Playwright-paginated scrapers (Google, Meta) since HTTP-only ones are API-driven and unbounded."""
+    if is_workday_board(url):
+        raise UnsupportedBoardError(WORKDAY_UNSUPPORTED)
     if phenom.is_phenom(url):
         return await phenom.scrape(url, debug=debug)
     if talentbrew.is_talentbrew(url):
@@ -34,8 +38,6 @@ async def _dispatch_ats(url: str, debug: bool = False, shared_browser=None, max_
         return await oracle_hcm.scrape(url, debug=debug)
     if lever.is_lever(url):
         return await lever.scrape(url, debug=debug)
-    if workday.is_workday(url):
-        return await workday.scrape(url, debug=debug)
     if ashby.is_ashby(url):
         return await ashby.scrape(url, debug=debug)
     if greenhouse.is_greenhouse(url):
@@ -155,7 +157,7 @@ def _needs_browser(urls):
         if not u:
             continue
         if (phenom.is_phenom(u) or talentbrew.is_talentbrew(u) or oracle_hcm.is_oracle_hcm(u)
-                or lever.is_lever(u) or workday.is_workday(u) or ashby.is_ashby(u)
+                or lever.is_lever(u) or is_workday_board(u) or ashby.is_ashby(u)
                 or greenhouse.is_greenhouse(u) or rippling.is_rippling(u)
                 or smartrecruiters.is_smartrecruiters(u) or amazon.is_amazon(u) or uber.is_uber(u)):
             continue
@@ -182,7 +184,7 @@ async def _fetch_postings(company, target_urls: list, browser) -> tuple[list, li
             # needs company.wait_for_selector + max_pages, not _dispatch_ats's defaults.
             if (phenom.is_phenom(target_url) or talentbrew.is_talentbrew(target_url)
                     or oracle_hcm.is_oracle_hcm(target_url) or lever.is_lever(target_url)
-                    or workday.is_workday(target_url) or ashby.is_ashby(target_url)
+                    or is_workday_board(target_url) or ashby.is_ashby(target_url)
                     or greenhouse.is_greenhouse(target_url) or rippling.is_rippling(target_url)
                     or smartrecruiters.is_smartrecruiters(target_url)
                     or amazon.is_amazon(target_url) or uber.is_uber(target_url)

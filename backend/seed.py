@@ -36,9 +36,7 @@ def contacted_on_backfill_sql(dialect: str = "postgresql") -> str:
 
 DEFAULT_SETTINGS = {
     "fit_score_threshold": ("60", "Minimum fit score to trigger Telegram alert"),
-    "scrape_interval_minutes": ("60", "How often the job checker runs"),
-    "workday_request_pause_seconds": ("3", "Seconds between two Workday requests (board pages and job pages), across every run; 0 = no pause"),
-    "email_check_interval_minutes": ("30", "How often Gmail is polled"),
+    "scrape_interval_minutes": ("60", "How often the job checker runs"),    "email_check_interval_minutes": ("30", "How often Gmail is polled"),
     "telegram_enabled": ("false", "Toggle all Telegram notifications on/off"),
     "digest_cron": ("0 8 * * *", "Daily digest cron (min hour day month dow). Empty = disabled"),
     "telegram_chat_id": ("", "Your Telegram chat ID"),
@@ -659,8 +657,6 @@ SEED_COMPANIES = [
     {"name": "Anthropic", "tier": 1, "scrape_urls": ["https://job-boards.greenhouse.io/anthropic"]},
     # Ashby
     {"name": "OpenAI", "tier": 1, "scrape_urls": ["https://jobs.ashbyhq.com/openai/"]},
-    # Workday
-    {"name": "Salesforce", "tier": 1, "scrape_urls": ["https://salesforce.wd12.myworkdayjobs.com/en-US/External_Career_Site?CF_-_REC_-_LRV_-_Job_Posting_Anchor_-_Country_from_Job_Posting_Location_Extended=bc33aa3152ec42d4995f4791a106ed09"]},
     # Lever
     {"name": "Plaid", "tier": 2, "scrape_urls": ["https://jobs.lever.co/plaid"]},
     # Rippling

@@ -45,16 +45,6 @@ async def test_lever_asks_its_api():
 
 
 @pytest.mark.asyncio
-async def test_workday_asks_its_job_api():
-    url = "https://wf.wd1.myworkdayjobs.com/en-US/WellsFargoJobs/job/CHARLOTTE-NC/Lead-Product-Manager_R-505105"
-    api = "https://wf.wd1.myworkdayjobs.com/wday/cxs/wf/WellsFargoJobs/job/CHARLOTTE-NC/Lead-Product-Manager_R-505105"
-    (state, _), calls = await check(url, {api: (404, api, "")})
-    assert state == "closed" and calls == [api]
-    (state, _), _ = await check(url, {api: (200, api, '{"jobPostingInfo": {"title": "x"}}')})
-    assert state == "open"
-
-
-@pytest.mark.asyncio
 async def test_linkedin_reads_its_public_job_page():
     url = "https://www.linkedin.com/jobs/view/4461186967"
     api = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/4461186967"
@@ -183,11 +173,11 @@ async def test_a_phrase_inside_a_script_is_not_the_page_saying_it():
 # ── second review ───────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_a_myworkdaysite_link_is_checked_by_its_page():
-    """Review #1: wd1.myworkdaysite.com/recruiting/<tenant>/<site>/job/... is not parsed for the job API."""
+async def test_a_myworkdaysite_link_is_not_checked():
+    """Workday-hosted links (myworkdaysite.com too) are not fetched: Workday refuses this tool."""
     url = "https://wd1.myworkdaysite.com/en-US/recruiting/snapchat/snap/job/Los-Angeles/Senior_R0045568"
     (state, _), calls = await check(url, {url: (200, url, "<h1>Senior</h1>")})
-    assert state == "open" and calls == [url]
+    assert state == "unknown" and calls == []
 
 
 @pytest.mark.asyncio
@@ -236,22 +226,11 @@ async def test_a_bot_wall_served_with_404_is_unknown():
 
 
 @pytest.mark.asyncio
-async def test_workday_permission_denied_is_a_removed_job():
-    """Workday answers a removed posting with 403 {"errorCode": "S22", "message": "permission denied"}
-    (Cisco's Seattle copy, closed by hand-check); its open Phoenix copy answers 200."""
-    url = "https://cisco.wd5.myworkdayjobs.com/Cisco_Careers/job/Seattle-Washington-US/Solutions-Development-Architect_2025218-1"
-    api = "https://cisco.wd5.myworkdayjobs.com/wday/cxs/cisco/Cisco_Careers/job/Seattle-Washington-US/Solutions-Development-Architect_2025218-1"
-    body = '{"errorCode":"S22","errorCaseId":"x","httpStatus":403,"message":"permission denied","messageParams":{}}'
-    (state, reason), calls = await check(url, {api: (403, api, body)})
-    assert state == "closed" and "Workday" in reason and calls == [api]
-
-
-@pytest.mark.asyncio
-async def test_workday_never_falls_back_to_its_page():
-    """A Workday page is an app shell that always loads: when the API cannot answer, the state is unknown."""
+async def test_workday_links_are_not_fetched():
+    """Workday refuses this tool and its page is an app shell: the state is unknown, nothing is fetched."""
     url = "https://cisco.wd5.myworkdayjobs.com/Cisco_Careers/job/Seattle-Washington-US/X_2025218-1"
-    (state, _), calls = await check(url, {})
-    assert state == "unknown" and len(calls) == 1
+    (state, reason), calls = await check(url, {})
+    assert state == "unknown" and calls == [] and "Workday" in reason
 
 
 def test_the_feed_filters_and_counts_by_posting_state(test_db, api_client):
