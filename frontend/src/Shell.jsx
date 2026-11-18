@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Newspaper, Search, Building2, Send, FileUser, Mail, Target,
-  Fingerprint, ChartLine, Settings as SettingsIcon, Users,
+  Fingerprint, ChartLine, Settings as SettingsIcon, Users, AtSign,
 } from 'lucide-react'
 import api, { authFailure } from './api'
 import { useTheme, themeAttrs, appearanceTitle, MODE_ICON, MODES } from './theme'
@@ -26,6 +26,7 @@ const GROUPS = [
   { label: 'Find', items: [
     { to: '/today', label: 'Today', ready: true, Icon: Target },
     { to: '/people', label: 'People', ready: true, Icon: Users },
+    { to: '/emails', label: 'Emails', ready: true, Icon: AtSign },
     { to: '/feed', label: 'Jobs', ready: true, countKey: 'jobs', Icon: Newspaper },
     { to: '/searches', label: 'Searches', ready: true, countKey: 'searches', Icon: Search, warnKey: 'searches' },
     { to: '/companies', label: 'Companies', ready: true, countKey: 'companies', Icon: Building2, warnKey: 'companies' },

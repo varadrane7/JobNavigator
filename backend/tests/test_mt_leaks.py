@@ -84,6 +84,7 @@ PARAM_MODELS = {
     "tracer_link_id": "tracer_link",
     "persona_id": "persona",
     "contact_id": "contact",
+    "post_id": "hiring_post",
 }
 PLURAL_PARAMS = {"job_ids": "job", "resume_ids": "resume", "company_ids": "company",
                  "search_ids": "search", "app_ids": "application",
@@ -153,7 +154,7 @@ def _ids():
     return {k: uuid.uuid4() for k in (
         "search", "company", "job", "job_new", "application", "interview", "resume", "tailored",
         "cover_letter", "tracer_link", "click", "tracer_link_cl", "click_cl", "activity", "llm", "job_run", "scrape_log",
-        "location", "contact")}
+        "location", "contact", "hiring_post")}
 
 
 def _seed(db, account_id, ids, text, token, persona_id):
@@ -222,6 +223,8 @@ def _seed(db, account_id, ids, text, token, persona_id):
                      target_job_id=ids["job"]),
             m.Contact(id=ids["contact"], company=text, name=text, title=text, linkedin_url=f"https://{token}.example/in/{text}",
                       email=f"{token}@example.com", note=text, email_draft=text, status="new"),
+            m.HiringPost(id=ids["hiring_post"], post_url=f"https://{token}.example/posts/{text}", text=text,
+                         summary=text, author_name=text, company=text, email=f"{token}@example.com"),
             m.CompanyPeople(id=uuid.uuid4(), company_key=text.lower(), li_url=f"https://{token}.example/in/{text}",
                             kind="recruiter", signals={"name": text}, found_on=now.date()),
             m.ScrapeLog(id=ids["scrape_log"], search_id=ids["search"], company_id=ids["company"],

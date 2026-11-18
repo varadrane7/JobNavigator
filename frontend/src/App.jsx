@@ -21,6 +21,7 @@ import Persona from './screens/Persona'
 import Stats from './screens/Stats'
 import Today from './screens/Today'
 import People from './screens/People'
+import Emails from './screens/Emails'
 import axios from 'axios'
 import { TitleSync } from './useTitle'
 import { alreadyWelcomed, newUiPending, markWelcomed, markNewUiSeen } from './onboarding'
@@ -136,6 +137,7 @@ function App() {
           <Route index element={<Navigate to="today" replace />} />
           <Route path="today" element={<Today />} />
           <Route path="people" element={<People />} />
+          <Route path="emails" element={<Emails />} />
           <Route path="feed" element={<JobFeed />} />
           <Route path="resumes" element={<Resumes />} />
           <Route path="resumes/:id" element={<ResumeEditor />} />

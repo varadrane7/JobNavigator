@@ -629,6 +629,51 @@ def update_application(db, args):
     return get_application(db, {"application_id": str(a.id)})
 
 
+# ── Hiring posts (the Emails screen) ─────────────────────────────────────────
+
+def _post_row(p) -> dict:
+    from backend import hiring_posts as hp
+    c = hp.checks(p)
+    return {"id": str(p.id), "company": p.company, "author": p.author_name, "email": p.email,
+            "summary": _short(p.summary, 200), "url": p.post_url, "status": p.status, "likes": p.likes,
+            "posted": p.posted_at.isoformat() if p.posted_at else None, "age_hours": c["age_hours"]}
+
+
+def list_hiring_posts(db, args):
+    from backend import hiring_posts as hp
+    try:
+        q = hp.query(db, status=args.get("status"), text=args.get("query"),
+                     since_hours=args.get("since_hours"), fresh=bool(args.get("fresh")))
+    except hp.PostError as exc:
+        raise ToolError(str(exc))
+    return {"total": q.count(), "posts": [_post_row(p) for p in q.limit(_limit(args, 20)).all()]}
+
+
+def add_hiring_post(db, args):
+    from backend import hiring_posts as hp
+    try:
+        post, created = hp.save_post(db, dict(args))
+    except hp.PostError as exc:
+        raise ToolError(str(exc))
+    db.commit()
+    return {**({} if created else {"already_stored": True}), **hp.to_dict(post)}
+
+
+def update_hiring_post(db, args):
+    from backend import hiring_posts as hp
+    from backend.models.db import HiringPost
+    data = dict(args)
+    post = db.query(HiringPost).filter(HiringPost.id == _uuid(data.pop("post_id", None), "post_id")).first()
+    if post is None:
+        raise ToolError("No such post")
+    try:
+        hp.update_post(db, post, data)
+    except hp.PostError as exc:
+        raise ToolError(str(exc))
+    db.commit()
+    return hp.to_dict(post)
+
+
 # ── Registry ─────────────────────────────────────────────────────────────────
 
 def _schema(props: dict, required=()) -> dict:
@@ -638,6 +683,19 @@ def _schema(props: dict, required=()) -> dict:
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": MAX_ROWS, "description": "Rows to return"}
 _SINCE = {"type": "integer", "minimum": 1, "description": "Only the last N days"}
 _LEAD_STATUS = "new, requested (connection sent), connected, messaged, replied, referral, snoozed, skip"
+
+def _post_schema(required=()) -> dict:
+    from backend import hiring_posts as hp
+    types = {"roles": {"type": "array", "items": {"type": "string"}}, "posted_hours_ago": {"type": "number", "minimum": 0},
+             "likes": {"type": "integer", "minimum": 0}, "comments": {"type": "integer", "minimum": 0},
+             "status": {"type": "string", "enum": list(hp.STATUSES)},
+             "text": {"type": "string", "maxLength": hp.MAX_TEXT}, "summary": {"type": "string", "maxLength": hp.MAX_SUMMARY}}
+    return _schema({k: {"type": "string", **types.get(k, {}), "description": d} for k, d in hp.FIELDS.items()}, required)
+
+
+_POST_SCHEMA = _post_schema(("post_url", "text"))
+_POST_UPDATE_SCHEMA = _schema({"post_id": {"type": "string", "description": "An id from list_hiring_posts"},
+                               **_post_schema()["properties"]}, ["post_id"])
 
 TOOLS: tuple[Tool, ...] = (
     Tool("overview", "The job search at a glance: feed size, applications by status with reply and interview "
@@ -744,13 +802,30 @@ TOOLS: tuple[Tool, ...] = (
                   "append_note": {"type": "string"}, "next": {"type": "string"},
                   "next_date": {"type": "string", "description": "YYYY-MM-DD, or empty to clear"}},
                  ["application_id"]), update_application, write=True, title="Update an application"),
+    Tool("list_hiring_posts", "Fresh LinkedIn hiring posts on the Emails screen, newest first, as short rows: "
+         "company, poster, email if known, summary, likes and age. fresh=true keeps posts under a day old. Filter by "
+         "status (new, emailed, skipped), text, or the last N hours.",
+         _schema({"status": {"type": "string"}, "query": {"type": "string"}, "fresh": {"type": "boolean"},
+                  "since_hours": {"type": "number", "minimum": 0}, "limit": _LIMIT}),
+         list_hiring_posts, title="List hiring posts"),
+    Tool("add_hiring_post", "Add a LinkedIn \"we're hiring\" post to the Emails screen, where the user emails the "
+         "poster directly. Look for posts under a day old with under 100 likes (others are stored too, and "
+         "flagged). Send the post's full text as text and your own 2-4 sentence summary as summary; post_url "
+         "identifies the post, so sending it again updates it (likes, email) instead of adding a copy. Give "
+         "posted_at or posted_hours_ago, likes, the poster and company, the poster's email if you found one, and "
+         "agent (your name). Leave status out.",
+         _POST_SCHEMA, add_hiring_post, write=True, title="Add a hiring post"),
+    Tool("update_hiring_post", "Change a hiring post: status (new, emailed after the user really wrote to the "
+         "poster, skipped), summary, email, likes, or any other field. A blank clears a field.",
+         _POST_UPDATE_SCHEMA, update_hiring_post, write=True, title="Update a hiring post"),
 )
 
 BY_NAME = {t.name: t for t in TOOLS}
 
 INSTRUCTIONS = (
     "JobNavigator holds one person's job search: the jobs found for them, their applications, résumés, "
-    "profile, and the people they are reaching out to for referrals. List tools return short rows with ids; "
+    "profile, the people they are reaching out to for referrals, and fresh LinkedIn hiring posts to email "
+    "(add_hiring_post). List tools return short rows with ids; "
     "call a get tool with an id for the full item. Call overview first for questions about progress. Before "
     "drafting outreach in the user's voice, read get_profile and the lead (get_lead). Change a lead's status "
     "only after the step was really taken."
@@ -765,7 +840,7 @@ def listing(can_write: bool) -> list:
         out.append({"name": t.name, "title": t.title or t.name, "description": t.description,
                     "inputSchema": t.schema,
                     "annotations": {"title": t.title or t.name, "readOnlyHint": not t.write,
-                                    "destructiveHint": False, "idempotentHint": not t.write or t.name not in ("add_lead", "log_note"),
+                                    "destructiveHint": False, "idempotentHint": not t.write or t.name not in ("add_lead", "log_note", "add_hiring_post"),
                                     "openWorldHint": False}})
     return out
 

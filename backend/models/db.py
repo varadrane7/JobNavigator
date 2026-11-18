@@ -803,6 +803,36 @@ class ActivityLog(AccountScoped, Base):
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
 
+# ── Hiring posts (Emails screen) ─────────────────────────────────────────────
+class HiringPost(AccountScoped, Base):
+    """A fresh LinkedIn "we're hiring" post that an outside agent found and sent in through
+    the API or the connector (backend/hiring_posts.py). JobNavigator neither searches for
+    these nor writes the summary: it stores and shows what it is given, one row per post
+    URL per account, so sending the same post again updates it."""
+    __tablename__ = "hiring_posts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id = _account_fk()
+    post_url = Column(String, nullable=False)
+    text = Column(Text, nullable=False)
+    summary = Column(Text, nullable=True)
+    author_name = Column(String, nullable=True)
+    author_title = Column(String, nullable=True)
+    author_url = Column(String, nullable=True)
+    company = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    roles = Column(JSON, nullable=True)            # list of role titles the post hires for
+    location = Column(String, nullable=True)
+    posted_at = Column(DateTime(timezone=True), nullable=True)
+    likes = Column(Integer, nullable=True)
+    comments = Column(Integer, nullable=True)
+    status = Column(String, nullable=False, default="new")   # new | emailed | skipped
+    agent = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    __table_args__ = (UniqueConstraint("account_id", "post_url", name="uq_hiring_posts_account_url"),)
+
+
 # ── Resumes ─────────────────────────────────────────────────────────────────
 
 def first_template(kind: str) -> str:

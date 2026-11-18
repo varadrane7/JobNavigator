@@ -450,7 +450,7 @@ def _delete_plan():
         ("cover_letters", m.CoverLetter), ("resumes", m.Resume),
         ("job_locations", m.JobLocation), ("llm_calls", m.LlmCallLog),
         ("job_runs", m.JobRun), ("scrape_log", m.ScrapeLog), ("activity_log", m.ActivityLog),
-        ("contacts", m.Contact), ("jobs", m.Job), ("searches", m.Search), ("companies", m.Company),
+        ("contacts", m.Contact), ("hiring_posts", m.HiringPost), ("jobs", m.Job), ("searches", m.Search), ("companies", m.Company),
         ("persona", m.Persona), ("settings", m.Setting), ("section_policies", m.SectionPolicy),
     ]
 

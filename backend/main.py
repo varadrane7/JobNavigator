@@ -31,6 +31,7 @@ from backend.api.routes_llm import router as llm_router
 from backend.curator.routes import router as curator_router
 from backend.api.routes_accounts import router as accounts_router
 from backend.api.routes_gmail import router as gmail_router
+from backend.api.routes_hiring_posts import router as hiring_posts_router
 from backend.scraper._shared.link_kinds import job_link
 
 logging.basicConfig(level=logging.INFO)
@@ -702,6 +703,7 @@ app.include_router(accounts_router, prefix="/api")
 app.include_router(oidc_router, prefix="/api")
 app.include_router(credentials_router, prefix="/api")
 app.include_router(gmail_router, prefix="/api")
+app.include_router(hiring_posts_router, prefix="/api")
 from backend.connector.routes import router as connector_router
 from backend.connector.oauth import router as connector_oauth_router
 app.include_router(connector_router)

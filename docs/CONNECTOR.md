@@ -42,6 +42,8 @@ machine `http://localhost/mcp` works too. A token is shown once and lasts a year
 | `list_resumes`, `get_resume` | Résumé names; one résumé as text or JSON |
 | `get_profile` | Contact, work authorization, preferences, networking profile; projects and saved answers on request |
 | `list_leads`, `get_lead` | People to reach out to; one in full with talking points and drafts |
+| `list_hiring_posts` | Fresh LinkedIn hiring posts on the Emails screen (see [HIRING_POSTS.md](HIRING_POSTS.md)) |
+| `add_hiring_post`, `update_hiring_post` | Only with **update** access: add a hiring post an agent found, or mark one emailed or skipped |
 | `update_lead`, `add_lead`, `update_application`, `log_note` | Only with **update** access: a journal note, lead status, notes and drafts, new or already-contacted people, application status and notes |
 
 Lists are short rows with ids; a `get_` tool returns one item in full, so an answer costs few
