@@ -22,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 
 from backend.models.db import SessionLocal, Job, Search, get_existing_external_ids
 from backend.scraper._shared.analysis import analyze_inline, prefetch_h1b
-from backend.scraper._shared.dedup import make_content_hash, make_external_id
+from backend.scraper._shared.dedup import make_content_hash, make_external_id, mark_ignored
 from backend.scraper._shared.filters import build_search_exclude_sets, search_title_filters, title_kept
 from backend.scraper._shared.html_text import html_to_text
 from backend.scraper._shared.posting_links import counts_as_new
@@ -185,12 +185,15 @@ async def ingest(search: Search, items: list[dict], source: str) -> dict:
             except Exception as e:
                 logger.warning(f"{source} inline analysis failed for {j['title']}: {e}")
             if job.h1b_jd_flag:
-                continue
+                # Kept as "ignored" (as company scrapes and boards do), so the next run's dedup
+                # skips it instead of reading and analysing it again.
+                mark_ignored(job)
             try:
                 with db.begin_nested():
                     db.add(job)
                     db.flush()
-                new_jobs += counts_as_new(job)
+                if job.status != "ignored":
+                    new_jobs += counts_as_new(job)
                 existing.add(ext_id)
             except IntegrityError:
                 continue

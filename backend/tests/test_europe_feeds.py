@@ -45,6 +45,26 @@ def test_bsj_parse_splits_role_and_company():
     assert j["description"] == "Go and Kubernetes."
 
 
+def test_arbeitnow_keeps_a_place_that_already_names_its_country():
+    jobs, _ = E.parse_arbeitnow([_an(1, 1, location="London"), _an(2, 1, location="Paris")], since=NOW - 24 * 3600)
+    assert [j["location"] for j in jobs] == ["London", "Paris"]
+
+
+def test_terms_match_the_title_not_the_description():
+    items = [{"title": "Account Executive", "description": "Sell our Python cloud platform", "location": "Berlin, Germany"},
+             {"title": "Python Developer", "description": "APIs", "location": "Berlin, Germany"}]
+    s = SimpleNamespace(search_term="python, cloud", location="")
+    assert [j["title"] for j in E._filter(items, s)] == ["Python Developer"]
+
+
+def test_relocation_lane_keeps_only_its_countries(monkeypatch):
+    import backend.accounts.settings as settings
+    monkeypatch.setattr(settings, "get_setting", lambda db, key, default=None: '["DE", "NL", "IE", "AE"]')
+    items = [{"title": "a", "location": "Berlin, Germany"}, {"title": "b", "location": "London"},
+             {"title": "c", "location": "Amsterdam"}]
+    assert [j["title"] for j in E._in_lane(items)] == ["a", "c"]
+
+
 def test_filter_by_term_and_place():
     items = [{"title": "Backend Engineer", "description": "Python", "location": "Munich, Germany"},
              {"title": "Sales Manager", "description": "B2B", "location": "Berlin, Germany"}]

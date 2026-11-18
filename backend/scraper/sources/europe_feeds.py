@@ -6,8 +6,9 @@
   startups that mostly hire in English. It posts a few times a week, so it is read a week back.
 
 Both are filtered like the startup feeds (startup_feeds.py): title include/exclude keywords, the
-search term (comma-separated words, any of which must appear in title or description) and the
-location (comma-separated places, any of which must appear). Ingest and preview are shared.
+search term (comma-separated words, any of which must appear in the title) and the location
+(comma-separated places, any of which must appear); a relocation lane keeps only its countries.
+Ingest and preview are shared.
 """
 import logging
 import re
@@ -40,9 +41,13 @@ def _ts(value) -> datetime | None:
 
 
 def _german_place(location: str) -> str:
-    """Arbeitnow is a German board and often names only the city ("Dresden"): say the country."""
+    """Arbeitnow is a German board and often names only the city ("Dresden"): say the country.
+    A place the location parser already puts in a country (London, Paris, Zürich) is left as it is."""
+    from backend.analyzer.location import _places_of
     loc = (location or "").strip()
-    return loc if not loc or _COUNTRY.search(loc) else f"{loc}, Germany"
+    if not loc or _COUNTRY.search(loc) or any(p[0] for p in _places_of([loc])):
+        return loc
+    return f"{loc}, Germany"
 
 
 def parse_arbeitnow(raw: list, since: float) -> tuple[list[dict], bool]:
@@ -110,9 +115,27 @@ async def fetch_bsj(search: Search) -> list[dict]:
 
 
 def _filter(items: list[dict], search: Search) -> list[dict]:
-    return [j for j in items
+    """The search's place and terms, then the account's lane. Terms are matched on the title:
+    in a description, "cloud" or "python" also names every sales and finance role's stack."""
+    kept = [j for j in items
             if feeds.place_ok(j["location"], search.location)
-            and feeds.terms_ok(f"{j['title']} {j['description'] or ''}", search.search_term)]
+            and feeds.terms_ok(j["title"], search.search_term)]
+    return _in_lane(kept)
+
+
+def _in_lane(items: list[dict]) -> list[dict]:
+    """A relocation lane (curate_countries without US) keeps the postings in its countries, as
+    company scrapes do (filters.market_filter): Arbeitnow lists London, Paris and Zürich too."""
+    from backend.accounts.settings import get_setting
+    from backend.curator import market
+    from backend.models.db import SessionLocal
+    from backend.scraper._shared.filters import market_filter
+    db = SessionLocal()
+    try:
+        cs = market.countries(get_setting(db, "curate_countries"))
+    finally:
+        db.close()
+    return market_filter(items, cs)[0] if market.is_relocation(cs) else items
 
 
 _FETCH = {"arbeitnow": fetch_arbeitnow, "berlinstartupjobs": fetch_bsj}

@@ -113,6 +113,44 @@ def german_required(description: str) -> str | None:
     return None
 
 
+_DUTCH_REQ = re.compile(
+    r"\b((fluent|vloeiend\w*|uitstekende?|goede?|excellent|very good|good|strong|business[- ]fluent|native)\s+"
+    r"(command of )?(dutch|nederlands\w*)|"
+    r"(dutch|nederlands)\s*(\(|-|:)?\s*(c1|c2|b2|level b2|level c1|native|fluent|vloeiend)|"
+    r"(dutch|nederlandse taal) (language )?(skills )?(are |is )?(required|mandatory|a must|essential|vereist)|"
+    r"(c1|c2|b2)[- ]?(level )?(dutch|nederlands)|beheersing van de nederlandse taal)\b", re.I)
+_DUTCH_WORDS = re.compile(r"\b(het|een|wij|jij|jouw|voor|zijn|ervaring|kennis|werkzaamheden|ons|onze|naar|ook|"
+                          r"niet|bij|wat|deze|als)\b", re.I)
+
+
+def dutch_required(description: str) -> str | None:
+    """Why the posting needs Dutch: a stated requirement, or a posting written in Dutch."""
+    text = description or ""
+    m = _DUTCH_REQ.search(text)
+    if m and not re.search(r"(dutch|nederlands)\w*\s+(is\s+)?(a plus|nice to have|optional|not required|een pré|een pluspunt)",
+                           text[max(0, m.start() - 10):m.end() + 40], re.I):
+        return m.group(0).lower()
+    nl, en = len(_DUTCH_WORDS.findall(text)), len(_ENGLISH_WORDS.findall(text))
+    if nl >= 25 and nl > 1.5 * en:
+        return "posting is in Dutch"
+    return None
+
+
+def lane_blocker(description: str) -> str | None:
+    """Why a relocating candidate cannot take the posting (local work rights only, German or
+    Dutch required), or None. Shared by ingestion (dropped before scoring) and the curator."""
+    local = local_only(description)
+    if local:
+        return f"jd: {local}"
+    german = german_required(description)
+    if german:
+        return f"german: {german}"
+    dutch = dutch_required(description)
+    if dutch:
+        return f"dutch: {dutch}"
+    return None
+
+
 # ── pay in the market's currency ────────────────────────────────────────────
 _NUM = r"(\d{2,3}(?:[.,\s]\d{3})|\d{2,3}\s?[kK])"
 _EUR = re.compile(rf"(?:€|EUR)\s?{_NUM}(?:\s?(?:-|–|to|bis)\s?(?:€|EUR)?\s?{_NUM})?|"

@@ -575,6 +575,18 @@ async def check_job_h1b(job: Job, db, company_lookup: dict = None, phrases: list
     # triggered the exclusion without spilling the JD excerpt into logs.
     job._h1b_matched_phrase = jd_result["matched_phrase"]
 
-    job.h1b_verdict = determine_h1b_verdict(lca_count, jd_result["jd_flag"])
+    # A relocation lane (curate_countries without US): a posting that needs local work rights,
+    # German or Dutch is one the candidate cannot take. Flagged here, the one scan every source
+    # runs, so it is stored "ignored" at ingestion instead of being scored and filling the feed.
+    if not job.h1b_jd_flag and job.description:
+        from backend.curator import market
+        if market.is_relocation(market.countries(get_setting(db, "curate_countries"))):
+            blocker = market.lane_blocker(job.description)
+            if blocker:
+                job.h1b_jd_flag = True
+                job.h1b_jd_snippet = blocker[:300]
+                job._h1b_matched_phrase = blocker
+
+    job.h1b_verdict = determine_h1b_verdict(lca_count, job.h1b_jd_flag)
 
 

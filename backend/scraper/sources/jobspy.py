@@ -13,7 +13,7 @@ from backend.scraper._shared.posted import parse_posted
 from backend.countries import DEFAULT_COUNTRY, compose_location
 from backend.models.db import SessionLocal, Search, Job, get_existing_external_ids
 from backend.accounts.settings import get_setting
-from backend.scraper._shared.dedup import make_external_id, make_content_hash
+from backend.scraper._shared.dedup import make_external_id, make_content_hash, mark_ignored
 from backend.scraper._shared.posting_links import counts_as_new, employer_link
 from backend.scraper._shared.postings import is_short_link, resolve_short_link
 
@@ -640,14 +640,17 @@ def _run_sync(search, proxy_url: str = None, shared=None) -> dict:
 
                 if job.h1b_jd_flag:
                     _phrase = getattr(job, "_h1b_matched_phrase", None) or "?"
-                    logger.info(f"Skipping job (body exclusion): {title} @ {company} — matched phrase: {_phrase!r}")
-                    continue
+                    logger.info(f"Ignored (body exclusion): {title} @ {company} — matched phrase: {_phrase!r}")
+                    # Kept as "ignored" (as company scrapes do), so the next run's dedup skips it.
+                    mark_ignored(job)
 
                 try:
                     with db.begin_nested():
                         db.add(job)
                         db.flush()
-                    if counts_as_new(job):
+                    if job.status == "ignored":
+                        ignored_jobs += 1
+                    elif counts_as_new(job):
                         new_jobs += 1
                         breakdown.setdefault(site or "unknown", {"seen": 0, "new": 0})["new"] += 1
                     existing_ids.add(ext_id)

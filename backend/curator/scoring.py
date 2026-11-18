@@ -31,9 +31,15 @@ def clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
 
 
 # ── hard drops ──────────────────────────────────────────────────────────────
+# A level written as optional or as a range ("(Senior) Engineer", "Mid/Senior", common in German and
+# Dutch postings) opens the role to the lower level too, so it is not a seniority exclude.
+_OPEN_LEVEL = re.compile(r"\(senior\)|\b(mid|medior|mid-level)\s*[-/–]\s*(senior|sr\.?)\b|"
+                         r"\b(senior|sr\.?)\s*[-/–]\s*(mid|medior|mid-level)\b")
+
+
 def title_excluded(title: str, words: list[str]) -> str | None:
     """The exclude word that matches `title` (word-boundary, case-insensitive), or None."""
-    t = f" {(title or '').lower()} "
+    t = f" {_OPEN_LEVEL.sub(' ', (title or '').lower())} "
     for w in words:
         w = (w or "").lower()
         if not w:

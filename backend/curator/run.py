@@ -244,12 +244,9 @@ def hard_drop(job: dict, title_exclude: list, company_exclude: list | None = Non
     if blocker:
         return f"jd: {blocker}"
     if relocation:
-        local = market.local_only(job["description"])
-        if local:
-            return f"jd: {local}"
-        german = market.german_required(job["description"])
-        if german:
-            return f"german: {german}"
+        blocker = market.lane_blocker(job["description"])
+        if blocker:
+            return blocker
     elif drop_unlikely and job.get("h1b_verdict") == "unlikely":
         return "unlikely H-1B sponsor"
     yrs = scoring.min_years_required(job["description"])
