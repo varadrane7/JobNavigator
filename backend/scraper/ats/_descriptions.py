@@ -162,7 +162,7 @@ async def _fetch_description_ats(url: str, job: dict = None) -> str | None:
 
     # Lazy imports to avoid circular imports.
     from backend.scraper.ats.oracle_hcm import _oracle_hcm_host
-    from backend.scraper.ats.workday import _parse_workday_url, _LOCALE_PATH_RE, detail_locations
+    from backend.scraper.ats.workday import _parse_workday_url, _LOCALE_PATH_RE, detail_locations, pace, DETAIL_HEADERS
 
     parsed = urlparse(url)
 
@@ -229,8 +229,9 @@ async def _fetch_description_ats(url: str, job: dict = None) -> str | None:
             ext_path += "/" + part
         if company_slug and site and ext_path:
             api_url = f"{origin}/wday/cxs/{company_slug}/{site}{ext_path}"
+            await pace()
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-                resp = await client.get(api_url, headers={"Accept": "application/json"})
+                resp = await client.get(api_url, headers=DETAIL_HEADERS)
                 if resp.status_code == 200:
                     data = json.loads(resp.text)
                     info = data.get("jobPostingInfo", {})

@@ -43,6 +43,13 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def _no_workday_pause(monkeypatch):
+    """Workday requests are paced (ats/workday.pace); tests read stubbed boards, so no pause.
+    test_workday_pacing.py sets its own pause."""
+    monkeypatch.setattr("backend.scraper.ats.workday.request_pause", lambda: 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _no_h1b_prefetch(request, monkeypatch):
     """S2-01: every ingest loop now resolves its new companies' H-1B data up front
     (`prefetch_h1b`). Source tests that stub `analyze_inline` never reached MyVisaJobs

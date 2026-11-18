@@ -98,7 +98,7 @@ _SECTIONS = [
         "email_gmail_query_subjects", "email_gmail_query_senders", "email_gmail_query_exclusions"]),
     ("scheduler", "Scheduler", POLICY, INHERIT, ["scheduler"], [
         "scrape_interval_minutes", "email_check_interval_minutes", "job_archive_after_days",
-        "auto_reject_after_days", "reject_cron", "digest_cron", "cleanup_cron"]),
+        "auto_reject_after_days", "reject_cron", "digest_cron", "cleanup_cron", "workday_request_pause_seconds"]),
     ("backups", "Backups", OWNER_ONLY, INHERIT, ["scheduler", "advanced"], ["backup_cron"]),
     ("h1b", "H-1B", OWNER_ONLY, INHERIT, ["scheduler"], ["h1b_cron"]),
     ("exclude", "Global exclude", POLICY, OWN, ["exclude"], [

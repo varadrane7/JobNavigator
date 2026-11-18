@@ -1,7 +1,16 @@
-"""Workday ATS handler — JSON API via POST /wday/cxs/{company}/{site}/jobs; detected by hostname match on myworkdayjobs.com."""
+"""Workday ATS handler — JSON API via POST /wday/cxs/{company}/{site}/jobs; detected by hostname match on myworkdayjobs.com.
+
+Every Workday request (list pages here, job documents in _descriptions.py) names the tool in its
+User-Agent and waits its turn: `pace()` keeps at least `workday_request_pause_seconds` (Settings ›
+Scheduler, default 3) between two Workday requests across the whole process, so one run's boards
+and their job pages are read one at a time instead of in a burst.
+"""
+import asyncio
 import json
 import logging
 import re
+import time
+import weakref
 from urllib.parse import urlparse, parse_qs
 
 import httpx
@@ -136,7 +145,53 @@ def detail_locations(detail: dict) -> list[str]:
 _CEILING = 2000
 _MAX_SPLIT_DEPTH = 2
 _PAGE = 20  # Workday API max per request
-_HEADERS = {"Content-Type": "application/json", "Accept": "application/json"}
+# Honest identification: this is a personal job-search tool reading public listings.
+USER_AGENT = "JobNavigator/1.0 (personal job search tool; reads public job listings)"
+_HEADERS = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": USER_AGENT}
+DETAIL_HEADERS = {"Accept": "application/json", "User-Agent": USER_AGENT}
+
+DEFAULT_PAUSE = 3.0
+_PAUSE_TTL = 60.0
+_pause_cache = {"value": None, "at": 0.0}
+_locks: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()   # one lock per event loop
+_last_request = {"at": 0.0}
+
+
+def request_pause() -> float:
+    """Seconds between two Workday requests: the `workday_request_pause_seconds` setting
+    (re-read at most once a minute), DEFAULT_PAUSE when unset or invalid, never negative."""
+    now = time.monotonic()
+    if _pause_cache["value"] is not None and now - _pause_cache["at"] < _PAUSE_TTL:
+        return _pause_cache["value"]
+    value = DEFAULT_PAUSE
+    try:
+        from backend.accounts.settings import get_setting
+        from backend.models.db import SessionLocal
+        db = SessionLocal()
+        try:
+            raw = get_setting(db, "workday_request_pause_seconds")
+        finally:
+            db.close()
+        if raw not in (None, ""):
+            value = max(0.0, float(raw))
+    except Exception as e:
+        logger.debug(f"workday_request_pause_seconds unreadable, using {DEFAULT_PAUSE}: {e}")
+    _pause_cache.update(value=value, at=now)
+    return value
+
+
+async def pace() -> None:
+    """Wait until at least `request_pause()` seconds have passed since the last Workday request."""
+    pause = request_pause()
+    loop = asyncio.get_running_loop()
+    lock = _locks.get(loop)
+    if lock is None:
+        lock = _locks[loop] = asyncio.Lock()
+    async with lock:
+        delay = _last_request["at"] + pause - time.monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        _last_request["at"] = time.monotonic()
 
 
 def _facet_options(facets: list) -> list[tuple[str, list[tuple[str, int]]]]:
@@ -201,6 +256,7 @@ async def _walk(client, api_url: str, facets: dict, label: str, debug: bool, rej
     first_facets = []
     while True:
         payload = {"appliedFacets": facets, "limit": _PAGE, "offset": offset, "searchText": search_text}
+        await pace()
         resp = await client.post(api_url, json=payload, headers=_HEADERS)
         if resp.status_code != 200:
             logger.warning(f"Workday API returned {resp.status_code} for {label}")

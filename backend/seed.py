@@ -37,6 +37,7 @@ def contacted_on_backfill_sql(dialect: str = "postgresql") -> str:
 DEFAULT_SETTINGS = {
     "fit_score_threshold": ("60", "Minimum fit score to trigger Telegram alert"),
     "scrape_interval_minutes": ("60", "How often the job checker runs"),
+    "workday_request_pause_seconds": ("3", "Seconds between two Workday requests (board pages and job pages), across every run; 0 = no pause"),
     "email_check_interval_minutes": ("30", "How often Gmail is polled"),
     "telegram_enabled": ("false", "Toggle all Telegram notifications on/off"),
     "digest_cron": ("0 8 * * *", "Daily digest cron (min hour day month dow). Empty = disabled"),

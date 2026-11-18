@@ -676,6 +676,7 @@ export default function Settings() {
       ]],
       ['scheduler', 'Pipeline', 'Scheduler', 'intervals in minutes (0 = off) · crons empty = off', [
         B('Scrape all companies', 'Runs every active company scrape on this interval.', 'scrape_interval_minutes', { mono: true, int: true, w: '135px' }),
+        B('Workday pause (seconds)', 'Wait between two Workday requests, board and job pages, in every run. 0 = no pause.', 'workday_request_pause_seconds', { mono: true, int: true, w: '135px' }),
         B('Scrapes at once', '1 or 2. Run all, one company, one search and the scheduled scrape wait their turn beyond this.', 'scrape_max_concurrent', { mono: true, int: true, w: '135px',
           info: 'Each scrape can start its own Chromium, so 1 keeps memory low: a second Run all, from you or another account, waits until the first finishes. A fetch another run made in the last 10 minutes is reused instead of downloaded again.' }),
         B('Email check', 'Polls Gmail for replies to your applications.', 'email_check_interval_minutes', { mono: true, int: true, w: '135px' }),

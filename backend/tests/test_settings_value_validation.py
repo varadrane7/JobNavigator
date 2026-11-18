@@ -32,6 +32,7 @@ def test_int_keys_match_the_rows_settings_marks_int():
     assert INT_SETTING_KEYS == {
         "fit_score_threshold",
         "scrape_interval_minutes",
+        "workday_request_pause_seconds",
         "email_check_interval_minutes",
         "job_archive_after_days",
         "auto_reject_after_days",
